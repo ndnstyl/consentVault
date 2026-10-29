@@ -33,7 +33,7 @@ def test_init_script_makes_an_owner_that_migrates_and_a_runtime_role_that_only_a
     assert done.returncode == 0, done.stderr
 
     with db.connect(f"postgresql://consentvault_owner@127.0.0.1:{port}/{name}") as owner:
-        assert db.migrate(owner) == ["0001_init.sql", "0002_tenancy.sql", "0003_replay_guard.sql"]
+        assert db.migrate(owner) == [p.name for p in db.list_migrations(db.default_migrations_dir())]
         assert owner.execute("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user"
                              ).fetchone() == {"rolsuper": False, "rolbypassrls": False}
         # FORCE row-level security binds the owner too: in multi mode with no tenant token it sees no organisation

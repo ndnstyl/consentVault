@@ -53,3 +53,8 @@ every failure and never reports success unless the worker answered `recorded: tr
 ```
 npm test        # node --test; Node 24 runs the TypeScript directly
 ```
+
+## Logging
+
+The edge Workers log nothing. An evidence download link is a single-use credential in the query string, so any proxy
+or load balancer placed in front of the vault must log the path only, with the query string removed.

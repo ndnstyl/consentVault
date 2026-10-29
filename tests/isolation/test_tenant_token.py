@@ -18,12 +18,17 @@ from consentvault import disclosure as disc
 from consentvault.tenancy.errors import TenantTokenError
 from consentvault.tenancy.tokens import TokenKey, mint_org_token, org_transaction
 
-from .harness import TENANT_TABLES, TENANT_VIEWS, UNFILLED, expired_token
+from .harness import FILLED_TABLES, expired_token, tenant_tables, tenant_views
+
+
+def _relations(conn) -> tuple[str, ...]:
+    """Every tenant table and view from the catalog that this role may read at all (the rest refuse outright)."""
+    return tuple(t for t in tenant_tables(conn) + tenant_views(conn) if conn.execute(
+        "SELECT has_any_column_privilege(%s, 'SELECT') AS ok", (f"consentvault.{t}",)).fetchone()["ok"])
 
 
 def _counts(conn) -> dict[str, int]:
-    return {t: conn.execute(f"SELECT count(*) AS n FROM consentvault.{t}").fetchone()["n"]
-            for t in TENANT_TABLES + TENANT_VIEWS}
+    return {t: conn.execute(f"SELECT count(*) AS n FROM consentvault.{t}").fetchone()["n"] for t in _relations(conn)}
 
 
 def _with_setting(conn, token):
@@ -46,8 +51,8 @@ def test_a_valid_token_sees_its_own_rows_and_only_those(tenancy):
     with tenancy.app() as app, org_transaction(app, tenancy.token(tenancy.a)) as org:
         assert org == tenancy.a.org_id
         counts = _counts(app)
-        assert all(counts[t] > 0 for t in TENANT_TABLES + TENANT_VIEWS if t not in UNFILLED | {"chain_breaks"}), counts
-        for t in TENANT_TABLES + ("current_permission", "unsealed_events"):
+        assert all(counts[t] > 0 for t in FILLED_TABLES + ("current_permission", "unsealed_events")), counts
+        for t in _relations(app):
             other = app.execute(f"SELECT count(*) AS n FROM consentvault.{t} WHERE org_id <> %s",
                                 (tenancy.a.org_id,)).fetchone()["n"]
             assert other == 0, t

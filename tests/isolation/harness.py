@@ -22,12 +22,37 @@ from consentvault.tenancy.errors import KeyProviderError
 from consentvault.tenancy.keys_protocol import WrappedKey
 from consentvault.tenancy.tokens import TokenKey, mint_org_token, org_transaction
 
-TENANT_TABLES = ("organization", "brand", "capture_source", "credential", "member", "org_key", "contact_key", "event",
-                 "disclosure", "contact_salt", "seal", "chain_head", "contact_log", "review")
-TENANT_VIEWS = ("current_permission", "chain_breaks", "unsealed_events")
-# Tables the harness does not fill for the synthetic orgs: contact_salt holds clear salts (home organisation only).
-UNFILLED = {"contact_salt"}
+# The tables the harness fills for both synthetic orgs (the foundation ledger). The full tenant list is read from the
+# catalog by tenant_tables(), so a lane that adds a table with an org_id column is covered without editing this file.
+FILLED_TABLES = ("organization", "brand", "capture_source", "credential", "member", "org_key", "contact_key", "event",
+                 "disclosure", "seal", "chain_head", "contact_log", "review")
+# Platform tables that carry an org_id but belong to no tenant: owner-only, no grant to any runtime role, reached only
+# through owner-rights functions. replay_guard holds nonces before a tenant is entered; billing_event holds Stripe
+# webhooks that arrive before the organisation is known. Any other org_id table without row-level security fails.
+PLATFORM_TABLES = frozenset({"replay_guard", "billing_event"})
 PHONE = "+15555550142"  # the same person is a contact of both organisations
+
+
+def tenant_tables(conn) -> tuple[str, ...]:
+    """Every ordinary or partitioned table in the schema with an org_id column, minus the named platform tables.
+
+    Partitions are left out: they inherit the parent's policies and are reached through it.
+    """
+    rows = conn.execute(
+        "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+        " JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'org_id' AND NOT a.attisdropped"
+        " WHERE n.nspname = 'consentvault' AND c.relkind IN ('r', 'p') AND NOT c.relispartition"
+        " ORDER BY c.relname").fetchall()
+    return tuple(r["relname"] for r in rows if r["relname"] not in PLATFORM_TABLES)
+
+
+def tenant_views(conn) -> tuple[str, ...]:
+    """Every view in the schema with an org_id column."""
+    rows = conn.execute(
+        "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+        " JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'org_id' AND NOT a.attisdropped"
+        " WHERE n.nspname = 'consentvault' AND c.relkind = 'v' ORDER BY c.relname").fetchall()
+    return tuple(r["relname"] for r in rows)
 
 
 class FakeKeyProvider:

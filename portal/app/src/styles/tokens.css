@@ -1,0 +1,177 @@
+/* ConsentVault Cloud portal tokens.
+   Brand source: consentvault.ai globals.css (navy #3A4B5B, gold #C6B25D, cream #F7F4EA).
+   Light on :root, dark under prefers-color-scheme (unless data-theme="light") and under data-theme="dark".
+   Every text/background pair is computed in contrast.md. Import this file unchanged. */
+
+:root {
+  /* Fonts: referenced from Google Fonts by the pages, never bundled here. */
+  --font-display: 'Montserrat', system-ui, sans-serif;
+  --font-body: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: 'Cormorant Garamond', Georgia, serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* Type scale (rem on a 16px root). Body is 15px: a working tool, dense but legible. */
+  --text-xs: 0.75rem;     /* 12 */
+  --text-sm: 0.8125rem;   /* 13 */
+  --text-base: 0.9375rem; /* 15 */
+  --text-md: 1.0625rem;   /* 17 */
+  --text-lg: 1.25rem;     /* 20 */
+  --text-xl: 1.5rem;      /* 24 */
+  --text-2xl: 1.875rem;   /* 30 */
+  --text-stat: 2.25rem;   /* 36, stat numerals */
+  --leading-tight: 1.2;
+  --leading-body: 1.55;
+  --tracking-label: 0.12em;
+
+  /* Spacing (4px base) */
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px; --space-12: 48px;
+  --gutter: 16px;
+  --side-w: 248px;
+  --top-h: 56px;
+  --content-max: 1120px;
+  --target-min: 24px; --control-h: 40px; --control-h-touch: 44px;
+
+  /* Radius */
+  --radius-sm: 6px; --radius-md: 10px; --radius-lg: 14px; --radius-xl: 20px; --radius-pill: 9999px;
+
+  /* Motion: short, functional, removed under reduced motion */
+  --dur-fast: 120ms; --dur-base: 200ms;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* ---- Light theme colors ---- */
+  --color-bg: #F2F5F7;
+  --color-surface: #FFFFFF;
+  --color-surface-sunken: #EAF0F4;
+  --color-surface-cream: #F7F4EA;
+  --color-border: #C8D5DE;          /* decorative dividers only */
+  --color-border-strong: #7A8B99;   /* field edges and component outlines, 3:1 */
+  --color-text: #3A4B5B;
+  --color-text-strong: #1B2A37;
+  --color-text-muted: #55606B;
+  --color-text-subtle: #5E6973;
+  --color-link: #2C5A85;
+  --color-accent: #C6B25D;          /* the one action color */
+  --color-accent-hover: #D5C47B;
+  --color-on-accent: #2A3845;
+  --color-accent-ink: #776A2A;      /* gold as text */
+  --color-accent-tint: #F2EED9;
+  --color-focus: #2A3845;
+  --color-focus-gap: #FFFFFF;
+  --color-scrim: rgba(27, 42, 55, 0.55);
+  --color-skeleton: #E3EAEF;
+  --color-skeleton-shine: #F1F5F8;
+
+  /* Operational status (org, deliveries, banners). Not used for evidence. */
+  --color-success: #2F6B33;  --color-success-bg: #E6F1E6;  --color-success-border: #86B58A;
+  --color-danger: #A63A29;   --color-danger-bg: #FBE9E5;   --color-danger-border: #D9958A;
+  --color-warning: #6F4B00;  --color-warning-bg: #FFF1D6;  --color-warning-border: #D1A23F;
+  --color-info: #2C5A85;     --color-info-bg: #E4EEF7;     --color-info-border: #8DB0D1;
+
+  /* Evidence status. Descriptive hues only, never red/green verdict colors. */
+  --ev-found-fg: #1F4E79;       --ev-found-bg: #E1ECF6;       --ev-found-border: #7FA6CB;
+  --ev-stop-fg: #7A2E63;        --ev-stop-bg: #F6E4F0;        --ev-stop-border: #BE86AE;
+  --ev-none-fg: #4A5560;        --ev-none-bg: #EEF1F3;        --ev-none-border: #8D9AA6;
+  --ev-incomplete-fg: #0F5F5C;  --ev-incomplete-bg: #DDF0EE;  --ev-incomplete-border: #6BB5AF;
+  /* Policy action: neutral ink, outline vs solid. Not good/bad colors. */
+  --pol-proceed-fg: #2A3845;    --pol-proceed-bg: transparent; --pol-proceed-border: #2A3845;
+  --pol-hold-fg: #FFFFFF;       --pol-hold-bg: #2A3845;        --pol-hold-border: #2A3845;
+
+  /* Elevation */
+  --shadow-1: 0 1px 2px rgba(42, 56, 69, 0.06), 0 1px 1px rgba(42, 56, 69, 0.04);
+  --shadow-2: 0 2px 6px rgba(42, 56, 69, 0.08), 0 8px 20px -8px rgba(42, 56, 69, 0.14);
+  --shadow-3: 0 24px 60px -16px rgba(27, 42, 55, 0.35), 0 4px 12px rgba(27, 42, 55, 0.12);
+
+  /* Focus ring: 2px ink outline over a 2px surface-colored gap */
+  --focus-ring: 0 0 0 2px var(--color-focus-gap), 0 0 0 4px var(--color-focus);
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: #131C25;
+    --color-surface: #1B2632;
+    --color-surface-sunken: #16202A;
+    --color-surface-cream: #1F2A33;
+    --color-border: #2E3C4A;
+    --color-border-strong: #70808F;
+    --color-text: #E6ECF1;
+    --color-text-strong: #FFFFFF;
+    --color-text-muted: #B3BEC8;
+    --color-text-subtle: #9AA6B1;
+    --color-link: #9CC3E8;
+    --color-accent: #C6B25D;
+    --color-accent-hover: #D5C47B;
+    --color-on-accent: #1B2A37;
+    --color-accent-ink: #D5C47B;
+    --color-accent-tint: #2A2A1E;
+    --color-focus: #F2E7A6;
+    --color-focus-gap: #131C25;
+    --color-scrim: rgba(5, 9, 13, 0.7);
+    --color-skeleton: #243241;
+    --color-skeleton-shine: #2C3C4D;
+
+    --color-success: #9FD9A2;  --color-success-bg: #17341B;  --color-success-border: #3F7A44;
+    --color-danger: #F3A79D;   --color-danger-bg: #46211B;   --color-danger-border: #9A4A3D;
+    --color-warning: #F0CB7A;  --color-warning-bg: #3F2E0A;  --color-warning-border: #8C6A1C;
+    --color-info: #A9CBEA;     --color-info-bg: #1C3550;     --color-info-border: #4A78A5;
+
+    --ev-found-fg: #A9CBEA;       --ev-found-bg: #1C3550;       --ev-found-border: #4A78A5;
+    --ev-stop-fg: #EBB8DC;        --ev-stop-bg: #45213A;        --ev-stop-border: #9A5F88;
+    --ev-none-fg: #C2CCD5;        --ev-none-bg: #2A3540;        --ev-none-border: #6C7B88;
+    --ev-incomplete-fg: #8FD5CF;  --ev-incomplete-bg: #123F3C;  --ev-incomplete-border: #3F8C86;
+    --pol-proceed-fg: #E6ECF1;    --pol-proceed-bg: transparent; --pol-proceed-border: #E6ECF1;
+    --pol-hold-fg: #131C25;       --pol-hold-bg: #E6ECF1;        --pol-hold-border: #E6ECF1;
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.4), 0 8px 20px -8px rgba(0, 0, 0, 0.5);
+    --shadow-3: 0 24px 60px -16px rgba(0, 0, 0, 0.7), 0 4px 12px rgba(0, 0, 0, 0.4);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --color-bg: #131C25;
+  --color-surface: #1B2632;
+  --color-surface-sunken: #16202A;
+  --color-surface-cream: #1F2A33;
+  --color-border: #2E3C4A;
+  --color-border-strong: #70808F;
+  --color-text: #E6ECF1;
+  --color-text-strong: #FFFFFF;
+  --color-text-muted: #B3BEC8;
+  --color-text-subtle: #9AA6B1;
+  --color-link: #9CC3E8;
+  --color-accent: #C6B25D;
+  --color-accent-hover: #D5C47B;
+  --color-on-accent: #1B2A37;
+  --color-accent-ink: #D5C47B;
+  --color-accent-tint: #2A2A1E;
+  --color-focus: #F2E7A6;
+  --color-focus-gap: #131C25;
+  --color-scrim: rgba(5, 9, 13, 0.7);
+  --color-skeleton: #243241;
+  --color-skeleton-shine: #2C3C4D;
+
+  --color-success: #9FD9A2;  --color-success-bg: #17341B;  --color-success-border: #3F7A44;
+  --color-danger: #F3A79D;   --color-danger-bg: #46211B;   --color-danger-border: #9A4A3D;
+  --color-warning: #F0CB7A;  --color-warning-bg: #3F2E0A;  --color-warning-border: #8C6A1C;
+  --color-info: #A9CBEA;     --color-info-bg: #1C3550;     --color-info-border: #4A78A5;
+
+  --ev-found-fg: #A9CBEA;       --ev-found-bg: #1C3550;       --ev-found-border: #4A78A5;
+  --ev-stop-fg: #EBB8DC;        --ev-stop-bg: #45213A;        --ev-stop-border: #9A5F88;
+  --ev-none-fg: #C2CCD5;        --ev-none-bg: #2A3540;        --ev-none-border: #6C7B88;
+  --ev-incomplete-fg: #8FD5CF;  --ev-incomplete-bg: #123F3C;  --ev-incomplete-border: #3F8C86;
+  --pol-proceed-fg: #E6ECF1;    --pol-proceed-bg: transparent; --pol-proceed-border: #E6ECF1;
+  --pol-hold-fg: #131C25;       --pol-hold-bg: #E6ECF1;        --pol-hold-border: #E6ECF1;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.4), 0 8px 20px -8px rgba(0, 0, 0, 0.5);
+  --shadow-3: 0 24px 60px -16px rgba(0, 0, 0, 0.7), 0 4px 12px rgba(0, 0, 0, 0.4);
+  color-scheme: dark;
+}
+
+@media (min-width: 760px) { :root { --gutter: 24px; } }
+@media (min-width: 1200px) { :root { --gutter: 32px; } }
+@media (prefers-reduced-motion: reduce) { :root { --dur-fast: 0ms; --dur-base: 0ms; } }

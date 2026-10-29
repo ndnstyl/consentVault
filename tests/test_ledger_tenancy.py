@@ -237,11 +237,13 @@ def test_a_version_one_row_written_in_single_mode_still_verifies(conn, disclosur
 def test_down_then_up_round_trips_the_tenancy_migrations(raw_dsn, super_dsn):
     with db.connect(raw_dsn) as c, db.connect(super_dsn) as su:
         db.migrate(c)
-        su.execute((MIGRATIONS / "down" / "0003_replay_guard.sql").read_text())
-        su.execute((MIGRATIONS / "down" / "0002_tenancy.sql").read_text())
+        after_init = [p.name for p in db.list_migrations(MIGRATIONS) if p.name != "0001_init.sql"]
+        assert after_init[:2] == ["0002_tenancy.sql", "0003_replay_guard.sql"]
+        for name in reversed(after_init):  # every down, newest first, down to the tenancy migration
+            su.execute((MIGRATIONS / "down" / name).read_text())
         assert c.execute("SELECT to_regclass('consentvault.organization') AS t").fetchone()["t"] is None
         c.execute("DELETE FROM consentvault.schema_migration WHERE name <> '0001_init.sql'")
-        assert db.migrate(c) == ["0002_tenancy.sql", "0003_replay_guard.sql"]
+        assert db.migrate(c) == after_init
 
 
 def test_the_down_migration_refuses_while_a_second_organisation_exists(tenancy):

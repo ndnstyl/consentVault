@@ -68,8 +68,8 @@
       } else {
         text = this.getAttribute("data-disclosure") || "";
       }
-      text = text.trim();
-      if (!text) throw new Error("consentvault-consent: no disclosure text (use data-disclosure or data-template)");
+      // Never trimmed: the hash is over the exact text, the same bytes the vault registered (one rule everywhere).
+      if (!text.trim()) throw new Error("consentvault-consent: no disclosure text (use data-disclosure or data-template)");
       return text;
     }
 

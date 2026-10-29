@@ -33,7 +33,7 @@ def test_a_non_superuser_owner_migrates_and_is_bound_by_row_level_security(owner
     with db.connect(owner_dsn) as owner:
         assert owner.execute("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user"
                              ).fetchone() == {"rolsuper": False, "rolbypassrls": False}
-        assert db.migrate(owner) == ["0001_init.sql", "0002_tenancy.sql", "0003_replay_guard.sql"]
+        assert db.migrate(owner) == [p.name for p in db.list_migrations(db.default_migrations_dir())]
         assert owner.execute("SELECT count(*) AS n FROM consentvault.organization").fetchone()["n"] == 1  # home
         owner.execute("SELECT consentvault.install_token_key(%s, %s)", (key.key_id, key.secret))
         owner.execute("SELECT consentvault.enable_multi_tenant()")

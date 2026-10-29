@@ -7,7 +7,7 @@ import json
 import os
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Collection, Iterable
 
@@ -87,6 +87,8 @@ class Event:
     event_id: str
     row_hash: str
     prev_hash: str
+    # the sync outbox result for a tenant event (sync.outbox.EnqueueResult): the pushes queued in the same transaction
+    pushes: Any = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -401,8 +403,14 @@ def record_tenant_event(
     release_cause: str | None = None,
     allowed_purposes: Collection[str] | None = None,
     contact_verification: str = "none",
+    source_system_id: str | uuid.UUID | None = None,
 ) -> Event:
     """Append one hash-version-2 event to the current organisation's chain.
+
+    The pushes the event causes to connected systems are queued in the same transaction
+    (``sync.outbox.enqueue_event_pushes``), so the event and its pushes commit together or not at all; an
+    ``OutboxError`` rolls the event back. ``source_system_id`` names the connected system whose signal caused the
+    event (it is never pushed its own signal back).
 
     Needs an entered tenant (``tenancy.tokens.org_transaction``) and a ``tenancy.crypto.TenantCrypto``. The contact
     point, subject key, salt and evidence fields are stored only as ciphertexts under the contact's data key; the row
@@ -508,9 +516,12 @@ def record_tenant_event(
                 f"INSERT INTO consentvault.event ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})",
                 params,
             )
+            from .sync.outbox import enqueue_event_pushes
+            pushes = enqueue_event_pushes(conn, event_id=rid, contact_fp=fp, contact=norm, data_key=data_key,
+                                          source_system_id=source_system_id)
     except psycopg.Error as exc:
         raise LedgerError(f"event refused by the database: {exc}") from exc
-    return Event(seq=row["seq"], event_id=rid, row_hash=row_hash, prev_hash=prev)
+    return Event(seq=row["seq"], event_id=rid, row_hash=row_hash, prev_hash=prev, pushes=pushes)
 
 
 def _plaintext_breaks(conn: psycopg.Connection, crypto, row: dict) -> list[Break]:

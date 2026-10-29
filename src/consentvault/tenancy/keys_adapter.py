@@ -11,8 +11,11 @@ key. When the org key is destroyed the fingerprint secret becomes unreadable wit
 from __future__ import annotations
 
 import os
+import threading
 import uuid
 from typing import Callable
+
+import psycopg
 
 from ..providers.keys import KeyProvider as CustodyProvider
 from .errors import KeyProviderError
@@ -20,6 +23,52 @@ from .keys_protocol import WrappedKey
 
 ORG_KEY_VERSION = 1
 FINGERPRINT_SECRET_BYTES = 32
+# the only scope the loader's token carries: it opens nothing but the organisation's own row of org_fingerprint_secret
+FINGERPRINT_LOADER_SCOPE = "worker:fingerprint_secret"
+FINGERPRINT_LOADER_TTL = 30
+
+
+class DatabaseFingerprintSecretLoader:
+    """Reads ``consentvault.org_fingerprint_secret`` (migration 0005) for ``CustodyKeyAdapter``.
+
+    Only the schema owner holds a grant on that table, and row-level security binds the owner too, so each read enters
+    the organisation with a 30-second token naming it (``owner_connect`` returns a schema-owner connection, idle and
+    autocommit; ``token_key`` is the vault's tenant token key). The secret is never rotated and the row is append-only,
+    so the wrapped bytes are kept in memory once read; they stay unreadable without the org key, and destroying the org
+    key makes them unreadable everywhere. A missing row or a failed read raises ``KeyProviderError``.
+    """
+
+    def __init__(self, owner_connect: Callable[[], psycopg.Connection], token_key) -> None:
+        if not callable(owner_connect):
+            raise KeyProviderError("owner_connect must be callable")
+        self._connect = owner_connect
+        self._key = token_key
+        self._held: dict[uuid.UUID, bytes] = {}
+        self._lock = threading.Lock()
+
+    def __call__(self, org_id: uuid.UUID) -> bytes:
+        from .tokens import mint_org_token, org_transaction
+
+        org = uuid.UUID(str(org_id))
+        with self._lock:
+            held = self._held.get(org)
+        if held is not None:
+            return held
+        try:
+            token = mint_org_token(self._key, org, [FINGERPRINT_LOADER_SCOPE], credential_id=None,
+                                   ttl_seconds=FINGERPRINT_LOADER_TTL)
+            with self._connect() as conn, org_transaction(conn, token):
+                row = conn.execute("SELECT wrapped FROM consentvault.org_fingerprint_secret"
+                                   " WHERE org_id = (SELECT consentvault.current_org())").fetchone()
+        except psycopg.Error as exc:
+            raise KeyProviderError(f"the fingerprint secret of organisation {org} could not be read:"
+                                   f" {type(exc).__name__}") from exc
+        if row is None:
+            raise KeyProviderError(f"no wrapped fingerprint secret is stored for organisation {org}")
+        wrapped = bytes(row["wrapped"])
+        with self._lock:
+            self._held[org] = wrapped
+        return wrapped
 
 
 class CustodyKeyAdapter:
@@ -32,6 +81,12 @@ class CustodyKeyAdapter:
             raise KeyProviderError("load_wrapped_fingerprint_secret must be callable")
         self._custody = custody
         self._load_fp = load_wrapped_fingerprint_secret
+
+    @classmethod
+    def from_database(cls, custody: CustodyProvider, owner_connect: Callable[[], psycopg.Connection],
+                      token_key) -> "CustodyKeyAdapter":
+        """The production wiring: the fingerprint secret comes from ``consentvault.org_fingerprint_secret``."""
+        return cls(custody, DatabaseFingerprintSecretLoader(owner_connect, token_key))
 
     @property
     def provable_destruction(self) -> bool:

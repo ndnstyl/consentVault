@@ -67,23 +67,28 @@ def anchor(conn: psycopg.Connection, sink: str, *, now: datetime | None = None) 
     breaks = verify_chain(conn)
     if breaks:
         raise ChainError(f"refusing to anchor a broken chain: {len(breaks)} break(s), first at seq {breaks[0].seq}")
-    head = conn.execute("SELECT seq, row_hash FROM consentvault.event ORDER BY seq DESC LIMIT 1").fetchone()
+    head = conn.execute("SELECT seq, row_hash FROM consentvault.event WHERE org_id = consentvault.current_org()"
+                        " ORDER BY seq DESC LIMIT 1").fetchone()
     if head is None:
         raise AnchorError("the ledger is empty; there is no head to anchor")
     when = now or datetime.now(timezone.utc)
     record = {"seq": head["seq"], "row_hash": head["row_hash"],
               "anchored_at": when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")}
+    orgs = conn.execute("SELECT consentvault.current_org() AS org, consentvault.home_org() AS home").fetchone()
+    if orgs["org"] != orgs["home"]:  # a tenant's sink record names its organisation (verify_chain reads it)
+        record["org_id"] = str(orgs["org"])
     line = json.dumps(record, sort_keys=True, separators=(",", ":"))
     if _is_url(sink):
         _post(sink, line)
     else:
         _write_file(sink, line)
     try:
-        conn.execute(
-            "INSERT INTO consentvault.chain_head (seq, row_hash, sink, anchored_at) VALUES (%s, %s, %s, %s)",
+        row = conn.execute(
+            "INSERT INTO consentvault.chain_head (seq, row_hash, sink, anchored_at) VALUES (%s, %s, %s, %s)"
+            " RETURNING head_uuid",
             (head["seq"], head["row_hash"], sink_label(sink), when),
-        )
+        ).fetchone()
     except psycopg.Error as exc:
         raise AnchorError(
             f"the head was written to the sink but chain_head refused it: {exc}") from exc
-    return {**record, "sink": sink_label(sink)}
+    return {**record, "sink": sink_label(sink), "anchor_id": str(row["head_uuid"])}

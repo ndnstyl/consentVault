@@ -573,3 +573,21 @@ def test_a_bundled_anchor_that_is_not_on_the_path_is_refused(conn, disclosure, t
     _reseal_manifest(out, data)
     proc = _verify(out, ca)
     assert proc.returncode != 0 and "FAIL bundled anchor 9 (seq 7)" in proc.stdout
+
+
+def test_the_verifier_accepts_hash_version_two_and_pins_its_seal_columns():
+    text = render_verifier("0" * 64)
+    ns = {}
+    head = text.split("def report(")[0].replace("HERE = os.path.dirname(os.path.abspath(__file__))", "HERE = ''")
+    exec(head, ns)  # the pinned tables only; nothing in the verifier runs
+    assert ns["HASH_VERSIONS"]["2"] == list(HASH_VERSIONS[2])
+    assert ns["SEAL_HASH_VERSIONS"]["2"] == list(HASH_VERSIONS[2]) + ["prev_hash", "row_hash"]
+    assert ns["SEAL_HASH_VERSIONS"]["1"] == list(seal.SEAL_HASH_VERSIONS[1])
+    assert "Verified" not in text and "--evidence-key" in text
+
+
+def test_a_single_company_bundle_does_not_ask_for_an_evidence_key(populated, ca, tmp_path):
+    out = tmp_path / "bundle"
+    export(populated, PHONE_A, out)
+    proc = _verify(out, ca)
+    assert proc.returncode == 0 and "evidence public key" not in proc.stdout

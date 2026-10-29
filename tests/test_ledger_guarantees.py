@@ -74,7 +74,7 @@ def test_the_first_migration_holds_the_release_columns_and_single_company_rows_u
         "SELECT column_name FROM information_schema.columns WHERE table_schema = 'consentvault' AND table_name = 'event'")}
     assert {"release_of_event_id", "release_outcome", "release_cause", "contact_commit", "edge_received_at"} <= cols
     from consentvault import ledger, seal
-    assert 1 in ledger.HASH_VERSIONS and list(seal.SEAL_HASH_VERSIONS) == [1]
+    assert 1 in ledger.HASH_VERSIONS and list(seal.SEAL_HASH_VERSIONS) == [1, 2]
     assert {"release_of_event_id", "release_outcome", "release_cause", "contact_commit",
             "edge_received_at"} <= set(ledger.HASH_VERSIONS[1])
     assert _grant(conn, _d(conn)).seq == 1

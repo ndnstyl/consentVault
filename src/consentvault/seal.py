@@ -45,7 +45,24 @@ OPENSSL_TIMEOUT_S = 30
 # a new version here; seals already made keep verifying because each seal stores the columns it covered.
 SEAL_HASH_VERSIONS: dict[int, tuple[str, ...]] = {
     1: tuple(LEDGER_HASH_VERSIONS[1]) + ("prev_hash", "row_hash"),
+    # multi-tenant rows: every hash-version-2 column plus the chain links (what the exported verifier pins)
+    2: tuple(LEDGER_HASH_VERSIONS[2]) + ("prev_hash", "row_hash"),
 }
+
+
+# Seal versions that belong to the multi-tenant (hash version 2) rows; every other version is the single-company line,
+# where a later version adds columns and new seals take the newest.
+TENANT_SEAL_VERSION = 2
+
+
+def seal_version_for(row: dict) -> int:
+    """The seal version of an event: version 2 for a multi-tenant row, else the newest single-company version."""
+    v = row.get("hash_version")
+    if v == 2:
+        return TENANT_SEAL_VERSION
+    if v == 1:
+        return current_hash_version()
+    raise SealError(f"no seal version covers an event of hash version {v!r}")
 
 # A seal's signing time may not precede the event's received_at (whole seconds, the authority's resolution) and
 # may not exceed it by more than this. Configurable per call; `seal_max_delay_seconds` in consentvault.toml.
@@ -76,12 +93,13 @@ class VerifyResult:
     event_id: str
     ok: bool
     reason: str
-    seal_id: int | None = None
+    seal_id: str | None = None  # the seal's random UUID (seal_uuid); serial ids are hidden in multi mode
     gen_time: datetime | None = None
 
 
 def current_hash_version() -> int:
-    return max(SEAL_HASH_VERSIONS)
+    """The newest seal version of the single-company line (hash-version-1 rows)."""
+    return max(k for k in SEAL_HASH_VERSIONS if k != TENANT_SEAL_VERSION)
 
 
 def _columns_for(hash_version: int) -> tuple[str, ...]:
@@ -257,8 +275,12 @@ def stamp(digest_hex: str, tsa_url: str, *, backoff: float | None = None,
         return reply, _parse_gen_time(text)
 
 
+_SEAL_COLUMNS = ("seal_uuid, event_id, hash_version, columns, digest, tsa_url, token, gen_time, verified_at, created_at")
+
+
 def _fetch_row(conn: psycopg.Connection, event_id) -> dict | None:
-    return conn.execute("SELECT * FROM consentvault.event WHERE event_id = %s", (event_id,)).fetchone()
+    return conn.execute("SELECT * FROM consentvault.event WHERE org_id = consentvault.current_org() AND event_id = %s",
+                        (event_id,)).fetchone()
 
 
 def seal_pending(conn: psycopg.Connection, tsa_url: str, limit: int = 100, *,
@@ -270,21 +292,22 @@ def seal_pending(conn: psycopg.Connection, tsa_url: str, limit: int = 100, *,
     """
     if limit < 1:
         raise SealError("limit must be at least 1")
-    version = current_hash_version()
     pending = [r["event_id"] for r in conn.execute(
-        "SELECT event_id FROM consentvault.unsealed_events ORDER BY seq LIMIT %s", (limit,))]
+        "SELECT event_id FROM consentvault.unsealed_events WHERE org_id = consentvault.current_org()"
+        " ORDER BY seq LIMIT %s", (limit,))]
     sealed: list[str] = []
     for event_id in pending:
         row = _fetch_row(conn, event_id)
         if row is None:
             raise SealError(f"event {event_id} vanished while sealing")
+        version = seal_version_for(row)
         d = digest(row, version)
         token, gen_time = stamp(d.hex(), tsa_url, backoff=backoff)
         try:
             with conn.transaction():
                 conn.execute("SELECT pg_advisory_xact_lock(hashtext('consentvault.seal'), hashtext(%s))", (str(event_id),))
-                already = conn.execute("SELECT 1 FROM consentvault.seal WHERE event_id = %s AND hash_version = %s",
-                                       (event_id, version)).fetchone()
+                already = conn.execute("SELECT 1 FROM consentvault.seal WHERE org_id = consentvault.current_org()"
+                                       " AND event_id = %s AND hash_version = %s", (event_id, version)).fetchone()
                 if already:
                     continue
                 conn.execute(
@@ -316,7 +339,7 @@ def _token_gen_time(ossl: str, tsr: Path) -> datetime:
 
 def _verify_one(conn: psycopg.Connection, seal: dict, row: dict, max_delay: timedelta) -> VerifyResult:
     eid = str(seal["event_id"])
-    sid = seal["seal_id"]
+    sid = str(seal["seal_uuid"])
     gen: datetime | None = None
     try:
         now = _digest_columns(row, list(seal["columns"]))
@@ -338,7 +361,7 @@ def _verify_one(conn: psycopg.Connection, seal: dict, row: dict, max_delay: time
     except SealError as exc:
         return VerifyResult(eid, False, str(exc), sid, gen)
     try:
-        conn.execute("SELECT consentvault.mark_seal_verified(%s)", (sid,))
+        conn.execute("SELECT consentvault.mark_seal_verified(%s::uuid)", (sid,))
     except psycopg.Error as exc:
         return VerifyResult(eid, False, f"verified, but verified_at could not be recorded: {exc}", sid, gen)
     return VerifyResult(eid, True, "verified", sid, gen)
@@ -346,7 +369,8 @@ def _verify_one(conn: psycopg.Connection, seal: dict, row: dict, max_delay: time
 
 def verify(conn: psycopg.Connection, event_id, max_delay: timedelta = DEFAULT_MAX_DELAY) -> VerifyResult:
     """Re-digest the event's sealed columns and verify the stored token. Never raises for a bad seal."""
-    seals = conn.execute("SELECT * FROM consentvault.seal WHERE event_id = %s ORDER BY seal_id", (event_id,)).fetchall()
+    seals = conn.execute(f"SELECT {_SEAL_COLUMNS} FROM consentvault.seal WHERE org_id = consentvault.current_org()"
+                         " AND event_id = %s ORDER BY created_at, gen_time NULLS LAST, seal_uuid", (event_id,)).fetchall()
     if not seals:
         return VerifyResult(str(event_id), False, "no seal for this event")
     row = _fetch_row(conn, event_id)
@@ -373,12 +397,14 @@ def verify_all(
     event stamped earlier than an earlier event means a seal was swapped, re-ordered or made out of band.
     """
     rows = conn.execute(
-        "SELECT DISTINCT e.event_id, e.seq FROM consentvault.seal s JOIN consentvault.event e USING (event_id) ORDER BY e.seq"
+        "SELECT DISTINCT e.event_id, e.seq FROM consentvault.seal s"
+        " JOIN consentvault.event e ON e.org_id = s.org_id AND e.event_id = s.event_id"
+        " WHERE s.org_id = consentvault.current_org() ORDER BY e.seq"
     ).fetchall()
     failures: list[VerifyResult] = []
     for u in conn.execute(
         "SELECT event_id, seq, received_at FROM consentvault.unsealed_events"
-        " WHERE received_at < now() - %s ORDER BY seq", (unsealed_grace,)
+        " WHERE org_id = consentvault.current_org() AND received_at < now() - %s ORDER BY seq", (unsealed_grace,)
     ).fetchall():
         failures.append(VerifyResult(
             str(u["event_id"]), False,

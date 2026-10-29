@@ -13,30 +13,52 @@ from consentvault.tenancy.errors import ReplayError, TenancyError
 from consentvault.tenancy.replay import claim_nonce, sweep
 from consentvault.tenancy.tokens import org_transaction
 
-from .harness import PHONE, TENANT_TABLES, TENANT_VIEWS, make_login_role
+from .harness import FILLED_TABLES, PHONE, PLATFORM_TABLES, make_login_role, tenant_tables, tenant_views
 
 
 def test_every_tenant_table_forces_row_level_security_bound_to_the_verified_tenant(tenancy):
     with tenancy.superuser() as owner:
+        tables, views = tenant_tables(owner), tenant_views(owner)
+        assert set(FILLED_TABLES) | {"contact_salt"} <= set(tables)  # the catalog read cannot silently shrink
         rows = {r["relname"]: r for r in owner.execute(
             "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity FROM pg_class c"
             " JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'consentvault' AND c.relname = ANY(%s)",
-            (list(TENANT_TABLES),))}
-        assert set(rows) == set(TENANT_TABLES)
-        assert all(r["relrowsecurity"] and r["relforcerowsecurity"] for r in rows.values())
+            (list(tables),))}
+        assert set(rows) == set(tables)
+        assert all(r["relrowsecurity"] and r["relforcerowsecurity"] for r in rows.values()), \
+            [t for t, r in rows.items() if not (r["relrowsecurity"] and r["relforcerowsecurity"])]
+        # every partition of a partitioned tenant table forces row-level security too (direct reads see nothing)
+        parts = owner.execute(
+            "SELECT c.relname, c.relrowsecurity AND c.relforcerowsecurity AS forced FROM pg_inherits i"
+            " JOIN pg_class c ON c.oid = i.inhrelid JOIN pg_class p ON p.oid = i.inhparent"
+            " JOIN pg_namespace n ON n.oid = p.relnamespace WHERE n.nspname = 'consentvault' AND p.relname = ANY(%s)",
+            (list(tables),)).fetchall()
+        assert all(r["forced"] for r in parts), parts
         policies = owner.execute("SELECT tablename, policyname, permissive, cmd, qual, with_check FROM pg_policies"
                                  " WHERE schemaname = 'consentvault'").fetchall()
         tenant = [p for p in policies if p["policyname"].endswith("_tenant")]
-        assert {p["tablename"] for p in tenant} == set(TENANT_TABLES)
+        assert {p["tablename"] for p in tenant} == set(tables)
         for p in tenant:
+            assert p["permissive"] == "PERMISSIVE" and p["cmd"] == "ALL", p
             assert "current_org()" in p["qual"] and "current_org()" in p["with_check"], p
         scoped = {p["tablename"] for p in policies if p["policyname"].endswith("_read_scope")
                   and p["permissive"] == "RESTRICTIVE" and p["cmd"] == "SELECT" and "may_read_evidence" in p["qual"]}
-        assert scoped == {"event", "contact_key", "contact_salt", "contact_log", "review"}
-        assert len(policies) == len(tenant) + len(scoped)
+        # the foundation's evidence tables plus the lanes' export jobs and gate decisions
+        assert scoped == {"event", "contact_key", "contact_salt", "contact_log", "review", "export_job", "gate_decision"}
+        audit = {p["tablename"] for p in policies if p["policyname"].endswith("_read_scope")
+                 and p["permissive"] == "RESTRICTIVE" and p["cmd"] == "SELECT" and "may_read_audit" in p["qual"]}
+        assert audit == {"audit_event"}
+        assert len(policies) == len(tenant) + len(scoped) + len(audit)
         opts = {r["relname"]: r["reloptions"] for r in owner.execute(
-            "SELECT relname, reloptions FROM pg_class WHERE relname = ANY(%s)", (list(TENANT_VIEWS),))}
+            "SELECT relname, reloptions FROM pg_class WHERE relname = ANY(%s)", (list(views),))}
+        assert set(opts) == set(views)
         assert all("security_invoker=true" in (o or []) for o in opts.values()), opts
+        # the platform tables with an org_id are owner-only: no runtime role holds any grant on them
+        grants = owner.execute(
+            "SELECT table_name, grantee FROM information_schema.table_privileges WHERE table_schema = 'consentvault'"
+            " AND table_name = ANY(%s) AND grantee IN ('consentvault_app', 'consentvault_worker', 'consentvault_operator',"
+            " 'PUBLIC')", (list(PLATFORM_TABLES),)).fetchall()
+        assert grants == [], grants
 
 
 def test_no_runtime_role_bypasses_and_the_operator_reads_no_personal_column(tenancy):
@@ -98,7 +120,9 @@ def test_dispatch_orgs_mints_one_worker_token_per_active_org_for_the_worker_role
                                  "consentvault_worker, consentvault_app")
     with db.connect(worker_dsn) as worker:
         tokens = {r["org_id"]: r["token"] for r in worker.execute("SELECT * FROM consentvault.dispatch_orgs('sync')")}
-        assert set(tokens) == {tenancy.a.org_id, tenancy.home}
+        # ruled 2026-10-29: background jobs cover every org but closed, so offboarding B is dispatched too (one token
+        # per org; the per-org fence below is unchanged)
+        assert set(tokens) == {tenancy.a.org_id, tenancy.b.org_id, tenancy.home}
         with org_transaction(worker, tokens[tenancy.a.org_id]) as org:
             assert org == tenancy.a.org_id
             assert worker.execute("SELECT consentvault.current_token_scopes() AS s").fetchone()["s"] == ["worker:sync"]

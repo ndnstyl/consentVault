@@ -199,12 +199,13 @@ def test_new_hash_version_leaves_old_seals_valid(conn, disclosure, tsa, monkeypa
     first = _grant(conn, disclosure, "212-555-0101")
     seal.seal_pending(conn, tsa.url, backoff=0)
     old = seal.current_hash_version()
+    new = max(seal.SEAL_HASH_VERSIONS) + 1  # the next free number (2 is the multi-tenant line)
     conn.execute("ALTER TABLE consentvault.event ADD COLUMN extra_note text")
-    monkeypatch.setitem(seal.SEAL_HASH_VERSIONS, old + 1, seal.SEAL_HASH_VERSIONS[old] + ("extra_note",))
+    monkeypatch.setitem(seal.SEAL_HASH_VERSIONS, new, seal.SEAL_HASH_VERSIONS[old] + ("extra_note",))
     second = _grant(conn, disclosure, "212-555-0102")
     assert seal.seal_pending(conn, tsa.url, backoff=0) == [second.event_id]
     versions = {str(r["event_id"]): r["hash_version"] for r in conn.execute("SELECT * FROM consentvault.seal")}
-    assert versions == {first.event_id: old, second.event_id: old + 1}
+    assert versions == {first.event_id: old, second.event_id: new}
     assert seal.verify_all(conn) == (2, [])
     _tamper(conn, "UPDATE consentvault.event SET extra_note = 'late edit' WHERE event_id = %s", (second.event_id,))
     checked, failures = seal.verify_all(conn)

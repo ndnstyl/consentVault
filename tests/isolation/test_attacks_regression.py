@@ -254,3 +254,20 @@ def test_a_capture_token_still_writes_a_chained_event(tenancy):
     assert e.seq == 3
     with tenancy.app() as app, org_transaction(app, tenancy.token(tenancy.a, scopes=["gate_read"])):
         assert app.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"] == 3
+
+
+def test_unbind_filters_on_the_tokens_own_organisation(tenancy, pg_server):
+    """Owner-rights function added at the integration pass (0011): another tenant's admin cannot unbind a system."""
+    from sync.support import SyncEnv
+    env = SyncEnv(tenancy, pg_server["port"])
+    sys_a = env.add_system(tenancy.a, "crm", signal=True)
+    with tenancy.app() as app:
+        with pytest.raises(psycopg.errors.NoDataFound):
+            with org_transaction(app, tenancy.admin_token(tenancy.b.org_id)):
+                app.execute("SELECT consentvault.sync_system_unbind_credential(%s)", (sys_a.system_id,))
+        with pytest.raises(psycopg.Error):  # a capture token is not an admin or developer token
+            with org_transaction(app, tenancy.token(tenancy.a)):
+                app.execute("SELECT consentvault.sync_system_unbind_credential(%s)", (sys_a.system_id,))
+    with tenancy.superuser() as su:
+        assert su.execute("SELECT signal_credential_id FROM consentvault.connected_system WHERE system_id = %s",
+                          (sys_a.system_id,)).fetchone()["signal_credential_id"] == tenancy.a.credential_id

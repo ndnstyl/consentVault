@@ -1,0 +1,11 @@
+{
+  "name": "consentvault-edge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Capture edge for the consentvault consent vault",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/worker.test.ts"
+  }
+}

@@ -1,0 +1,34 @@
+# Copy to consentvault.toml (gitignored). Environment variables win over this file:
+# CONSENTVAULT_DSN, CONSENTVAULT_OWNER_DSN, CONSENTVAULT_DEFAULT_REGION, CONSENTVAULT_TSA_URL, CONSENTVAULT_MIGRATIONS, CONSENTVAULT_PURPOSES,
+# CONSENTVAULT_ANCHOR_SINK, CONSENTVAULT_SEAL_MAX_DELAY_SECONDS, CONSENTVAULT_UNSEALED_GRACE_SECONDS.
+
+# PostgreSQL 15+ connection string for the RUNTIME role: a login role that is a member of the group role
+# consentvault_app (SELECT and INSERT only). Every command except `migrate` uses this one.
+dsn = "postgresql://consentvault_runtime:change-me@db:5432/consentvault"
+
+# Connection string for the OWNER role, the one that runs `consentvault migrate` and owns the schema.
+# Keep it out of the runtime environment: put it in this file only on the machine that runs migrations.
+# owner_dsn = "postgresql://consentvault_owner:change-me@db:5432/consentvault"
+
+# Region used to read phone numbers written without a country code (ISO 3166 alpha-2).
+default_region = "US"
+
+# The purposes your consent can name. Lower-case; every grant, stop and wording is checked against this list.
+# A stop may also name "*", which stops every purpose.
+purposes = ["marketing", "service"]
+
+# RFC 3161 timestamp authority. Choose one you trust; only a 32-byte digest is sent.
+tsa_url = "https://tsa.example.com/rfc3161"
+
+# Where `consentvault anchor` writes the chain head, besides the chain_head table: a file path, or an http(s)
+# webhook URL. Pick something the database host cannot rewrite (another host, an append-only store).
+anchor_sink = "https://anchors.example.com/hook"
+
+# Longest a seal's signing time may come after the event was received (seconds). Default 86400.
+# seal_max_delay_seconds = 86400
+
+# Longest an event may stay unsealed before `consentvault verify-seals` fails it (seconds). Default 3600.
+# unsealed_grace_seconds = 3600
+
+# Optional: directory of migrations (defaults to the ones shipped with the package).
+# migrations_dir = "migrations"

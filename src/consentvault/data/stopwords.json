@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "keywords": {
+    "en": ["stop", "stopall", "stop all", "unsubscribe", "cancel", "end", "quit", "revoke", "optout", "opt out"],
+    "es": ["parar", "pare", "detener", "detente", "alto", "basta", "cancelar", "cancela", "baja", "salir", "desuscribir", "desuscribirse", "darse de baja", "darme de baja"],
+    "fr": ["arret", "arrete", "arreter", "arretez", "stoppez", "annuler", "annulez", "desabonner", "desabonnez", "desinscrire", "desinscrivez", "quitter"]
+  },
+  "start_keywords": ["start", "unstop", "yes"],
+  "exact_only": ["end", "alto", "basta", "baja", "salir", "cancela", "quit"],
+  "filler": [
+    "please", "pls", "plz", "now", "thanks", "thank", "you", "thx", "ty", "it", "that", "this", "me", "my", "i", "to",
+    "from", "these", "those", "texts", "text", "messages", "message", "all", "and", "everything", "ok", "okay",
+    "ya", "now", "por", "favor", "gracias", "ahora", "todo", "todos", "mensajes", "ya",
+    "svp", "sil", "vous", "plait", "merci", "tout", "maintenant", "s", "il"
+  ],
+  "contact_words": ["text", "texts", "texting", "call", "calls", "calling", "contact", "contacting", "message", "messages", "messaging", "email", "emails", "emailing", "mail", "sms"],
+  "phrases": [
+    "\\b(?:do not|dont|never) (?:ever )?(?:text|call|contact|message|email|mail|sms|phone|ring)(?: me| us)?\\b(?: again| anymore| any more)?",
+    "\\bstop (?:texting|calling|contacting|messaging|emailing|mailing|phoning|sending|bothering|harassing) (?:me|us)\\b",
+    "\\bstop sending (?:me |us )?(?:any )?(?:more )?(?:texts|text|messages|emails|mail|sms|offers|promotions|ads)\\b",
+    "\\b(?:please )?remove (?:me|us|my number|my phone number|my email|my name|this number|this email)\\b",
+    "\\btake (?:me|us|my number|my email|my name) off\\b",
+    "\\b(?:delete|erase) (?:my|our) (?:number|phone number|email|info|information|details|contact)\\b",
+    "\\bno more (?:texts|text|calls|emails|messages|sms|mail)\\b",
+    "\\bleave (?:me|us) alone\\b",
+    "\\bopt (?:me|us) out\\b",
+    "\\bunsubscribe (?:me|us)\\b",
+    "\\b(?:revoke|withdraw|rescind|cancel) (?:my |our )?consent\\b",
+    "\\bi (?:do not|dont) (?:want|wish) (?:any )?(?:more )?(?:texts|text|calls|emails|messages|sms|contact)\\b",
+    "\\bno me (?:llames|llamen|escribas|escriban|contactes|contacten|envies|envien|mandes|manden|molestes|molesten)\\b",
+    "\\bdej(?:a|an|en|es|e|ar) de (?:llamar|enviar|escribir|mandar|contactar|molestar)(?:me)?\\b",
+    "\\b(?:quita|quitame|quitar|borra|borrame|borrar|saca|sacame|eliminame|elimina)(?: me)? de (?:la|su|tu|esta) lista\\b",
+    "\\bno quiero (?:mas )?(?:mensajes|llamadas|correos|textos|sms|publicidad)\\b",
+    "\\bno mas (?:mensajes|llamadas|textos|correos|sms)\\b",
+    "\\bne m ?(?:appelez|appelle|appelles|contactez|contacte|contactes|ecrivez|ecris|envoyez|envoie|textez) plus\\b",
+    "\\bne me (?:contactez|contacte|contactes|appelez|appelle|appelles|ecrivez|ecris|envoyez|envoie|textez) plus\\b",
+    "\\bne plus me (?:contacter|appeler|ecrire|envoyer|texter)\\b",
+    "\\barretez (?:de )?(?:me |m )?(?:contacter|appeler|ecrire|envoyer|texter|harceler)\\b",
+    "\\b(?:supprimez|retirez|enlevez|effacez) (?:moi|mon numero|mon email|mon adresse) (?:de|des|du) (?:la |votre |vos |cette )?(?:liste|listes|base|fichier)\\b",
+    "\\bje ne veux plus (?:de |des )?(?:messages|sms|appels|courriels|mails|courriers|contacts?)\\b"
+  ],
+  "near_miss": [
+    "\\bstop (?:by|in|over|off|at|here|there|signs?|lights?|motion|watch|loss|gap|and (?:shop|go|think|smell|see))\\b",
+    "\\bstopovers?\\b",
+    "\\bstoplights?\\b",
+    "\\b(?:bus|truck|pit|rest|full|one|last|next|train|tram|metro|subway|gas|coach|taxi) stops?\\b",
+    "\\bone stop shop\\b",
+    "\\b(?:non|cant|cannot|wont|couldnt|wouldnt) stop\\b",
+    "\\bnonstop\\b",
+    "\\bnon stop\\b",
+    "\\bsans arret\\b",
+    "\\barret (?:de )?(?:bus|tram|metro|autobus)\\b"
+  ],
+  "negations": [
+    "\\b(?:please |pls )?(?:dont|do not|did not|didnt|never|not|no|nunca) (?:please |pls |ever )?(?:stop|cancel|quit|end|unsubscribe|revoke)\\b",
+    "\\bno (?:pares|pare|paren|detengas|detenga|cancele|canceles)\\b",
+    "\\b(?:n ?arrete|narrete|narretez|n arretez) pas\\b",
+    "\\bne pas arreter\\b"
+  ],
+  "confusables": {
+    "а": "a", "в": "b", "г": "r", "е": "e", "ё": "e", "з": "3", "и": "n", "й": "n", "к": "k", "м": "m", "н": "h",
+    "о": "o", "р": "p", "с": "c", "т": "t", "у": "y", "х": "x", "ѕ": "s", "і": "i", "ј": "j", "ԁ": "d", "ԛ": "q",
+    "ԝ": "w", "һ": "h", "ӏ": "l", "ο": "o", "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ν": "v",
+    "ρ": "p", "τ": "t", "υ": "u", "χ": "x", "ς": "s", "σ": "s", "η": "n", "μ": "u", "ω": "w", "ϲ": "c", "ʏ": "y",
+    "ı": "i", "ѡ": "w", "ɡ": "g", "ᴏ": "o", "ᴘ": "p", "ꜱ": "s", "ᴛ": "t", "ᴜ": "u"
+  }
+}

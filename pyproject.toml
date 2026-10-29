@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "consentvault"
+authors = [{ name = "The Innovative Native LLC" }]
+version = "0.1.0"
+description = "Open-source, white-label consent vault: a tamper-evident record of who agreed to be contacted."
+readme = "README.md"
+license = { text = "MIT" }
+keywords = ["consent", "compliance", "audit", "tamper-evident", "rfc3161"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+requires-python = ">=3.11"
+dependencies = ["psycopg[binary]>=3.1"]
+
+[project.urls]
+Homepage = "https://github.com/ndnstyl/consentVault"
+Repository = "https://github.com/ndnstyl/consentVault"
+Issues = "https://github.com/ndnstyl/consentVault/issues"
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+consentvault = "consentvault.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/consentvault"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"migrations" = "consentvault/_migrations"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = ["network: needs outbound network access (for example a live timestamp authority); deselect with -m \"not network\""]

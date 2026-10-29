@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      # The bootstrap superuser exists only to create the two roles below on first start. Nothing else uses it.
+      POSTGRES_USER: consentvault_admin
+      POSTGRES_PASSWORD: ${CONSENTVAULT_ADMIN_PASSWORD:?set CONSENTVAULT_ADMIN_PASSWORD}
+      POSTGRES_DB: consentvault
+      CONSENTVAULT_OWNER_PASSWORD: ${CONSENTVAULT_OWNER_PASSWORD:?set CONSENTVAULT_OWNER_PASSWORD}
+      CONSENTVAULT_APP_PASSWORD: ${CONSENTVAULT_APP_PASSWORD:?set CONSENTVAULT_APP_PASSWORD}
+    volumes:
+      - consentvault-data:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U consentvault_admin -d consentvault"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Runs as the schema owner and is the only service that holds the owner password:
+  #   docker compose run --rm migrate
+  migrate:
+    build: .
+    profiles: ["tools"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      CONSENTVAULT_OWNER_DSN: postgresql://consentvault_owner:${CONSENTVAULT_OWNER_PASSWORD}@db:5432/consentvault
+    command: ["consentvault", "migrate"]
+
+  # Runs as the restricted runtime role: SELECT and INSERT only, owns nothing.
+  vault:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      CONSENTVAULT_DSN: postgresql://consentvault_runtime:${CONSENTVAULT_APP_PASSWORD}@db:5432/consentvault
+      CONSENTVAULT_PURPOSES: ${CONSENTVAULT_PURPOSES:?set CONSENTVAULT_PURPOSES, a comma separated list such as marketing,service}
+      CONSENTVAULT_TSA_URL: ${CONSENTVAULT_TSA_URL:?set CONSENTVAULT_TSA_URL}
+      CONSENTVAULT_ANCHOR_SINK: ${CONSENTVAULT_ANCHOR_SINK:?set CONSENTVAULT_ANCHOR_SINK, an http(s) webhook URL on another host}
+      CONSENTVAULT_API_SECRET: ${CONSENTVAULT_API_SECRET:?set CONSENTVAULT_API_SECRET}
+      CONSENTVAULT_API_TOKEN: ${CONSENTVAULT_API_TOKEN:?set CONSENTVAULT_API_TOKEN}
+      CONSENTVAULT_API_HOSTS: ${CONSENTVAULT_API_HOSTS:-localhost,127.0.0.1,vault}
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  consentvault-data:

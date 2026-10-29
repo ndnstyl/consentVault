@@ -1,0 +1,14 @@
+# Copy to wrangler.toml and edit. Secrets are never written here; set them
+# with the Cloudflare CLI's secret command: SIGNING_SECRET (required) and
+# TURNSTILE_SECRET (optional).
+name = "consentvault-edge"
+main = "src/worker.ts"
+compatibility_date = "2026-01-01"
+
+[vars]
+# Comma-separated list of exact origins allowed to post consent.
+ALLOWED_ORIGINS = "https://www.example.com"
+# Base URL of the vault API (the worker appends /v1/events).
+VAULT_URL = "https://vault.example.com"
+# Free-text id of this capture surface, stored on every event.
+SOURCE_ID = "site-form"

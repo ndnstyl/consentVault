@@ -2,7 +2,7 @@
 
 ConsentVault.AI is a consent vault: a tamper-evident record of who agreed to be contacted, how, on which channels,
 under which exact wording, and who later said stop. It is built to answer one question under scrutiny:
-*"Prove this person agreed to this contact, and that they had not withdrawn it."*
+*"Show what was recorded about this person's consent to this contact, and whether it was withdrawn, in a form anyone can check for tampering."* ConsentVault keeps evidence; whether that evidence is enough for a given purpose is a legal question for the record holder and its own advisers.
 
 This document describes the design.
 

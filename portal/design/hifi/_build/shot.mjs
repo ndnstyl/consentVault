@@ -1,0 +1,10 @@
+import { createRequire } from 'module';
+const require = createRequire('/Users/oxfloors/brain/projects/ox-floors/training-classroom/package.json');
+const { chromium } = require('playwright-core');
+const [page,state,w,theme,out]=process.argv.slice(2);
+const b = await chromium.launch({ executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' });
+const p = await b.newPage({viewport:{width:+w,height:900},colorScheme:theme});
+await p.goto(`file:///Users/oxfloors/debwe/portal/design/hifi/${page}.html?theme=${theme}#${state}`);
+await p.waitForTimeout(150);
+await p.screenshot({path:out,fullPage:process.env.FULL!=='0'});
+await b.close();

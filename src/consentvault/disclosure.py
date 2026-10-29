@@ -48,7 +48,7 @@ def register(
     digest = sha256_of(body)
     conn.execute(
         "INSERT INTO consentvault.disclosure (sha256, body, label, locale, channels, purposes)"
-        " VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (sha256) DO NOTHING",
+        " VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, sha256) DO NOTHING",
         (digest, body, label, locale, chans, purps),
     )
     held = get(conn, digest)

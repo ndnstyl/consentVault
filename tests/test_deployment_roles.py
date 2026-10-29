@@ -33,7 +33,13 @@ def test_init_script_makes_an_owner_that_migrates_and_a_runtime_role_that_only_a
     assert done.returncode == 0, done.stderr
 
     with db.connect(f"postgresql://consentvault_owner@127.0.0.1:{port}/{name}") as owner:
-        assert db.migrate(owner) == ["0001_init.sql"]
+        assert db.migrate(owner) == ["0001_init.sql", "0002_tenancy.sql", "0003_replay_guard.sql"]
+        assert owner.execute("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user"
+                             ).fetchone() == {"rolsuper": False, "rolbypassrls": False}
+        # FORCE row-level security binds the owner too: in multi mode with no tenant token it sees no organisation
+        assert owner.execute("SELECT count(*) AS n FROM consentvault.organization").fetchone()["n"] == 1
+        owner.execute("SELECT consentvault.enable_multi_tenant()")
+        assert owner.execute("SELECT count(*) AS n FROM consentvault.organization").fetchone()["n"] == 0
     with db.connect(f"postgresql://consentvault_runtime@127.0.0.1:{port}/{name}") as app:
         assert app.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"] == 0
         with pytest.raises(psycopg.Error):

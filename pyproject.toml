@@ -24,7 +24,9 @@ Repository = "https://github.com/ndnstyl/consentVault"
 Issues = "https://github.com/ndnstyl/consentVault/issues"
 
 [project.optional-dependencies]
-dev = ["pytest"]
+# Multi-tenant layer: field encryption and token verification. The single-company core needs none of it.
+cloud = ["cryptography>=43"]
+dev = ["pytest", "cryptography>=43"]
 
 [project.scripts]
 consentvault = "consentvault.cli:main"

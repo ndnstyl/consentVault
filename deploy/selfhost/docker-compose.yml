@@ -1,0 +1,128 @@
+# Self-host reference stack. Skeleton: services, wiring and healthchecks only.
+# Run from the repository root, see README.md next to this file.
+name: consentvault-selfhost
+
+services:
+  db:
+    image: postgres:16.10
+    environment:
+      POSTGRES_USER: consentvault_admin
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD}
+      POSTGRES_DB: consentvault
+      CONSENTVAULT_OWNER_PASSWORD: ${CONSENTVAULT_OWNER_PASSWORD:?set CONSENTVAULT_OWNER_PASSWORD}
+      CONSENTVAULT_APP_PASSWORD: ${CONSENTVAULT_APP_PASSWORD:?set CONSENTVAULT_APP_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ../../docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U consentvault_admin -d consentvault"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Object Lock needs a bucket created with lock enabled; minio-init does it and sets a
+  # default COMPLIANCE retention.
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --with-lock --ignore-existing local/evidence
+        mc retention set --default COMPLIANCE 1d local/evidence
+    restart: "no"
+
+  # Transit engine only. Dev mode keeps state in memory and is for the skeleton; a durable
+  # storage backend replaces it before any real use.
+  openbao:
+    image: quay.io/openbao/openbao:2.4.1
+    command: ["server", "-dev", "-dev-listen-address=0.0.0.0:8200"]
+    environment:
+      BAO_DEV_ROOT_TOKEN_ID: ${OPENBAO_DEV_ROOT_TOKEN:?set OPENBAO_DEV_ROOT_TOKEN}
+    cap_add:
+      - IPC_LOCK
+    ports:
+      - "127.0.0.1:8200:8200"
+    healthcheck:
+      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  openbao-init:
+    image: quay.io/openbao/openbao:2.4.1
+    depends_on:
+      openbao:
+        condition: service_healthy
+    environment:
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: ${OPENBAO_DEV_ROOT_TOKEN}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        bao secrets enable transit || true
+        bao write -f transit/keys/consentvault
+    restart: "no"
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.3.3
+    command: ["start-dev"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:?set KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "127.0.0.1:8081:8080"
+
+  vault:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      openbao-init:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_started
+    environment:
+      CONSENTVAULT_DSN: postgresql://consentvault_runtime:${CONSENTVAULT_APP_PASSWORD}@db:5432/consentvault
+      CONSENTVAULT_PURPOSES: ${CONSENTVAULT_PURPOSES:?set CONSENTVAULT_PURPOSES}
+      CONSENTVAULT_TSA_URL: ${CONSENTVAULT_TSA_URL:?set CONSENTVAULT_TSA_URL}
+      CONSENTVAULT_ANCHOR_SINK: ${CONSENTVAULT_ANCHOR_SINK:?set CONSENTVAULT_ANCHOR_SINK}
+      CONSENTVAULT_API_SECRET: ${CONSENTVAULT_API_SECRET:?set CONSENTVAULT_API_SECRET}
+      CONSENTVAULT_API_TOKEN: ${CONSENTVAULT_API_TOKEN:?set CONSENTVAULT_API_TOKEN}
+      CONSENTVAULT_API_HOSTS: localhost,127.0.0.1,vault
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  db-data:
+  minio-data:

@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Component sheet | Acme Lending | ConsentVault</title>
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700&family=Cormorant+Garamond:wght@500;600&family=Geist:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<style>
+/* ConsentVault portal components. Uses only tokens from tokens.css. */
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-padding-top:72px}
+body{margin:0;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body);font-size:var(--text-base);line-height:var(--leading-body);-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4,p,ul,ol,dl,dd,figure{margin:0;padding:0}
+ul,ol{list-style:none}
+button,input,select,textarea{font:inherit;color:inherit}
+a{color:var(--color-link);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px}
+a:hover{text-decoration-thickness:2px}
+:focus-visible{outline:2px solid var(--color-focus);outline-offset:2px;box-shadow:var(--focus-ring);border-radius:var(--radius-sm)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.skip{position:absolute;left:-9999px;top:8px;z-index:200;background:var(--color-accent);color:var(--color-on-accent);padding:8px 14px;border-radius:var(--radius-md);font-weight:700}
+.skip:focus{left:8px}
+.num{font-variant-numeric:tabular-nums}
+.mono{font-family:var(--font-mono);font-size:.92em}
+
+/* Design-review bar (not part of the product) */
+.demo{background:var(--color-surface-sunken);border-bottom:1px solid var(--color-border);padding:8px var(--gutter);display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;font-size:var(--text-sm);color:var(--color-text-muted)}
+.demo label{font-weight:600;color:var(--color-text)}
+.demo select{height:32px;border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);background:var(--color-surface);padding:0 8px;max-width:100%}
+.demo .seg{display:inline-flex;border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);overflow:hidden}
+.demo .seg button{background:var(--color-surface);border:0;padding:0 10px;height:30px;cursor:pointer;color:var(--color-text)}
+.demo .seg button+button{border-left:1px solid var(--color-border-strong)}
+.demo .seg button[aria-pressed="true"]{background:var(--color-text);color:var(--color-surface)}
+.demo .pagelinks{margin-left:auto;display:flex;gap:var(--space-3);flex-wrap:wrap}
+
+/* Shell */
+.topbar{position:sticky;top:0;z-index:50;height:var(--top-h);background:var(--color-surface);border-bottom:1px solid var(--color-border);display:flex;align-items:center;gap:var(--space-3);padding:0 var(--gutter)}
+.brand{display:inline-flex;align-items:center;gap:10px;font-family:var(--font-display);font-weight:700;font-size:var(--text-sm);letter-spacing:.16em;color:var(--color-text-strong);text-decoration:none}
+.brand i{width:9px;height:9px;background:var(--color-accent);transform:rotate(45deg);border-radius:2px;flex:none}
+.topbar .spacer{flex:1}
+.menu-btn{display:none}
+.pill-btn{display:inline-flex;align-items:center;gap:8px;min-height:var(--control-h);padding:0 12px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);cursor:pointer;color:var(--color-text);font-size:var(--text-sm)}
+.pill-btn:hover{border-color:var(--color-border-strong)}
+.pill-btn small{color:var(--color-text-muted);font-size:var(--text-xs)}
+.shell{display:grid;grid-template-columns:var(--side-w) minmax(0,1fr);min-height:calc(100vh - var(--top-h))}
+.side{background:var(--color-surface);border-right:1px solid var(--color-border);padding:var(--space-5) var(--space-3);position:sticky;top:var(--top-h);align-self:start;max-height:calc(100vh - var(--top-h));overflow:auto}
+.side h2{font-family:var(--font-display);font-size:var(--text-xs);font-weight:700;letter-spacing:var(--tracking-label);text-transform:uppercase;color:var(--color-text-subtle);margin:var(--space-5) var(--space-3) var(--space-2)}
+.side h2:first-child{margin-top:0}
+.side a{display:flex;align-items:center;min-height:36px;padding:0 var(--space-3);border-radius:var(--radius-sm);color:var(--color-text);text-decoration:none;font-size:var(--text-sm);border-left:3px solid transparent}
+.side a:hover{background:var(--color-surface-sunken)}
+.side a[aria-current="page"]{background:var(--color-accent-tint);color:var(--color-text-strong);font-weight:600;border-left-color:var(--color-accent)}
+.main{padding:var(--space-8) var(--gutter) var(--space-12);min-width:0}
+.wrap{max-width:var(--content-max);margin:0 auto}
+.state[hidden]{display:none}
+.js .state:not(.on){display:none}
+.state-tag{display:none}
+html:not(.js) .state-tag{display:block;margin:var(--space-8) 0 var(--space-3);padding:4px 10px;background:var(--color-text);color:var(--color-surface);font-size:var(--text-xs);border-radius:var(--radius-sm);width:max-content}
+
+/* Page head */
+.eyebrow{font-family:var(--font-display);font-size:var(--text-xs);font-weight:700;letter-spacing:var(--tracking-label);text-transform:uppercase;color:var(--color-accent-ink);margin-bottom:var(--space-2)}
+.ph{display:flex;flex-wrap:wrap;gap:var(--space-4);align-items:flex-end;justify-content:space-between;margin-bottom:var(--space-6)}
+.ph h1{font-family:var(--font-display);font-weight:600;font-size:var(--text-xl);line-height:var(--leading-tight);letter-spacing:-.01em;color:var(--color-text-strong)}
+.ph .lede{margin-top:var(--space-2);color:var(--color-text-muted);max-width:68ch}
+.ph .meta{margin-top:var(--space-2);color:var(--color-text-muted);font-size:var(--text-sm);display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center}
+h2.sec{font-family:var(--font-display);font-weight:600;font-size:var(--text-md);color:var(--color-text-strong);margin:0 0 var(--space-3)}
+.sec-head{display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;justify-content:space-between;margin:var(--space-8) 0 var(--space-3)}
+.sec-head h2{margin:0}
+.sec-head p{width:100%;color:var(--color-text-muted);font-size:var(--text-sm);margin-top:calc(var(--space-1)*-1)}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--space-2);min-height:var(--control-h);padding:0 var(--space-5);border-radius:var(--radius-md);border:1px solid transparent;font-family:var(--font-display);font-weight:700;font-size:var(--text-sm);letter-spacing:.04em;cursor:pointer;text-decoration:none;white-space:nowrap;transition:background var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease)}
+.btn svg{width:16px;height:16px}
+.btn-primary{background:var(--color-accent);color:var(--color-on-accent);box-shadow:0 2px 0 rgba(42,56,69,.28)}
+.btn-primary:hover{background:var(--color-accent-hover)}
+.btn-secondary{background:var(--color-surface);color:var(--color-text-strong);border-color:var(--color-border-strong)}
+.btn-secondary:hover{background:var(--color-surface-sunken)}
+.btn-quiet{background:transparent;color:var(--color-link);padding:0 var(--space-3)}
+.btn-quiet:hover{background:var(--color-surface-sunken)}
+.btn-danger{background:var(--color-surface);color:var(--color-danger);border-color:var(--color-danger)}
+.btn-danger:hover{background:var(--color-danger-bg)}
+.btn-sm{min-height:32px;padding:0 var(--space-3);font-size:var(--text-xs)}
+.btn[disabled],.btn[aria-disabled="true"]{background:var(--color-surface-sunken);color:var(--color-text-subtle);border-color:var(--color-border);box-shadow:none;cursor:not-allowed}
+.btn-row{display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center}
+
+/* Forms */
+.field{display:flex;flex-direction:column;gap:6px;margin-bottom:var(--space-5)}
+.field>label,.field>.lbl,legend{font-weight:600;color:var(--color-text-strong);font-size:var(--text-sm)}
+.hint{color:var(--color-text-muted);font-size:var(--text-sm)}
+.input,.select,.textarea{width:100%;min-height:var(--control-h);padding:8px 12px;border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);background:var(--color-surface);color:var(--color-text-strong)}
+.textarea{min-height:96px;resize:vertical}
+.input::placeholder{color:var(--color-text-subtle);opacity:1}
+.input[aria-invalid="true"]{border-color:var(--color-danger);border-width:2px}
+.field-error{color:var(--color-danger);font-size:var(--text-sm);display:flex;gap:6px;align-items:flex-start}
+.field-error svg{width:16px;height:16px;flex:none;margin-top:2px}
+fieldset{border:0;padding:0;margin:0 0 var(--space-5);min-width:0}
+.opt{display:flex;gap:10px;align-items:flex-start;padding:var(--space-3);border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);margin-top:var(--space-2);cursor:pointer}
+.opt:has(input:checked){border-color:var(--color-border-strong);background:var(--color-accent-tint)}
+.opt input,.check input{width:20px;height:20px;margin:1px 0 0;accent-color:var(--color-text);flex:none}
+.opt b{display:block;color:var(--color-text-strong);font-weight:600}
+.opt span{color:var(--color-text-muted);font-size:var(--text-sm)}
+.check{display:flex;gap:10px;align-items:flex-start;min-height:var(--target-min)}
+.inline-form{display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:flex-end}
+.inline-form .field{margin:0;flex:1 1 260px}
+
+/* Cards, stats */
+.card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);box-shadow:var(--shadow-1);padding:var(--space-5)}
+.card h2,.card h3{font-family:var(--font-display);font-weight:600;font-size:var(--text-md);color:var(--color-text-strong);margin-bottom:var(--space-3)}
+.grid{display:grid;gap:var(--space-4)}
+.g4{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+.g2{grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr))}
+.split{display:grid;gap:var(--space-5);grid-template-columns:minmax(0,1fr)}
+@media(min-width:1100px){.split{grid-template-columns:minmax(0,1fr) 340px;align-items:start}}
+.stat .k{font-size:var(--text-sm);color:var(--color-text-muted);font-weight:600}
+.stat .v{font-family:var(--font-display);font-weight:600;font-size:var(--text-stat);line-height:1.15;color:var(--color-text-strong);margin:var(--space-2) 0 var(--space-1);font-variant-numeric:tabular-nums}
+.stat .v.small{font-size:var(--text-lg)}
+.stat .s{font-size:var(--text-sm);color:var(--color-text-muted)}
+.stat .v .of{font-size:var(--text-md);font-weight:500;color:var(--color-text-muted)}
+.stat .btn{margin-top:var(--space-3)}
+.stat.alert{border-color:var(--color-warning-border);background:var(--color-warning-bg)}
+.stat.alert .v,.stat.alert .k,.stat.alert .s{color:var(--color-warning)}
+.meter{height:8px;border-radius:var(--radius-pill);background:var(--color-surface-sunken);border:1px solid var(--color-border-strong);overflow:hidden;margin-top:var(--space-3)}
+.meter i{display:block;height:100%;background:var(--color-text);border-radius:var(--radius-pill)}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:var(--space-2) var(--space-5);font-size:var(--text-sm)}
+.kv dt{color:var(--color-text-muted);font-weight:600}
+.kv dd{color:var(--color-text-strong);overflow-wrap:anywhere}
+
+/* Tables: real <table> from 760px, dl cards below. */
+.tw{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);box-shadow:var(--shadow-1);overflow:hidden}
+.tscroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:var(--text-sm)}
+caption{text-align:left;padding:var(--space-3) var(--space-4);font-weight:600;color:var(--color-text-strong);border-bottom:1px solid var(--color-border)}
+th{background:var(--color-surface-sunken);color:var(--color-text-muted);text-align:left;font-weight:700;font-size:var(--text-xs);letter-spacing:.06em;text-transform:uppercase;padding:10px var(--space-4);border-bottom:1px solid var(--color-border);white-space:nowrap}
+td{padding:12px var(--space-4);border-bottom:1px solid var(--color-border);color:var(--color-text);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+td.r,th.r{text-align:right}
+td strong{color:var(--color-text-strong)}
+tbody tr:hover td{background:var(--color-surface-sunken)}
+.cards{display:none}
+.rowcard{padding:var(--space-4);border-bottom:1px solid var(--color-border)}
+.rowcard:last-child{border-bottom:0}
+.rowcard dl{display:grid;grid-template-columns:minmax(96px,38%) 1fr;gap:6px var(--space-3);font-size:var(--text-sm)}
+.rowcard dt{color:var(--color-text-muted);font-weight:600}
+.rowcard dd{overflow-wrap:anywhere;color:var(--color-text-strong)}
+.rowcard .btn{margin-top:var(--space-3)}
+.na{color:var(--color-text-muted);font-style:italic}
+
+/* Chips: icon + word, color never alone */
+.chip{display:inline-flex;align-items:center;gap:6px;min-height:24px;padding:2px 10px 2px 8px;border-radius:var(--radius-pill);border:1px solid;font-size:var(--text-xs);font-weight:600;line-height:1.3;white-space:nowrap}
+.chip svg{width:12px;height:12px;flex:none}
+.ev-found{color:var(--ev-found-fg);background:var(--ev-found-bg);border-color:var(--ev-found-border)}
+.ev-stop{color:var(--ev-stop-fg);background:var(--ev-stop-bg);border-color:var(--ev-stop-border)}
+.ev-none{color:var(--ev-none-fg);background:var(--ev-none-bg);border-color:var(--ev-none-border)}
+.ev-incomplete{color:var(--ev-incomplete-fg);background:var(--ev-incomplete-bg);border-color:var(--ev-incomplete-border)}
+.ev-na{color:var(--color-warning);background:var(--color-warning-bg);border-color:var(--color-warning-border);border-style:dashed}
+.pol-proceed{color:var(--pol-proceed-fg);background:var(--pol-proceed-bg);border:1.5px solid var(--pol-proceed-border)}
+.pol-hold{color:var(--pol-hold-fg);background:var(--pol-hold-bg);border-color:var(--pol-hold-border)}
+.pol-none{color:var(--ev-none-fg);background:transparent;border-color:var(--ev-none-border);border-style:dashed}
+.st-success{color:var(--color-success);background:var(--color-success-bg);border-color:var(--color-success-border)}
+.st-danger{color:var(--color-danger);background:var(--color-danger-bg);border-color:var(--color-danger-border)}
+.st-warning{color:var(--color-warning);background:var(--color-warning-bg);border-color:var(--color-warning-border)}
+.st-info{color:var(--color-info);background:var(--color-info-bg);border-color:var(--color-info-border)}
+.st-neutral{color:var(--ev-none-fg);background:var(--ev-none-bg);border-color:var(--ev-none-border)}
+
+/* Banners */
+.banner{display:flex;gap:var(--space-3);align-items:flex-start;padding:var(--space-4);border:1px solid;border-left-width:4px;border-radius:var(--radius-md);margin-bottom:var(--space-5)}
+.banner>svg{width:20px;height:20px;flex:none;margin-top:2px}
+.banner .bd{flex:1;min-width:0}
+.banner b{display:block;font-weight:700}
+.banner p+p{margin-top:4px}
+.banner .btn{margin-top:var(--space-3)}
+.banner.info{color:var(--color-info);background:var(--color-info-bg);border-color:var(--color-info-border)}
+.banner.success{color:var(--color-success);background:var(--color-success-bg);border-color:var(--color-success-border)}
+.banner.warning{color:var(--color-warning);background:var(--color-warning-bg);border-color:var(--color-warning-border)}
+.banner.danger{color:var(--color-danger);background:var(--color-danger-bg);border-color:var(--color-danger-border)}
+.banner .btn-secondary{color:var(--color-text-strong)}
+.cause{display:grid;gap:2px}
+
+/* Empty state */
+.empty{text-align:center;padding:var(--space-12) var(--space-5);background:var(--color-surface);border:1px dashed var(--color-border-strong);border-radius:var(--radius-lg)}
+.empty svg.big{width:40px;height:40px;color:var(--color-accent-ink);margin:0 auto var(--space-3)}
+.empty h2{font-family:var(--font-serif);font-weight:600;font-size:var(--text-2xl);line-height:1.15;color:var(--color-text-strong);margin-bottom:var(--space-2)}
+.empty p{color:var(--color-text-muted);max-width:56ch;margin:0 auto var(--space-5)}
+
+/* Loading skeleton (no spinner) */
+.skel{display:grid;gap:var(--space-3)}
+.skel i{display:block;height:16px;border-radius:var(--radius-sm);background:linear-gradient(90deg,var(--color-skeleton) 0%,var(--color-skeleton-shine) 50%,var(--color-skeleton) 100%);background-size:200% 100%;animation:shine 1.4s linear infinite}
+.skel i.h{height:88px;border-radius:var(--radius-lg)}
+@keyframes shine{to{background-position:-200% 0}}
+.loading-msg{color:var(--color-text-muted);font-size:var(--text-sm);margin-bottom:var(--space-3)}
+
+/* Checklist steps */
+.steps{display:grid;gap:var(--space-2)}
+.steps li{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-4);border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface)}
+.steps .n{flex:none;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:var(--text-sm);border:1.5px solid var(--color-border-strong);color:var(--color-text-strong)}
+.steps li.done .n{background:var(--color-text);color:var(--color-surface);border-color:var(--color-text)}
+.steps li .t{flex:1;color:var(--color-text-strong);font-weight:600}
+.steps li.next{border-color:var(--color-accent);background:var(--color-accent-tint)}
+.wiz{display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-4);font-size:var(--text-sm);color:var(--color-text-muted)}
+.wiz b{color:var(--color-text-strong)}
+
+/* Code */
+.code{position:relative;background:var(--color-surface-sunken);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);padding:var(--space-4);font-family:var(--font-mono);font-size:var(--text-sm);color:var(--color-text-strong);overflow-x:auto;white-space:pre;line-height:1.6}
+.secret{display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap}
+.secret code{flex:1 1 220px;min-width:0;background:var(--color-surface-sunken);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);padding:10px 14px;font-family:var(--font-mono);font-size:var(--text-sm);color:var(--color-text-strong);overflow-wrap:anywhere}
+
+/* Timeline */
+.tl{position:relative;display:grid;gap:var(--space-4);padding-left:var(--space-6)}
+.tl::before{content:"";position:absolute;left:8px;top:6px;bottom:6px;width:2px;background:var(--color-border)}
+.tl li{position:relative}
+.tl li>svg{position:absolute;left:-24px;top:3px;width:18px;height:18px;background:var(--color-surface);color:var(--color-text-strong);border-radius:50%}
+.tl .hd{display:flex;flex-wrap:wrap;gap:var(--space-2) var(--space-3);align-items:baseline;color:var(--color-text-strong)}
+.tl .hd b{font-family:var(--font-display);font-size:var(--text-base)}
+.tl .when{color:var(--color-text-muted);font-size:var(--text-sm)}
+.tl .body{color:var(--color-text);font-size:var(--text-sm);margin-top:2px}
+.tl .seal{display:inline-flex;gap:6px;align-items:center;margin-top:6px;font-size:var(--text-xs);font-weight:600;color:var(--color-text-muted)}
+.tl .seal svg{width:12px;height:12px}
+.notice{font-size:var(--text-sm);color:var(--color-text-muted);padding:var(--space-3) var(--space-4);border-left:3px solid var(--color-accent);background:var(--color-surface-cream);border-radius:0 var(--radius-sm) var(--radius-sm) 0;margin:var(--space-3) 0}
+
+/* Policy matrix */
+.matrix th[scope=row]{background:var(--color-surface);text-transform:none;letter-spacing:0;font-size:var(--text-sm);color:var(--color-text-strong);font-weight:600;white-space:normal}
+.matrix td{text-align:center}
+.matrix td.lock{background:var(--color-surface-sunken)}
+.pa{display:inline-flex;border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);overflow:hidden}
+.pa label{position:relative;display:block}
+.pa input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer}
+.pa span{display:flex;align-items:center;gap:4px;min-height:32px;padding:0 10px;font-size:var(--text-xs);font-weight:600;color:var(--color-text);background:var(--color-surface)}
+.pa label+label span{border-left:1px solid var(--color-border-strong)}
+.pa input:checked+span{background:var(--color-text);color:var(--color-surface)}
+.pa input:focus-visible+span{box-shadow:inset 0 0 0 2px var(--color-focus-gap),0 0 0 2px var(--color-focus)}
+.pa svg{width:12px;height:12px}
+
+/* Dialogs */
+.overlay{display:grid;place-items:center;padding:var(--space-5) var(--gutter);background:var(--color-scrim);border-radius:var(--radius-lg);margin-top:var(--space-5)}
+.js .overlay{position:fixed;inset:0;z-index:100;margin:0;border-radius:0;overflow:auto;padding:var(--space-4)}
+.dialog{width:100%;max-width:560px;background:var(--color-surface);color:var(--color-text);border:1px solid var(--color-border);border-radius:var(--radius-xl);box-shadow:var(--shadow-3);padding:var(--space-6);max-height:calc(100vh - 32px);overflow:auto}
+.dialog.wide{max-width:680px}
+.dialog h2{font-family:var(--font-display);font-weight:600;font-size:var(--text-lg);line-height:var(--leading-tight);color:var(--color-text-strong);margin-bottom:var(--space-3)}
+.dialog>p{color:var(--color-text);margin-bottom:var(--space-4)}
+.dialog .actions{display:flex;flex-wrap:wrap;gap:var(--space-3);justify-content:flex-end;margin-top:var(--space-5)}
+.attest{background:var(--color-surface-cream);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);padding:var(--space-4);color:var(--color-text-strong);margin:var(--space-3) 0}
+.attest .ver{display:block;font-family:var(--font-display);font-size:var(--text-xs);font-weight:700;letter-spacing:var(--tracking-label);text-transform:uppercase;color:var(--color-accent-ink);margin-bottom:var(--space-2)}
+.attest p{font-family:var(--font-serif);font-size:1.2rem;line-height:1.45;font-weight:500}
+.attest-note{font-size:var(--text-sm);color:var(--color-text-muted)}
+.errsum{margin-bottom:var(--space-4)}
+
+/* Toolbar of filters / tabs */
+.tabs{display:flex;gap:var(--space-1);border-bottom:1px solid var(--color-border);margin-bottom:var(--space-5);overflow-x:auto}
+.tabs a{padding:10px var(--space-4);text-decoration:none;color:var(--color-text-muted);font-weight:600;font-size:var(--text-sm);border-bottom:3px solid transparent;white-space:nowrap}
+.tabs a[aria-current="true"]{color:var(--color-text-strong);border-bottom-color:var(--color-accent)}
+
+/* Responsive */
+@media(max-width:759px){
+  .shell{display:block}
+  .main{padding-top:var(--space-6)}
+  .topbar .pill-btn.org small,.topbar .pill-btn.who small{display:none}
+  .topbar .pill-btn.who{display:none}
+  .menu-btn{display:inline-flex}
+  .js .side{display:none}
+  .js .side.open{display:block;position:fixed;inset:var(--top-h) 0 0 0;max-height:none;z-index:60;border-right:0}
+  .side{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--color-border)}
+  .tw .tscroll.as-table{display:none}
+  .cards{display:block}
+  .btn{min-height:var(--control-h-touch)}
+  .btn-sm{min-height:40px}
+  .input,.select{min-height:var(--control-h-touch)}
+  .ph .btn,.ph .btn-row,.empty .btn{width:100%}
+  .dialog .actions .btn{flex:1 1 100%}
+  .kv{grid-template-columns:1fr}
+  .kv dt{margin-top:var(--space-2)}
+  .matrix-scroll .matrix{min-width:760px}
+}
+@media(min-width:1440px){:root{--content-max:1180px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+@media print{.demo,.side,.topbar{display:none}}
+.js.all .overlay{position:static;inset:auto;z-index:auto;margin-top:var(--space-5);border-radius:var(--radius-lg);overflow:visible;padding:var(--space-5) var(--gutter)}
+.js.all .state{margin-bottom:var(--space-12);padding-top:var(--space-6);border-top:2px dashed var(--color-border-strong)}
+.steps .n svg{width:16px;height:16px}
+
+.js .overlay.static,.js.all .overlay.static{position:static;inset:auto;z-index:auto;margin:var(--space-4) 0 0;border-radius:var(--radius-lg);overflow:visible;padding:var(--space-6) var(--gutter)}
+.input[disabled],.select[disabled]{background:var(--color-surface-sunken);color:var(--color-text-subtle);border-color:var(--color-border);cursor:not-allowed}
+.focus-demo{outline:2px solid var(--color-focus);outline-offset:2px;box-shadow:var(--focus-ring)}
+.sw{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:var(--space-3)}
+.sw div{border:1px solid var(--color-border-strong);border-radius:var(--radius-md);overflow:hidden;background:var(--color-surface);font-size:var(--text-xs)}
+.sw i{display:block;height:44px}
+.sw span{display:block;padding:6px 8px;color:var(--color-text);overflow-wrap:anywhere}
+.stack{display:grid;gap:var(--space-4)}
+.row{display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center}
+.cs h2.sec{margin-top:var(--space-10)}
+.type-row{display:grid;grid-template-columns:120px 1fr;gap:var(--space-4);align-items:baseline;padding:var(--space-3) 0;border-bottom:1px solid var(--color-border)}
+.type-row code{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-text-muted)}
+.pill-btn svg{width:16px;height:16px;flex:none}
+.demo .pagelinks a{display:inline-flex;align-items:center;min-height:28px;padding:0 4px}
+.demo .seg button{min-height:28px}
+.demo select{min-height:28px}
+.brand{min-height:var(--target-min)}
+.topbar .org span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:759px){.topbar{gap:var(--space-2)}.topbar .org{max-width:118px;padding:0 10px}.brand{letter-spacing:.1em}}
+@media(max-width:759px){.brand{font-size:11px;letter-spacing:.05em;gap:6px}.topbar .org{max-width:104px}.menu-btn{padding:0 10px}}
+.tscroll,.tw,.card,.dialog{position:relative}
+.pill-btn.menu-btn{display:none}
+@media(min-width:760px){.shell{background:linear-gradient(to right,var(--color-surface) calc(var(--side-w) - 1px),var(--color-border) calc(var(--side-w) - 1px),var(--color-border) var(--side-w),var(--color-bg) var(--side-w))}.side{border-right:0}}
+@media(max-width:759px){.pill-btn.menu-btn{display:inline-flex}}
+
+.matrix th[scope=row]{position:sticky;left:0;z-index:1;box-shadow:1px 0 0 var(--color-border)}
+.attest{margin:var(--space-3) 0 var(--space-4)}
+@media(max-width:759px){.matrix th[scope=row]{min-width:140px}}
+
+</style>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+<symbol id="i-found" viewBox="0 0 16 16"><path d="M8 1.5 14.5 8 8 14.5 1.5 8Z" fill="currentColor"/></symbol>
+<symbol id="i-stop" viewBox="0 0 16 16"><path d="M8 1.5 14.5 8 8 14.5 1.5 8Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M4.5 8h7" stroke="currentColor" stroke-width="2"/></symbol>
+<symbol id="i-none" viewBox="0 0 16 16"><path d="M8 1.5 14.5 8 8 14.5 1.5 8Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+<symbol id="i-incomplete" viewBox="0 0 16 16"><path d="M8 1.5 14.5 8 8 14.5 1.5 8Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 1.5 1.5 8 8 14.5Z" fill="currentColor"/></symbol>
+<symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 1.8 15 14H1Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 6.2v4M8 11.7v.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 16 16"><path d="M2.5 8h10M8.5 3.5 13 8l-4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-pause" viewBox="0 0 16 16"><path d="M5.5 3v10M10.5 3v10" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+<symbol id="i-dash" viewBox="0 0 16 16"><path d="M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+<symbol id="i-check" viewBox="0 0 16 16"><path d="m3 8.5 3.2 3.2L13 4.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 7.2v4M8 4.6v.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+<symbol id="i-err" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m5.6 5.6 4.8 4.8M10.4 5.6l-4.8 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+<symbol id="i-ok" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m5 8.2 2.2 2.2L11 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 3.5v-.2a1 1 0 0 0-1-1H3.8a1 1 0 0 0-1 1v5.7a1 1 0 0 0 1 1h.2" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+<symbol id="i-menu" viewBox="0 0 16 16"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+<symbol id="i-chev" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-seal" viewBox="0 0 16 16"><path d="M8 1.5 13.5 3.6v4.2c0 3-2.2 5-5.5 6.7C4.7 12.8 2.5 10.8 2.5 7.8V3.6Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m5.6 8 1.7 1.7 3.1-3.3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-vault" viewBox="0 0 40 40"><path d="M20 3 37 20 20 37 3 20Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M20 11 29 20 20 29 11 20Z" fill="currentColor" opacity=".25"/><path d="M20 11 29 20 20 29 11 20Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+</svg>
+<a class="skip" href="#main">Skip to main content</a>
+<div class="demo" role="region" aria-label="Design review controls"><span class="seg" role="group" aria-label="Theme"><button type="button" data-theme-set="system" aria-pressed="true">System</button><button type="button" data-theme-set="light" aria-pressed="false">Light</button><button type="button" data-theme-set="dark" aria-pressed="false">Dark</button></span><nav class="pagelinks" aria-label="Design review pages"><a href="index.html">Overview</a><a href="sources-credentials.html">Sources and credentials</a><a href="evidence.html">Evidence</a><a href="deliveries.html">Deliveries</a><a href="policies.html">Policies</a><a href="components.html" aria-current="page">Components</a></nav></div>
+<header class="topbar">
+  <button type="button" class="pill-btn menu-btn" id="menuBtn" aria-expanded="false" aria-controls="side"><svg class="" aria-hidden="true" focusable="false"><use href="#i-menu"/></svg>Menu</button>
+  <a class="brand" href="index.html"><i aria-hidden="true"></i>CONSENTVAULT</a>
+  <span class="spacer"></span>
+  <button type="button" class="pill-btn org" aria-haspopup="menu"><span>Acme Lending</span><svg class="" aria-hidden="true" focusable="false"><use href="#i-chev"/></svg></button>
+  <button type="button" class="pill-btn who" aria-haspopup="menu"><span>D. Ruiz <small>(<span id="roleLbl">Admin</span>)</small></span><svg class="" aria-hidden="true" focusable="false"><use href="#i-chev"/></svg></button>
+</header>
+<div class="shell">
+<nav class="side" id="side" aria-label="Portal"><h2>Start</h2><a href="index.html">Overview</a><a href="#">First test event</a><h2>Evidence</h2><a href="evidence.html">Evidence lookup</a><a href="evidence.html#packages-default">Evidence packages</a><h2>Configuration</h2><a href="#">Brands</a><a href="sources-credentials.html">Capture sources</a><a href="sources-credentials.html#cred-default">Credentials</a><a href="#">Wording</a><a href="policies.html">Policies</a><a href="#">Documentation checklists</a><a href="deliveries.html">Connected systems</a><a href="#">Retention</a><h2>Organization</h2><a href="#">Members</a><a href="#">Audit log</a><a href="#">Billing</a><a href="#">Settings</a><a href="#">Rule references</a></nav>
+<main class="main" id="main"><div class="wrap">
+<div class="ph"><div><div class="eyebrow">ConsentVault Cloud portal</div><h1 tabindex="-1">Component sheet</h1><p class="lede">Every component the five screens use, in the real tokens. Switch theme with the bar above.</p></div></div><div class="cs"><h2 class="sec">Color roles</h2><div class="stack"><p class="hint">Surfaces and text</p><div class="sw"><div><i style="background:var(--color-bg)"></i><span>--color-bg</span></div><div><i style="background:var(--color-surface)"></i><span>--color-surface</span></div><div><i style="background:var(--color-surface-sunken)"></i><span>--color-surface-sunken</span></div><div><i style="background:var(--color-surface-cream)"></i><span>--color-surface-cream</span></div><div><i style="background:var(--color-border)"></i><span>--color-border</span></div><div><i style="background:var(--color-border-strong)"></i><span>--color-border-strong</span></div><div><i style="background:var(--color-text)"></i><span>--color-text</span></div><div><i style="background:var(--color-text-muted)"></i><span>--color-text-muted</span></div><div><i style="background:var(--color-accent)"></i><span>--color-accent</span></div><div><i style="background:var(--color-accent-tint)"></i><span>--color-accent-tint</span></div><div><i style="background:var(--color-focus)"></i><span>--color-focus</span></div></div><p class="hint">Operational status (organization, deliveries, banners)</p><div class="sw"><div><i style="background:var(--color-success-bg)"></i><span>--color-success-bg</span></div><div><i style="background:var(--color-warning-bg)"></i><span>--color-warning-bg</span></div><div><i style="background:var(--color-danger-bg)"></i><span>--color-danger-bg</span></div><div><i style="background:var(--color-info-bg)"></i><span>--color-info-bg</span></div></div><p class="hint">Evidence status: descriptive hues, never red or green, so no chip reads as a verdict</p><div class="sw"><div><i style="background:var(--ev-found-bg)"></i><span>--ev-found-bg</span></div><div><i style="background:var(--ev-stop-bg)"></i><span>--ev-stop-bg</span></div><div><i style="background:var(--ev-none-bg)"></i><span>--ev-none-bg</span></div><div><i style="background:var(--ev-incomplete-bg)"></i><span>--ev-incomplete-bg</span></div><div><i style="background:var(--pol-hold-bg)"></i><span>--pol-hold-bg</span></div></div></div><h2 class="sec">Type</h2><div class="card"><div class="type-row"><code>text-stat 36</code><span style="font:600 var(--text-stat)/1.15 var(--font-display);font-variant-numeric:tabular-nums">4,812 of 10,000</span></div><div class="type-row"><code>text-xl 24 display</code><span style="font:600 var(--text-xl)/1.2 var(--font-display)">Evidence lookup</span></div><div class="type-row"><code>text-lg 20 display</code><span style="font:600 var(--text-lg)/1.2 var(--font-display)">Approve policy version 4</span></div><div class="type-row"><code>text-md 17</code><span style="font-size:var(--text-md)">Section heading and lede</span></div><div class="type-row"><code>text-base 15 Geist</code><span>Body text for tables, forms and explanations. Numbers line up: <span class="num">1,111 / 8,888</span>.</span></div><div class="type-row"><code>text-sm 13</code><span style="font-size:var(--text-sm)">Hints, table cells, chips</span></div><div class="type-row"><code>text-xs 12</code><span class="eyebrow" style="margin:0">Eyebrow label</span></div><div class="type-row"><code>serif accent</code><span style="font:600 var(--text-2xl)/1.15 var(--font-serif)">No packages built in this session</span></div></div><h2 class="sec">Buttons</h2><div class="card stack"><div class="row"><button type="button" class="btn btn-primary" >Issue a credential</button><button type="button" class="btn btn-secondary" >Cancel</button><button type="button" class="btn btn-quiet" >Try again</button><button type="button" class="btn btn-danger" >Revoke now</button><button type="button" class="btn btn-primary" disabled aria-disabled="true">Disabled</button></div><div class="row"><button type="button" class="btn btn-secondary btn-sm" >Small action</button><button type="button" class="btn btn-secondary btn-sm" ><svg class="" aria-hidden="true" focusable="false"><use href="#i-copy"/></svg>Copy</button><button type="button" class="btn btn-primary focus-demo">Focus ring</button></div><p class="hint">Labels are verbs. 40px high on desktop, 44px on touch. One gold primary per view.</p></div><h2 class="sec">Inputs</h2><div class="card"><div class="grid g2"><div><div class="field"><label for="f112">Name</label><input class="input" id="f112" type="text" value="Website form key"><div class="hint">Shown in your audit log.</div></div><div class="field"><label for="f113">Origin</label><input class="input" id="f113" type="text" value="https://acmelending.example/form" aria-invalid="true" aria-describedby="f113e"><div class="field-error" id="f113e"><svg class="" aria-hidden="true" focusable="false"><use href="#i-err"/></svg>Enter an origin with no path.</div></div><div class="field"><label for="f114">Disabled</label><input class="input" id="f114" type="text" value="Not editable" disabled></div><div class="field"><label for="f115">Kind</label><select class="select" id="f115"><option>Dialer</option><option>CRM</option></select></div></div><div><fieldset><legend>Signature</legend><label class="opt" for="x1"><input type="radio" name="sg" id="x1" checked><span><b>Ed25519 (recommended)</b>You load our public key into your system.</span></label><label class="opt" for="x2"><input type="radio" name="sg" id="x2"><span><b>HMAC shared secret</b>Shown once.</span></label></fieldset><fieldset><legend>Brands it may name</legend><label class="opt" for="x3"><input type="checkbox" id="x3" checked><span><b>Acme Lending</b></span></label><label class="opt" for="x4"><input type="checkbox" id="x4"><span><b>Acme Home Loans</b></span></label></fieldset><div class="field"><label for="f116">Reason (recorded in the audit log)</label><textarea class="textarea" id="f116"></textarea></div></div></div></div><h2 class="sec">Table</h2><div class="tw"><div class="tscroll as-table"><table><caption class="sr">Example table</caption><thead><tr><th scope="col">System</th><th scope="col">Connector</th><th scope="col">State</th><th scope="col">Last acknowledged</th><th scope="col">Undelivered (dead)</th></tr></thead><tbody><tr><td><strong>Dialer</strong></td><td>Signed webhook</td><td><span class="chip st-danger"><svg class="" aria-hidden="true" focusable="false"><use href="#i-err"/></svg>2 undelivered</span></td><td>Nov 2, 2:58 PM ET</td><td><span class="num">2</span></td></tr><tr><td><strong>CRM</strong></td><td>Signed webhook</td><td><span class="chip st-success"><svg class="" aria-hidden="true" focusable="false"><use href="#i-ok"/></svg>Delivering</span></td><td>Nov 3, 9:01 AM ET</td><td><span class="na">Not available</span></td></tr></tbody></table></div><div class="cards" role="group" aria-label="Example table"><div class="rowcard"><dl><dt>System</dt><dd><strong>Dialer</strong></dd><dt>Connector</dt><dd>Signed webhook</dd><dt>State</dt><dd><span class="chip st-danger"><svg class="" aria-hidden="true" focusable="false"><use href="#i-err"/></svg>2 undelivered</span></dd><dt>Last acknowledged</dt><dd>Nov 2, 2:58 PM ET</dd><dt>Undelivered (dead)</dt><dd><span class="num">2</span></dd></dl></div><div class="rowcard"><dl><dt>System</dt><dd><strong>CRM</strong></dd><dt>Connector</dt><dd>Signed webhook</dd><dt>State</dt><dd><span class="chip st-success"><svg class="" aria-hidden="true" focusable="false"><use href="#i-ok"/></svg>Delivering</span></dd><dt>Last acknowledged</dt><dd>Nov 3, 9:01 AM ET</dd><dt>Undelivered (dead)</dt><dd><span class="na">Not available</span></dd></dl></div></div></div><p class="hint" style="margin-top:var(--space-2)">Under 760px every row becomes a labelled card. Unknown values read Not available, never 0. Wide matrices scroll inside their own region.</p><h2 class="sec">Status chips</h2><div class="card stack"><p class="hint">Evidence status. Icon plus word, never color alone.</p><div class="row"><span class="chip ev-found"><svg class="" aria-hidden="true" focusable="false"><use href="#i-found"/></svg>Consent record found</span><span class="chip ev-stop"><svg class="" aria-hidden="true" focusable="false"><use href="#i-stop"/></svg>Stop on record</span><span class="chip ev-none"><svg class="" aria-hidden="true" focusable="false"><use href="#i-none"/></svg>No record</span><span class="chip ev-incomplete"><svg class="" aria-hidden="true" focusable="false"><use href="#i-incomplete"/></svg>Record incomplete: missing 1 element</span><span class="chip ev-na"><svg class="" aria-hidden="true" focusable="false"><use href="#i-warn"/></svg>Not available: key did not answer</span></div><p class="hint">Your policy: the outcome of the organization's own approved policy. Neutral ink, outline or solid.</p><div class="row"><span class="chip pol-proceed"><svg class="" aria-hidden="true" focusable="false"><use href="#i-arrow"/></svg>Your policy: proceed</span><span class="chip pol-hold"><svg class="" aria-hidden="true" focusable="false"><use href="#i-pause"/></svg>Your policy: hold</span><span class="chip pol-none"><svg class="" aria-hidden="true" focusable="false"><use href="#i-dash"/></svg>No policy in force</span></div><p class="hint">Operational status</p><div class="row"><span class="chip st-success"><svg class="" aria-hidden="true" focusable="false"><use href="#i-ok"/></svg>Active</span><span class="chip st-warning"><svg class="" aria-hidden="true" focusable="false"><use href="#i-warn"/></svg>Past due</span><span class="chip st-danger"><svg class="" aria-hidden="true" focusable="false"><use href="#i-err"/></svg>Suspended</span><span class="chip st-info"><svg class="" aria-hidden="true" focusable="false"><use href="#i-info"/></svg>Sending</span><span class="chip st-success"><svg class="" aria-hidden="true" focusable="false"><use href="#i-ok"/></svg>Acknowledged</span><span class="chip st-warning"><svg class="" aria-hidden="true" focusable="false"><use href="#i-warn"/></svg>Retrying</span><span class="chip st-danger"><svg class="" aria-hidden="true" focusable="false"><use href="#i-err"/></svg>Undelivered (dead)</span><span class="chip st-neutral"><svg class="" aria-hidden="true" focusable="false"><use href="#i-dash"/></svg>Revoked Oct 1</span></div><p class="notice">Evidence status and the outcome of your organization's approved policy. Not a legal determination.</p></div><h2 class="sec">Banners</h2><div class="banner info" role="status"><svg class="" aria-hidden="true" focusable="false"><use href="#i-info"/></svg><div class="bd"><b>Nothing to do yet</b><p>Information that needs no action.</p></div></div><div class="banner success" role="status"><svg class="" aria-hidden="true" focusable="false"><use href="#i-ok"/></svg><div class="bd"><b>Package ready</b><p>The download link works once, until 9:29 AM ET.</p></div></div><div class="banner warning" role="status"><svg class="" aria-hidden="true" focusable="false"><use href="#i-warn"/></svg><div class="bd"><b>Past due</b><p>Payment failed on Oct 28. Capture keeps recording.</p><button type="button" class="btn btn-secondary" >Open billing</button></div></div><div class="banner danger" role="alert"><svg class="" aria-hidden="true" focusable="false"><use href="#i-err"/></svg><div class="bd"><b>Connected systems did not load</b><div class="cause"><p><b style="display:inline">Cause:</b> The list could not be read (503 service_unavailable).</p><p><b style="display:inline">Next:</b> Try again.</p></div><button type="button" class="btn btn-secondary" >Try again</button></div></div><h2 class="sec">Empty and loading</h2><div class="grid g2"><div class="empty"><svg class="big" aria-hidden="true"><use href="#i-vault"/></svg><h2>No credentials yet</h2><p>Your systems need a credential to send consents. Start with a capture credential for your first source.</p><button type="button" class="btn btn-primary" >Issue a credential</button></div><div class="card"><div aria-busy="true"><p class="loading-msg" role="status">Loading connected systems.</p><div class="skel"><i class="h"></i><i style="width:92%"></i><i style="width:76%"></i><i style="width:84%"></i></div></div></div></div><h2 class="sec">Dialogs</h2><div class="overlay static"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg119"><h2 id="dlg119">Redrive 2 undelivered stops to Dialer?</h2><p>Do this after Dialer is fixed. Each stop is sent again, in order.</p><div class="field"><label for="f117">Reason (recorded in the audit log)</label><input class="input" id="f117" type="text"></div><div class="actions"><button type="button" class="btn btn-secondary" >Cancel</button><button type="button" class="btn btn-primary" >Redrive now</button></div></div></div><div class="overlay static"><div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="dlg120"><h2 id="dlg120">Revoke Website form key?</h2><p>It stops working the moment you confirm.</p><div class="actions"><button type="button" class="btn btn-secondary">Cancel</button><button type="button" class="btn btn-danger">Revoke now</button></div></div></div><h2 class="sec">Attestation dialog</h2><div class="overlay static"><div class="dialog wide" role="dialog" aria-modal="true" aria-labelledby="dlg121"><h2 id="dlg121">Approve policy version 4</h2><p>Version 4 goes into force. Version 3 is retired. Both stay on record.</p><div class="attest"><span class="ver">Attestation, version 1</span><p>I am an admin of Acme Lending. Acme Lending is responsible for whether this policy is legally sufficient for its marketing. ConsentVault recommends that Acme Lending's counsel review it before approval. ConsentVault applies this policy as written and does not decide whether any communication is permitted by law.</p></div><div class="check"><input type="checkbox" id="c118"><label for="c118">I accept this attestation for Acme Lending.</label></div><p class="attest-note" style="margin-top:var(--space-3)">Approving as Dana Ruiz, dana@acmelending.example (from your sign-in). The attestation text is a draft and needs a ruling on final wording.</p><div class="actions"><button type="button" class="btn btn-secondary" >Back to draft</button><button type="button" class="btn btn-primary" disabled aria-disabled="true">Approve version 4</button></div></div></div></div>
+</div></main>
+</div>
+<script>(function(){var d=document,h=d.documentElement;h.classList.add('js');
+var states=[].slice.call(d.querySelectorAll('.state')),sel=d.getElementById('stateSel');
+function show(id){if(!id||(id!=='__all'&&!d.getElementById(id)))id=states[0]&&states[0].id;
+ h.classList.toggle('all',id==='__all');
+ states.forEach(function(s){s.classList.toggle('on',id==='__all'||s.id===id)});
+ var cur=d.getElementById(id),rl=d.getElementById('roleLbl');if(cur&&rl&&cur.getAttribute('data-role'))rl.textContent=cur.getAttribute('data-role');
+ if(sel)sel.value=id;try{history.replaceState(null,'','#'+id)}catch(e){}}
+if(states.length){show(location.hash.slice(1));
+ if(sel)sel.addEventListener('change',function(){show(sel.value)});
+ d.addEventListener('click',function(e){var g=e.target.closest('[data-goto]');if(g){show(g.getAttribute('data-goto'));window.scrollTo(0,0)}});
+ window.addEventListener('hashchange',function(){show(location.hash.slice(1))});}
+var mb=d.getElementById('menuBtn'),sd=d.getElementById('side');
+if(mb&&sd)mb.addEventListener('click',function(){var o=sd.classList.toggle('open');mb.setAttribute('aria-expanded',o)});
+var seg=[].slice.call(d.querySelectorAll('[data-theme-set]'));
+function theme(t){if(t==='system')h.removeAttribute('data-theme');else h.setAttribute('data-theme',t);
+ seg.forEach(function(b){b.setAttribute('aria-pressed',b.getAttribute('data-theme-set')===t)});try{localStorage.setItem('cv-theme',t)}catch(e){}}
+seg.forEach(function(b){b.addEventListener('click',function(){theme(b.getAttribute('data-theme-set'))})});
+var t0='system';try{t0=localStorage.getItem('cv-theme')||'system'}catch(e){}theme(t0);
+var q=location.search.match(/theme=(light|dark)/);if(q)theme(q[1]);
+})();</script>
+</body>
+</html>

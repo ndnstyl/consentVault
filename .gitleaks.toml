@@ -1,0 +1,11 @@
+# Secret scanning config. Extends the default rules; the allowlist names only published example values used in tests.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "AWS's own documented example credentials (Signature V4 test vectors) and obvious test strings"
+regexes = [
+  '''AKIAIOSFODNN7EXAMPLE''',
+  '''wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY''',
+  '''sk_live_123456''',
+]

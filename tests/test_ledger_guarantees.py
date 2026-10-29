@@ -66,27 +66,29 @@ def _as_owner_without_triggers(conn, table, sql, params=()):
 
 # one migration, one hash version, ordered history ------------------------------------------------------------
 
-def test_the_schema_is_one_migration_with_release_columns_and_one_hash_version(conn):
+def test_the_first_migration_holds_the_release_columns_and_single_company_rows_use_hash_version_1(conn):
     names = [p.name for p in sorted(MIGRATIONS.glob("*.sql"))]
-    assert names == ["0001_init.sql"] and [p.name for p in (MIGRATIONS / "down").glob("*.sql")] == ["0001_init.sql"]
+    assert names[0] == "0001_init.sql"
+    assert sorted(p.name for p in (MIGRATIONS / "down").glob("*.sql")) == names  # every migration has its down
     cols = {r["column_name"] for r in conn.execute(
         "SELECT column_name FROM information_schema.columns WHERE table_schema = 'consentvault' AND table_name = 'event'")}
     assert {"release_of_event_id", "release_outcome", "release_cause", "contact_commit", "edge_received_at"} <= cols
     from consentvault import ledger, seal
-    assert list(ledger.HASH_VERSIONS) == [1] and list(seal.SEAL_HASH_VERSIONS) == [1]
+    assert 1 in ledger.HASH_VERSIONS and list(seal.SEAL_HASH_VERSIONS) == [1]
     assert {"release_of_event_id", "release_outcome", "release_cause", "contact_commit",
             "edge_received_at"} <= set(ledger.HASH_VERSIONS[1])
     assert _grant(conn, _d(conn)).seq == 1
     assert conn.execute("SELECT DISTINCT hash_version FROM consentvault.event").fetchall() == [{"hash_version": 1}]
 
 
-def test_down_then_up_round_trips(raw_dsn):
-    with db.connect(raw_dsn) as c:
-        db.migrate(c)
-        c.execute((MIGRATIONS / "down" / "0001_init.sql").read_text())
+def test_down_then_up_round_trips(raw_dsn, super_dsn):
+    with db.connect(raw_dsn) as c, db.connect(super_dsn) as su:
+        applied = db.migrate(c)
+        for name in reversed(applied):  # newest first, as a superuser (the tenancy down needs row security off)
+            su.execute((MIGRATIONS / "down" / name).read_text())
         assert c.execute("SELECT to_regclass('consentvault.event') AS t").fetchone()["t"] is None
         c.execute("DELETE FROM consentvault.schema_migration")
-        assert db.migrate(c) == ["0001_init.sql"]
+        assert db.migrate(c) == applied
         assert c.execute("SELECT count(*) AS n FROM consentvault.current_permission").fetchone()["n"] == 0
 
 

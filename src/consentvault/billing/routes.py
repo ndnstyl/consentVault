@@ -130,6 +130,10 @@ class BillingRoutes:
             start, end = _period(acct)
             rows = conn.execute("SELECT events, gate_checks, reported_at FROM consentvault.usage_day"
                                 " WHERE day >= %s AND day < %s", (start, end)).fetchall()
+            failed = None
+            if status == "past_due":  # when the payment failure moved the organization to past_due
+                failed = conn.execute("SELECT from_at FROM consentvault.org_status_history WHERE status = 'past_due'"
+                                      " AND org_id = (SELECT consentvault.current_org()) ORDER BY seq DESC LIMIT 1").fetchone()
         used = None
         if rows:
             gate_unread = any(r["gate_checks"] is None for r in rows)
@@ -139,6 +143,7 @@ class BillingRoutes:
         has_plan = acct is not None and acct["plan_id"] is not None
         return Response(200, {
             "status": status,
+            "past_due_since": _iso(failed["from_at"]) if failed else None,
             "plan": {"plan_id": acct["plan_id"], "name": acct["plan_name"]} if has_plan else None,
             "period": ({"start": _iso(acct["period_start"]), "end": _iso(acct["period_end"])}
                        if acct is not None and acct["period_start"] and acct["period_end"] else None),

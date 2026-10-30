@@ -12,6 +12,13 @@ from the private repository.
 Destruction follows the cloud KMS model: scheduling starts a waiting window (never shorter than 30 days), the key
 is unusable while pending, scheduling can be cancelled during the window, and ``process_destructions`` carries out
 every destruction that has come due and records it. Time comes from an injected clock so the window is testable.
+
+Rotation: an org key has versions. ``rotate_org_key`` makes a new version the active one; ``wrap`` always wraps under
+the active version and ``unwrap`` reads the version from the wrap itself, so every caller of ``wrap``/``unwrap`` is
+version-aware without a schema change. A version-1 wrap keeps the format it always had (no header); a later version's
+wrap is ``CVKV`` + the version (4 bytes, big endian) + the provider's ciphertext. ``rewrap`` moves a wrap to the active
+version with the same data key. ``destroy_version`` destroys one retired version (never the active one); the caller
+proves first that nothing it holds is still wrapped under it. Destroying the organisation destroys every version.
 """
 
 from __future__ import annotations
@@ -47,8 +54,32 @@ from .errors import (
 )
 
 MIN_DESTRUCTION_DAYS = 30
+VERSION_MAGIC = b"CVKV"
+_VERSION_HEADER = len(VERSION_MAGIC) + 4
 
 Clock = Callable[[], datetime]
+
+
+def wrapped_version(wrapped: bytes) -> int:
+    """The org key version a wrap was made under: the header's version, or 1 for a wrap with no header."""
+    if not isinstance(wrapped, (bytes, bytearray, memoryview)):
+        raise UnwrapError("a wrapped key must be bytes")
+    blob = bytes(wrapped)
+    if len(blob) > _VERSION_HEADER and blob[:len(VERSION_MAGIC)] == VERSION_MAGIC:
+        version = int.from_bytes(blob[len(VERSION_MAGIC):_VERSION_HEADER], "big")
+        if version < 2:
+            raise UnwrapError(f"a versioned wrap names version {version}; versioned wraps start at 2")
+        return version
+    return 1
+
+
+def _versioned(version: int, inner: bytes) -> bytes:
+    return inner if version == 1 else VERSION_MAGIC + version.to_bytes(4, "big") + inner
+
+
+def _inner(wrapped: bytes) -> bytes:
+    blob = bytes(wrapped)
+    return blob[_VERSION_HEADER:] if wrapped_version(blob) > 1 else blob
 
 
 def _utcnow() -> datetime:
@@ -105,6 +136,84 @@ class KeyProvider(ABC):
     @abstractmethod
     def is_destroyed(self, org_id: str) -> bool:
         """Report whether the key is destroyed, checked against the backing store, not only the ledger."""
+
+    def active_version(self, org_id: str) -> int:
+        """The version ``wrap`` wraps under."""
+        raise KeyProviderError(f"{type(self).__name__} does not support org key rotation")
+
+    def rotate_org_key(self, org_id: str) -> tuple[int, str]:
+        """Create the next version and make it active; returns (version, opaque key reference)."""
+        raise KeyProviderError(f"{type(self).__name__} does not support org key rotation")
+
+    def destroy_version(self, org_id: str, version: int) -> bool:
+        """Destroy one retired version. True when this call destroyed it, False when it was already destroyed."""
+        raise KeyProviderError(f"{type(self).__name__} does not support org key rotation")
+
+    def versions(self, org_id: str) -> dict[int, str]:
+        """Every version of the org key and its state: ``active``, ``retired`` or ``destroyed``."""
+        raise KeyProviderError(f"{type(self).__name__} does not support org key rotation")
+
+    def version_ref(self, org_id: str, version: int) -> str:
+        """The opaque key reference of one version (what ``rotate_org_key`` returned for it)."""
+        raise KeyProviderError(f"{type(self).__name__} does not support org key rotation")
+
+    def rewrap(self, org_id: str, wrapped: bytes) -> bytes:
+        """The same data key wrapped under the active version (the wrap itself when it already is)."""
+        if wrapped_version(wrapped) == self.active_version(org_id):
+            return bytes(wrapped)
+        return self.wrap(org_id, self.unwrap(org_id, wrapped))
+
+
+class _VersionLedger:
+    """Durable record of each org's active version and destroyed versions: one JSON file, replaced atomically."""
+
+    def __init__(self, path: Path, clock: Clock):
+        self._file = _DestructionLedger(path, clock)
+        self._clock = clock
+
+    def get(self, org_id: str) -> tuple[int, dict[int, str]]:
+        row = self._file._read().get(org_id) or {}
+        active = row.get("active", 1)
+        destroyed = {int(k): v for k, v in (row.get("destroyed") or {}).items()}
+        if not isinstance(active, int) or active < 1:
+            raise KeyProviderError(f"the version ledger holds a malformed active version for org {org_id}")
+        return active, destroyed
+
+    def set_active(self, org_id: str, version: int) -> None:
+        data = self._file._read()
+        row = data.setdefault(org_id, {})
+        row["active"] = version
+        self._file._write(data)
+
+    def mark_destroyed(self, org_id: str, version: int) -> None:
+        data = self._file._read()
+        row = data.setdefault(org_id, {})
+        row.setdefault("destroyed", {})[str(version)] = self._clock().isoformat()
+        self._file._write(data)
+
+    def states(self, org_id: str, org_destroyed: bool) -> dict[int, str]:
+        active, destroyed = self.get(org_id)
+        out = {}
+        for v in range(1, active + 1):
+            out[v] = "destroyed" if org_destroyed or v in destroyed else ("active" if v == active else "retired")
+        return out
+
+    def check_usable(self, org_id: str, version: int) -> None:
+        active, destroyed = self.get(org_id)
+        if version in destroyed:
+            raise KeyDestroyedError(f"version {version} of the key for org {org_id} was destroyed at {destroyed[version]}")
+        if version > active:
+            raise KeyNotFoundError(f"org {org_id} has no key version {version} (the active version is {active})")
+
+    def check_destroyable(self, org_id: str, version: int) -> bool:
+        """True when the version may be destroyed now, False when it already was; raises when it is active or unknown."""
+        active, destroyed = self.get(org_id)
+        if not isinstance(version, int) or isinstance(version, bool) or version < 1 or version > active:
+            raise KeyNotFoundError(f"org {org_id} has no key version {version!r}")
+        if version == active:
+            raise KeyProviderError(f"version {version} is the active key version of org {org_id}; the active version "
+                                   "is never destroyed (rotate first)")
+        return version not in destroyed
 
 
 class _DestructionLedger:
@@ -235,7 +344,8 @@ class LocalFileKeyProvider(KeyProvider):
         self._passphrase = passphrase.encode("utf-8")
         self._clock = clock
         self._ledger = _DestructionLedger(self._root / "destruction.json", clock)
-        self._cache: dict[str, bytes] = {}
+        self._versions = _VersionLedger(self._root / "versions.json", clock)
+        self._cache: dict[tuple[str, int], bytes] = {}
         try:
             self._root.mkdir(parents=True, exist_ok=True)
             os.chmod(self._root, 0o700)
@@ -248,18 +358,23 @@ class LocalFileKeyProvider(KeyProvider):
     def _kek(self, salt: bytes) -> bytes:
         return hashlib.scrypt(self._passphrase, salt=salt, **self._SCRYPT)
 
-    def create_org_key(self, org_id: str) -> str:
-        path = self._path(org_id)
-        if self._ledger.get(org_id).state == "destroyed":
-            raise KeyDestroyedError(f"the key for org {org_id} was destroyed; a destroyed org key is never recreated")
+    def _vpath(self, org_id: str, version: int) -> Path:
+        return self._path(org_id) if version == 1 else self._root / f"{check_org_id(org_id, ProviderConfigError)}.v{version}.key.json"
+
+    @staticmethod
+    def _aad(org_id: str, version: int) -> bytes:
+        return org_id.encode("utf-8") if version == 1 else f"{org_id}/v{version}".encode("utf-8")
+
+    def _write_key_file(self, org_id: str, version: int) -> None:
+        path = self._vpath(org_id, version)
         salt, nonce, org_key = secrets.token_bytes(16), secrets.token_bytes(12), AESGCM.generate_key(256)
-        sealed = AESGCM(self._kek(salt)).encrypt(nonce, org_key, org_id.encode("utf-8"))
+        sealed = AESGCM(self._kek(salt)).encrypt(nonce, org_key, self._aad(org_id, version))
         body = json.dumps({"v": 1, "salt": base64.b64encode(salt).decode(), "nonce": base64.b64encode(nonce).decode(),
                            "ct": base64.b64encode(sealed).decode()})
         try:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError as exc:
-            raise KeyExistsError(f"a key file already exists for org {org_id}") from exc
+            raise KeyExistsError(f"a key file already exists for org {org_id} version {version}") from exc
         except OSError as exc:
             raise KeyProviderError(f"cannot create the key file for org {org_id}: {exc}") from exc
         try:
@@ -269,42 +384,103 @@ class LocalFileKeyProvider(KeyProvider):
                 os.fsync(fh.fileno())
         except OSError as exc:
             raise KeyProviderError(f"cannot write the key file for org {org_id}: {exc}") from exc
+
+    def create_org_key(self, org_id: str) -> str:
+        self._path(org_id)
+        if self._ledger.get(org_id).state == "destroyed":
+            raise KeyDestroyedError(f"the key for org {org_id} was destroyed; a destroyed org key is never recreated")
+        try:
+            self._write_key_file(org_id, 1)
+        except KeyExistsError as exc:
+            raise KeyExistsError(f"a key file already exists for org {org_id}") from exc
         return f"local:{org_id}"
 
-    def _org_key(self, org_id: str) -> bytes:
+    def _org_key(self, org_id: str, version: int = 1) -> bytes:
         _require_usable(self._ledger.get(org_id))
-        if org_id in self._cache:
-            return self._cache[org_id]
-        path = self._path(org_id)
+        self._versions.check_usable(org_id, version)
+        if (org_id, version) in self._cache:
+            return self._cache[(org_id, version)]
+        path = self._vpath(org_id, version)
         try:
             doc = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError as exc:
-            raise KeyNotFoundError(f"no key exists for org {org_id}") from exc
+            raise KeyNotFoundError(f"no key exists for org {org_id}" + ("" if version == 1 else f" version {version}")) from exc
         except (OSError, json.JSONDecodeError) as exc:
             raise KeyProviderError(f"cannot read the key file for org {org_id}: {exc}") from exc
         try:
             salt, nonce, ct = (base64.b64decode(doc[k], validate=True) for k in ("salt", "nonce", "ct"))
-            org_key = AESGCM(self._kek(salt)).decrypt(nonce, ct, org_id.encode("utf-8"))
+            org_key = AESGCM(self._kek(salt)).decrypt(nonce, ct, self._aad(org_id, version))
         except (KeyError, binascii.Error) as exc:
             raise KeyProviderError(f"the key file for org {org_id} is malformed: {exc!r}") from exc
         except InvalidTag as exc:
             raise KeyProviderError(f"the key file for org {org_id} did not open: wrong passphrase or altered file") from exc
-        self._cache[org_id] = org_key
+        self._cache[(org_id, version)] = org_key
         return org_key
+
+    def active_version(self, org_id: str) -> int:
+        check_org_id(org_id, ProviderConfigError)
+        return self._versions.get(org_id)[0]
 
     def wrap(self, org_id: str, data_key: bytes) -> bytes:
         _check_data_key(data_key)
-        nonce = secrets.token_bytes(12)
-        return nonce + AESGCM(self._org_key(org_id)).encrypt(nonce, bytes(data_key), org_id.encode("utf-8"))
+        version = self.active_version(org_id)
+        key = self._org_key(org_id, version)
+        while True:  # a version-1 wrap never starts with the version header, so its version is never misread
+            nonce = secrets.token_bytes(12)
+            if version > 1 or nonce[:len(VERSION_MAGIC)] != VERSION_MAGIC:
+                break
+        inner = nonce + AESGCM(key).encrypt(nonce, bytes(data_key), org_id.encode("utf-8"))
+        return _versioned(version, inner)
 
     def unwrap(self, org_id: str, wrapped: bytes) -> bytes:
-        key = self._org_key(org_id)
-        if not isinstance(wrapped, (bytes, bytearray)) or len(wrapped) < 12 + 16 + 16:
+        version = wrapped_version(wrapped)
+        key = self._org_key(org_id, version)
+        inner = _inner(wrapped)
+        if len(inner) < 12 + 16 + 16:
             raise UnwrapError("wrapped key is too short to be a wrapped data key")
         try:
-            return AESGCM(key).decrypt(bytes(wrapped[:12]), bytes(wrapped[12:]), org_id.encode("utf-8"))
+            return AESGCM(key).decrypt(inner[:12], inner[12:], org_id.encode("utf-8"))
         except InvalidTag as exc:
             raise UnwrapError(f"wrapped key for org {org_id} did not unwrap: wrong org key or altered ciphertext") from exc
+
+    def rotate_org_key(self, org_id: str) -> tuple[int, str]:
+        current = self.active_version(org_id)
+        self._org_key(org_id, current)  # the org key is usable (not pending, not destroyed) and present
+        nxt = current + 1
+        if not self._vpath(org_id, nxt).exists():  # a file left by a rotation that stopped before the ledger is adopted
+            self._write_key_file(org_id, nxt)
+        self._versions.set_active(org_id, nxt)
+        return nxt, self.version_ref(org_id, nxt)
+
+    def version_ref(self, org_id: str, version: int) -> str:
+        self._versions.check_usable(check_org_id(org_id, ProviderConfigError), version)
+        return f"local:{org_id}" if version == 1 else f"local:{org_id}:v{version}"
+
+    def _shred(self, path: Path, org_id: str) -> None:
+        try:
+            size = path.stat().st_size
+            with open(path, "r+b") as fh:
+                fh.write(secrets.token_bytes(size))
+                fh.flush()
+                os.fsync(fh.fileno())
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise KeyProviderError(f"cannot destroy the key file for org {org_id}: {exc}") from exc
+
+    def destroy_version(self, org_id: str, version: int) -> bool:
+        _require_usable(self._ledger.get(check_org_id(org_id, ProviderConfigError)))
+        if not self._versions.check_destroyable(org_id, version):
+            return False
+        self._shred(self._vpath(org_id, version), org_id)
+        self._cache.pop((org_id, version), None)
+        self._versions.mark_destroyed(org_id, version)
+        return True
+
+    def versions(self, org_id: str) -> dict[int, str]:
+        check_org_id(org_id, ProviderConfigError)
+        return self._versions.states(org_id, self._ledger.get(org_id).state == "destroyed")
 
     def schedule_destruction(self, org_id: str, *, window_days: int = MIN_DESTRUCTION_DAYS) -> DestructionStatus:
         if not self._path(org_id).exists():
@@ -317,19 +493,9 @@ class LocalFileKeyProvider(KeyProvider):
     def process_destructions(self) -> list[str]:
         done = []
         for org_id in self._ledger.due():
-            path = self._path(org_id)
-            try:
-                size = path.stat().st_size
-                with open(path, "r+b") as fh:
-                    fh.write(secrets.token_bytes(size))
-                    fh.flush()
-                    os.fsync(fh.fileno())
-                path.unlink()
-            except FileNotFoundError:
-                pass
-            except OSError as exc:
-                raise KeyProviderError(f"cannot destroy the key file for org {org_id}: {exc}") from exc
-            self._cache.pop(org_id, None)
+            for version in range(1, self._versions.get(org_id)[0] + 1):  # every version dies with the organisation
+                self._shred(self._vpath(org_id, version), org_id)
+                self._cache.pop((org_id, version), None)
             self._ledger.mark_destroyed(org_id)
             done.append(org_id)
         return done
@@ -339,7 +505,8 @@ class LocalFileKeyProvider(KeyProvider):
 
     def is_destroyed(self, org_id: str) -> bool:
         st = self.status(org_id)
-        if st.state == "destroyed" and self._path(org_id).exists():
+        if st.state == "destroyed" and any(self._vpath(org_id, v).exists()
+                                           for v in range(1, self._versions.get(org_id)[0] + 1)):
             raise KeyProviderError(f"the ledger says org {org_id} is destroyed but its key file still exists")
         return st.state == "destroyed"
 
@@ -401,13 +568,16 @@ class OpenBaoKeyProvider(KeyProvider):
         self._mount = mount.strip("/")
         self._provable = bool(provable_destruction)
         self._ledger = _DestructionLedger(Path(ledger_path), clock)
+        lp = Path(ledger_path)
+        self._versions = _VersionLedger(lp.with_name(lp.name + ".versions.json"), clock)
 
     @property
     def provable_destruction(self) -> bool:  # type: ignore[override]
         return self._provable
 
-    def _name(self, org_id: str) -> str:
-        return f"cv-org-{check_org_id(org_id, ProviderConfigError)}"
+    def _name(self, org_id: str, version: int = 1) -> str:
+        base = f"cv-org-{check_org_id(org_id, ProviderConfigError)}"
+        return base if version == 1 else f"{base}-v{version}"
 
     def _call(self, method: str, path: str, body: Optional[dict], org_id: str, *, ok=(200, 204)) -> dict:
         status, doc = self._t(method, f"/v1/{self._mount}/{path}", body)
@@ -420,8 +590,8 @@ class OpenBaoKeyProvider(KeyProvider):
         errs = doc.get("errors") if isinstance(doc, dict) else None
         raise KeyProviderError(f"OpenBao {method} {path} answered HTTP {status}: {errs}")
 
-    def _exists(self, org_id: str) -> bool:
-        status, _ = self._t("GET", f"/v1/{self._mount}/keys/{self._name(org_id)}", None)
+    def _exists(self, org_id: str, version: int = 1) -> bool:
+        status, _ = self._t("GET", f"/v1/{self._mount}/keys/{self._name(org_id, version)}", None)
         if status == 200:
             return True
         if status == 404:
@@ -438,23 +608,35 @@ class OpenBaoKeyProvider(KeyProvider):
                                             "allow_plaintext_backup": False, "deletion_allowed": False}, org_id)
         return f"openbao:{self._mount}/{name}"
 
+    def _new_transit_key(self, org_id: str, version: int) -> None:
+        self._call("POST", f"keys/{self._name(org_id, version)}", {"type": "aes256-gcm96", "exportable": False,
+                                                                   "allow_plaintext_backup": False,
+                                                                   "deletion_allowed": False}, org_id)
+
+    def active_version(self, org_id: str) -> int:
+        check_org_id(org_id, ProviderConfigError)
+        return self._versions.get(org_id)[0]
+
     def wrap(self, org_id: str, data_key: bytes) -> bytes:
         _check_data_key(data_key)
         _require_usable(self._ledger.get(org_id))
-        doc = self._call("POST", f"encrypt/{self._name(org_id)}",
+        version = self.active_version(org_id)
+        doc = self._call("POST", f"encrypt/{self._name(org_id, version)}",
                          {"plaintext": base64.b64encode(bytes(data_key)).decode()}, org_id, ok=(200,))
         try:
-            return doc["data"]["ciphertext"].encode("utf-8")
+            return _versioned(version, doc["data"]["ciphertext"].encode("utf-8"))
         except (KeyError, TypeError, AttributeError) as exc:
             raise KeyProviderError("OpenBao encrypt answered without a ciphertext") from exc
 
     def unwrap(self, org_id: str, wrapped: bytes) -> bytes:
         _require_usable(self._ledger.get(org_id))
+        version = wrapped_version(wrapped)
+        self._versions.check_usable(org_id, version)
         try:
-            ct = bytes(wrapped).decode("utf-8")
+            ct = _inner(wrapped).decode("utf-8")
         except (UnicodeDecodeError, TypeError) as exc:
             raise UnwrapError("wrapped key is not an OpenBao ciphertext") from exc
-        status, doc = self._t("POST", f"/v1/{self._mount}/decrypt/{self._name(org_id)}", {"ciphertext": ct})
+        status, doc = self._t("POST", f"/v1/{self._mount}/decrypt/{self._name(org_id, version)}", {"ciphertext": ct})
         if status == 400:
             raise UnwrapError(f"OpenBao refused to unwrap the key for org {org_id}: {doc.get('errors')}")
         if status == 404:
@@ -465,6 +647,41 @@ class OpenBaoKeyProvider(KeyProvider):
             return base64.b64decode(doc["data"]["plaintext"], validate=True)
         except (KeyError, TypeError, binascii.Error) as exc:
             raise KeyProviderError("OpenBao decrypt answered without a valid plaintext") from exc
+
+    def rotate_org_key(self, org_id: str) -> tuple[int, str]:
+        _require_usable(self._ledger.get(org_id))
+        current = self.active_version(org_id)
+        if not self._exists(org_id, current):
+            raise KeyNotFoundError(f"OpenBao has no transit key for org {org_id} version {current}")
+        nxt = current + 1
+        if not self._exists(org_id, nxt):  # a key left by a rotation that stopped before the ledger is adopted
+            self._new_transit_key(org_id, nxt)
+        self._versions.set_active(org_id, nxt)
+        return nxt, self.version_ref(org_id, nxt)
+
+    def version_ref(self, org_id: str, version: int) -> str:
+        self._versions.check_usable(check_org_id(org_id, ProviderConfigError), version)
+        return f"openbao:{self._mount}/{self._name(org_id, version)}"
+
+    def _delete_transit_key(self, org_id: str, version: int) -> None:
+        name = self._name(org_id, version)
+        if self._exists(org_id, version):
+            self._call("POST", f"keys/{name}/config", {"deletion_allowed": True}, org_id)
+            self._call("DELETE", f"keys/{name}", None, org_id)
+        if self._exists(org_id, version):
+            raise KeyProviderError(f"OpenBao still holds the transit key for org {org_id} version {version} after deletion")
+
+    def destroy_version(self, org_id: str, version: int) -> bool:
+        _require_usable(self._ledger.get(check_org_id(org_id, ProviderConfigError)))
+        if not self._versions.check_destroyable(org_id, version):
+            return False
+        self._delete_transit_key(org_id, version)
+        self._versions.mark_destroyed(org_id, version)
+        return True
+
+    def versions(self, org_id: str) -> dict[int, str]:
+        check_org_id(org_id, ProviderConfigError)
+        return self._versions.states(org_id, self._ledger.get(org_id).state == "destroyed")
 
     def schedule_destruction(self, org_id: str, *, window_days: int = MIN_DESTRUCTION_DAYS) -> DestructionStatus:
         if not self._exists(org_id):
@@ -477,12 +694,14 @@ class OpenBaoKeyProvider(KeyProvider):
     def process_destructions(self) -> list[str]:
         done = []
         for org_id in self._ledger.due():
-            name = self._name(org_id)
-            if self._exists(org_id):
-                self._call("POST", f"keys/{name}/config", {"deletion_allowed": True}, org_id)
-                self._call("DELETE", f"keys/{name}", None, org_id)
-            if self._exists(org_id):
-                raise KeyProviderError(f"OpenBao still holds the transit key for org {org_id} after deletion")
+            active, destroyed = self._versions.get(org_id)
+            for version in range(1, active + 1):  # every version dies with the organisation
+                if version not in destroyed:
+                    try:
+                        self._delete_transit_key(org_id, version)
+                    except KeyProviderError as exc:
+                        raise KeyProviderError(f"OpenBao still holds the transit key for org {org_id} after deletion"
+                                               f" ({exc})") from exc
             self._ledger.mark_destroyed(org_id)
             done.append(org_id)
         return done
@@ -492,7 +711,7 @@ class OpenBaoKeyProvider(KeyProvider):
 
     def is_destroyed(self, org_id: str) -> bool:
         st = self.status(org_id)
-        gone = not self._exists(org_id)
+        gone = not any(self._exists(org_id, v) for v in range(1, self._versions.get(org_id)[0] + 1))
         if st.state == "destroyed" and not gone:
             raise KeyProviderError(f"the ledger says org {org_id} is destroyed but OpenBao still holds the key")
         return st.state == "destroyed" and gone

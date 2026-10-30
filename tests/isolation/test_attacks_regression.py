@@ -37,7 +37,7 @@ def test_A1_two_organisations_register_the_same_wording_independently(tenancy):
 
 # A2: mark_seal_verified crossed tenants when the owner was a superuser ---------------------------------------------
 def test_A2_a_tenant_cannot_stamp_another_tenants_seal(tenancy):
-    with tenancy.owner() as o:
+    with tenancy.operator() as o:
         assert o.execute("SELECT rolsuper FROM pg_roles WHERE rolname = current_user").fetchone()["rolsuper"] is False
     with tenancy.superuser() as su:
         b_seal = su.execute("SELECT seal_id, seal_uuid, verified_at FROM consentvault.seal WHERE org_id = %s",
@@ -54,7 +54,7 @@ def test_A2_a_tenant_cannot_stamp_another_tenants_seal(tenancy):
         assert su.execute("SELECT verified_at FROM consentvault.seal WHERE seal_uuid = %s",
                           (b_seal["seal_uuid"],)).fetchone()["verified_at"] is None
     # and the bigint form, where it still exists (single mode), is narrowed to the current organisation
-    with tenancy.owner() as o:
+    with tenancy.operator() as o:
         body = o.execute("SELECT prosrc FROM pg_proc WHERE proname = 'mark_seal_verified'"
                          " AND pg_get_function_arguments(oid) = 'p_seal_id bigint'").fetchone()["prosrc"]
     assert "current_org()" in body

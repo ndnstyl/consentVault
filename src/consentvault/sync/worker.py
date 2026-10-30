@@ -1,5 +1,10 @@
 """The sync worker: drains the outbox of every active organisation, one organisation per transaction.
 
+Given a ``connect`` function, ``run_once`` drains organisations in parallel with a bounded pool (``max_parallel_orgs``
+threads, each on its own connection). Work is shared round-robin one push at a time, so a slow receiver holds one thread
+for one push and another organisation's stop waits behind it for at most that push. Each organisation keeps its own
+token (minted just before its first push), its own deadline and its own push cap.
+
 It runs as the worker role. ``consentvault.dispatch_orgs('sync')`` hands it one short-lived token per active
 organisation (scope ``worker:sync``); every read and write below goes through an owner-rights function that filters on
 that organisation itself. The worker never holds a privilege on a table and never reads an evidence row: it receives,
@@ -18,6 +23,10 @@ Delivery rules (data-model 9.1, suppression-sync.md):
 - dead pushes raise ONE alarm per (system, error class) per run, never one per row, and stay unalarmed until the
   alarm was actually raised.
 
+While a database restore is unreconciled (``consentvault.restore_pending()``) the worker pushes nothing: the database
+may be missing stops, and a push of an older state could undo one a receiver already holds. The run answers
+``paused = "restore_in_progress"`` and logs it at WARNING on every pass until the reconciliation completes.
+
 Every call has a deadline: the claim lease bounds one attempt, the run deadline bounds one organisation's drain, and
 the transport carries its own timeout.
 """
@@ -27,6 +36,8 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
@@ -45,6 +56,7 @@ from .systems import Custody, open_credentials
 log = logging.getLogger("consentvault.sync")
 
 RELEASE_DELAY_SECONDS = 60
+PAUSED_RESTORE = "restore_in_progress"
 
 
 PREPARE_FAILED = "prepare_failed"
@@ -61,10 +73,13 @@ class WorkerConfig:
     org_deadline_seconds: float = 240.0  # below the 300 s life of a token minted just before the organisation's drain
     max_pushes_per_org: int = 200  # per run: one busy organisation never holds the others back
     send_timeout_seconds: float = float(webhook.EGRESS_TIMEOUT_SECONDS)
+    max_parallel_orgs: int = 8  # threads draining organisations at once when a ``connect`` function is given
 
     def __post_init__(self) -> None:
         if self.batch_size < 1 or self.max_pushes_per_org < 1:
             raise WorkerError("batch_size and max_pushes_per_org must be at least 1")
+        if not 1 <= self.max_parallel_orgs <= 64:
+            raise WorkerError("max_parallel_orgs must be from 1 to 64")
         if self.lease_seconds < self.batch_size * self.send_timeout_seconds:
             raise WorkerError(
                 f"lease_seconds {self.lease_seconds} is shorter than a batch of {self.batch_size} pushes at the "
@@ -119,10 +134,12 @@ class OrgReport:
 @dataclass
 class RunReport:
     orgs: list[OrgReport] = field(default_factory=list)
+    run_errors: list[str] = field(default_factory=list)  # a failure of the run itself (a pool thread's connection)
+    paused: str | None = None  # the run pushed nothing on purpose (a restore is unreconciled); not an error, never silent
 
     @property
     def errors(self) -> list[str]:
-        return [f"{o.org_id}: {e}" for o in self.orgs for e in o.errors]
+        return self.run_errors + [f"{o.org_id}: {e}" for o in self.orgs for e in o.errors]
 
     @property
     def ok(self) -> bool:
@@ -151,9 +168,22 @@ class SyncWorker:
 
     # one pass over every active organisation ----------------------------------------------------------------------
 
-    def run_once(self, conn: psycopg.Connection, *, raise_on_error: bool = True) -> RunReport:
-        """Drain every organisation once. Raises ``WorkerError`` (carrying the report) when anything failed."""
+    def run_once(self, conn: psycopg.Connection, *, raise_on_error: bool = True,
+                 connect: Callable[[], psycopg.Connection] | None = None) -> RunReport:
+        """Drain every organisation once. Raises ``WorkerError`` (carrying the report) when anything failed.
+
+        With ``connect`` (and ``max_parallel_orgs`` above 1) organisations drain in parallel on a bounded pool, one push
+        per turn; without it they drain one after another on ``conn``.
+        """
         report = RunReport()
+        try:
+            restoring = conn.execute("SELECT consentvault.restore_pending() AS p").fetchone()["p"]
+        except psycopg.Error as exc:
+            raise WorkerError(f"the worker could not read whether a restore is pending: {type(exc).__name__}: {exc}") from exc
+        if restoring:
+            report.paused = PAUSED_RESTORE
+            log.warning("consentvault sync paused: a database restore is not yet reconciled; nothing is pushed until it is")
+            return report
         try:
             org_ids = [r["org_id"] for r in conn.execute("SELECT * FROM consentvault.dispatch_org_ids('sync') AS org_id")]
         except psycopg.Error as exc:
@@ -162,27 +192,73 @@ class SyncWorker:
             start = self._runs % len(org_ids)
             org_ids = org_ids[start:] + org_ids[:start]
         self._runs += 1
-        for org_id in org_ids:
-            org_report = OrgReport(org_id)
-            report.orgs.append(org_report)
-            try:
-                # minted just before this organisation's drain, so a slow organisation never outlives the next token
-                token = conn.execute("SELECT consentvault.dispatch_org_token('sync', %s) AS t", (org_id,)).fetchone()["t"]
-                self.run_org(conn, org_id, token, org_report)
-            except Exception as exc:  # one organisation's failure never hides another's; it is named in the report
-                org_report.errors.append(f"{type(exc).__name__}: {exc}")
+        reports = {org_id: OrgReport(org_id) for org_id in org_ids}
+        report.orgs.extend(reports.values())
+        threads = min(self.config.max_parallel_orgs, len(org_ids))
+        if connect is not None and threads > 1:
+            self._drain_parallel(connect, org_ids, reports, report, threads)
+        else:
+            for org_id in org_ids:
+                org_report = reports[org_id]
+                try:
+                    # minted just before this organisation's drain, so a slow organisation never outlives the next token
+                    token = conn.execute("SELECT consentvault.dispatch_org_token('sync', %s) AS t", (org_id,)).fetchone()["t"]
+                    self.run_org(conn, org_id, token, org_report)
+                except Exception as exc:  # one organisation's failure never hides another's; it is named in the report
+                    org_report.errors.append(f"{type(exc).__name__}: {exc}")
         if raise_on_error and not report.ok:
             err = WorkerError("the sync run finished with failures: " + "; ".join(report.errors))
             err.report = report  # type: ignore[attr-defined]
             raise err
         return report
 
+    def _drain_parallel(self, connect, org_ids, reports, report: RunReport, threads: int) -> None:
+        lock = threading.Lock()
+        waiting: deque = deque(("new", o) for o in org_ids)
+
+        def take():
+            with lock:
+                return waiting.popleft() if waiting else None
+
+        def turn(conn, item) -> None:
+            kind, ref = item
+            org_report = reports[ref if kind == "new" else ref.org_id]
+            try:
+                if kind == "new":
+                    token = conn.execute("SELECT consentvault.dispatch_org_token('sync', %s) AS t", (ref,)).fetchone()["t"]
+                    ref = _OrgDrain(self, ref, token, org_report)
+                if ref.step(conn, 1):
+                    with lock:
+                        waiting.append(("drain", ref))
+            except Exception as exc:  # one organisation's failure never hides another's; it is named in the report
+                org_report.errors.append(f"{type(exc).__name__}: {exc}")
+
+        def work() -> None:
+            try:
+                conn = connect()
+            except Exception as exc:
+                with lock:
+                    report.run_errors.append(f"a pool thread could not open its connection: {type(exc).__name__}: {exc}")
+                return
+            try:
+                while (item := take()) is not None:
+                    turn(conn, item)
+            finally:
+                conn.close()
+
+        with ThreadPoolExecutor(max_workers=threads, thread_name_prefix="cv-sync") as pool:
+            for f in [pool.submit(work) for _ in range(threads)]:
+                f.result()
+        for _kind, ref in waiting:  # nothing could run them (every thread failed to connect): say so, never skip
+            name = ref if _kind == "new" else ref.org_id
+            reports[name].errors.append("not drained: no pool thread could run it")
+
     def run_loop(self, connect: Callable[[], psycopg.Connection], stop: threading.Event, interval_seconds: float = 5.0) -> None:
         """Run until ``stop`` is set. A failed pass is logged at ERROR and the loop goes on; none is ever silent."""
         while not stop.is_set():
             try:
                 with connect() as conn:
-                    self.run_once(conn)
+                    self.run_once(conn, connect=connect)
             except SyncError as exc:
                 log.error("consentvault sync pass failed: %s", exc)
             stop.wait(interval_seconds)
@@ -190,50 +266,10 @@ class SyncWorker:
     # one organisation ----------------------------------------------------------------------------------------------
 
     def run_org(self, conn: psycopg.Connection, org_id, token: str, report: OrgReport | None = None) -> OrgReport:
-        cfg = self.config
-        report = report or OrgReport(org_id)
-        started = self.clock()
-        deadline = started + timedelta(seconds=cfg.org_deadline_seconds)
-        pushes = 0
-        stop = False
-        for _ in range(cfg.max_batches_per_org):
-            if pushes >= cfg.max_pushes_per_org:
-                break
-            if self.clock() >= deadline:
-                report.errors.append(f"the {cfg.org_deadline_seconds:.0f} s deadline for this organisation passed with "
-                                     "work still queued; the next run continues")
-                break
-            with org_transaction(conn, token):
-                rows = conn.execute("SELECT * FROM consentvault.sync_claim(%s, %s, %s)",
-                                    (min(cfg.batch_size, cfg.max_pushes_per_org - pushes), cfg.lease_seconds,
-                                     self.clock())).fetchall()
-            if not rows:
-                break
-            report.claimed += len(rows)
-            for row in rows:
-                if stop or self.clock() >= deadline:  # the deadline is checked before every push
-                    if not stop:
-                        report.errors.append(f"the {cfg.org_deadline_seconds:.0f} s deadline for this organisation "
-                                             "passed with work still queued; the next run continues")
-                    stop = True
-                    self._release(conn, token, row, report)
-                    continue
-                try:
-                    self._deliver(conn, token, org_id, row, report)
-                    pushes += 1
-                except TransportError as exc:
-                    stop = True
-                    report.errors.append(f"delivery door failure: {exc}")
-                    self._release(conn, token, row, report)
-            if stop:
-                break
-        else:
-            report.errors.append(f"{cfg.max_batches_per_org} batches did not drain this organisation; the next run continues")
-        report.capped = pushes >= cfg.max_pushes_per_org
-        with org_transaction(conn, token):
-            conn.execute("SELECT consentvault.sync_refresh_redrives()")
-        self._alarm(conn, token, org_id, report)
-        return report
+        drain = _OrgDrain(self, org_id, token, report or OrgReport(org_id))
+        while drain.step(conn, self.config.batch_size):
+            pass
+        return drain.report
 
     # one push --------------------------------------------------------------------------------------------------------
 
@@ -317,3 +353,65 @@ class SyncWorker:
                     f"the alarm for system {g['system_name']!r} could not be raised: {type(exc).__name__}: {exc}")))
                 continue
             report.alarms += 1
+
+
+class _OrgDrain:
+    """One organisation's drain, advanced a batch at a time so a pool can interleave organisations one push at a time."""
+
+    def __init__(self, worker: SyncWorker, org_id, token: str, report: OrgReport) -> None:
+        self.w, self.org_id, self.token, self.report = worker, org_id, token, report
+        cfg = worker.config
+        self.deadline = worker.clock() + timedelta(seconds=cfg.org_deadline_seconds)
+        self.pushes = 0
+        self.turns = 0
+        self.halted = False  # a door failure: no more sends this run
+        self.done = False
+
+    def _deadline_error(self) -> None:
+        self.report.errors.append(f"the {self.w.config.org_deadline_seconds:.0f} s deadline for this organisation passed "
+                                  "with work still queued; the next run continues")
+
+    def step(self, conn: psycopg.Connection, limit: int) -> bool:
+        """Claim and deliver up to ``limit`` pushes. True while more work may remain; False once the drain finished."""
+        if self.done:
+            return False
+        w, cfg, report = self.w, self.w.config, self.report
+        if self.pushes >= cfg.max_pushes_per_org:
+            return self._finish(conn)
+        if self.turns >= cfg.max_batches_per_org:
+            report.errors.append(f"{cfg.max_batches_per_org} batches did not drain this organisation; the next run continues")
+            return self._finish(conn)
+        if w.clock() >= self.deadline:
+            self._deadline_error()
+            return self._finish(conn)
+        with org_transaction(conn, self.token):
+            rows = conn.execute("SELECT * FROM consentvault.sync_claim(%s, %s, %s)",
+                                (min(limit, cfg.max_pushes_per_org - self.pushes), cfg.lease_seconds,
+                                 w.clock())).fetchall()
+        if not rows:
+            return self._finish(conn)
+        self.turns += 1
+        report.claimed += len(rows)
+        for row in rows:
+            if self.halted or w.clock() >= self.deadline:  # the deadline is checked before every push
+                if not self.halted:
+                    self._deadline_error()
+                self.halted = True
+                w._release(conn, self.token, row, report)
+                continue
+            try:
+                w._deliver(conn, self.token, self.org_id, row, report)
+                self.pushes += 1
+            except TransportError as exc:
+                self.halted = True
+                report.errors.append(f"delivery door failure: {exc}")
+                w._release(conn, self.token, row, report)
+        return self._finish(conn) if self.halted else True
+
+    def _finish(self, conn: psycopg.Connection) -> bool:
+        self.done = True
+        self.report.capped = self.pushes >= self.w.config.max_pushes_per_org
+        with org_transaction(conn, self.token):
+            conn.execute("SELECT consentvault.sync_refresh_redrives()")
+        self.w._alarm(conn, self.token, self.org_id, self.report)
+        return False

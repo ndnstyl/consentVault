@@ -153,3 +153,9 @@ export interface Billing {
   status: OrgStatus; plan: { plan_id: string; name: string } | null; period: { start: string; end: string } | null;
   included: { events: number; gate_checks: number } | null; used: { events: number; gate_checks: number } | null; last_reported_at: string | null;
 }
+
+// POST /v1/offboarding/{request_id}/final-export:confirm (admin.md, final export delivery)
+export type FinalExportConfirmation = {
+  request_id: string;
+  final_export_delivered: { status: 'done'; at: string; sha256: string; via: string | null; confirmed_by: string };
+};

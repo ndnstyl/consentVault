@@ -117,7 +117,7 @@ def test_the_attestation_text_is_kept_word_for_word(world):
     v = approve_a_policy(boss)
     att = boss.ok("GET", "/v1/attestations/current")
     from consentvault.tenancy.tokens import mint_org_token, org_transaction
-    with vault.owner() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
+    with vault.operator() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
         row = o.execute("SELECT attestation_text, attestation_sha256, approved_by FROM consentvault.policy_attestation"
                         " WHERE version = %s", (v,)).fetchone()
         ap = o.execute("SELECT approval_id, approved_by, attestation_sha256 FROM consentvault.policy_approval WHERE version = %s",
@@ -126,8 +126,8 @@ def test_the_attestation_text_is_kept_word_for_word(world):
     assert str(row["approved_by"]) == boss.member_id == str(ap["approved_by"])
     import psycopg
     from consentvault import db
-    with vault.owner() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
-        with pytest.raises(psycopg.errors.IntegrityConstraintViolation):
+    with vault.migrator() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
+        with pytest.raises(psycopg.errors.IntegrityConstraintViolation):  # the guard refuses even the owner's rights
             o.execute("UPDATE consentvault.policy_attestation SET attestation_text = 'x'")
 
 

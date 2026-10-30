@@ -48,7 +48,12 @@ def test_every_tenant_table_forces_row_level_security_bound_to_the_verified_tena
         audit = {p["tablename"] for p in policies if p["policyname"].endswith("_read_scope")
                  and p["permissive"] == "RESTRICTIVE" and p["cmd"] == "SELECT" and "may_read_audit" in p["qual"]}
         assert audit == {"audit_event"}
-        assert len(policies) == len(tenant) + len(scoped) + len(audit)
+        # a legal-process hold the customer has not been told of is no row the runtime role reads (gag safety)
+        disclosed = {p["tablename"] for p in policies if p["policyname"].endswith("_disclosed")
+                     and p["permissive"] == "RESTRICTIVE" and p["cmd"] == "SELECT"
+                     and "legal_process_disclosed" in p["qual"]}
+        assert disclosed == {"legal_hold"}
+        assert len(policies) == len(tenant) + len(scoped) + len(audit) + len(disclosed)
         opts = {r["relname"]: r["reloptions"] for r in owner.execute(
             "SELECT relname, reloptions FROM pg_class WHERE relname = ANY(%s)", (list(views),))}
         assert set(opts) == set(views)
@@ -116,7 +121,7 @@ def test_dispatch_orgs_mints_one_worker_token_per_active_org_for_the_worker_role
     with tenancy.superuser() as owner:
         owner.execute("UPDATE consentvault.organization SET status = 'offboarding' WHERE org_id = %s",
                       (tenancy.b.org_id,))
-    worker_dsn = make_login_role(pg_server["port"], tenancy.owner_dsn.rsplit("/", 1)[1],
+    worker_dsn = make_login_role(pg_server["port"], tenancy.operator_dsn.rsplit("/", 1)[1],
                                  "consentvault_worker, consentvault_app")
     with db.connect(worker_dsn) as worker:
         tokens = {r["org_id"]: r["token"] for r in worker.execute("SELECT * FROM consentvault.dispatch_orgs('sync')")}
@@ -196,7 +201,7 @@ def test_the_sweeper_removes_only_expired_nonces_and_a_late_sweep_never_lets_a_r
     with tenancy.superuser() as owner:
         owner.execute("INSERT INTO consentvault.replay_guard (org_id, nonce, expires_at)"
                       " VALUES (%s, 'stale-nonce-0001', now() - interval '1 minute')", (tenancy.a.org_id,))
-    worker_dsn = make_login_role(pg_server["port"], tenancy.owner_dsn.rsplit("/", 1)[1], "consentvault_worker")
+    worker_dsn = make_login_role(pg_server["port"], tenancy.operator_dsn.rsplit("/", 1)[1], "consentvault_worker")
     with tenancy.app() as app:
         with pytest.raises(ReplayError):  # expired but not yet swept: still a replay
             claim_nonce(app, tenancy.a.org_id, "stale-nonce-0001", soon)

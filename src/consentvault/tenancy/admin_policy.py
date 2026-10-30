@@ -527,6 +527,53 @@ def approve_checklist(ctx: Ctx, version, body: Any) -> dict:
     return {"version": v, "status": "approved", "approved_by": str(me), "approved_at": iso(row["approved_at"])}
 
 
+def record_doc_checks(ctx: Ctx, body: Any) -> dict:
+    """POST /v1/doc-checks: store, per record, which elements of an approved checklist version the record shows.
+
+    The caller names the elements the record shows (``present``); the vault derives ``missing`` as every required
+    element not shown. Documentation completeness only. A re-check is a new row and the latest one answers."""
+    ctx.actor.require(ROLE_ADMIN)
+    results = need_list(body_dict(body), "results", min_items=1, max_items=100)
+    out = []
+    versions: dict[int, dict] = {}
+    for i, item in enumerate(results):
+        if not isinstance(item, dict):
+            raise invalid(**{f"results[{i}]": "must be an object"})
+        try:
+            event_id = uuid.UUID(str(item.get("event_id")))
+        except ValueError:
+            raise invalid(**{f"results[{i}].event_id": "must be a record id"}) from None
+        v = item.get("checklist_version")
+        if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+            raise invalid(**{f"results[{i}].checklist_version": "a whole number from 1"})
+        present = item.get("present")
+        if not isinstance(present, list) or len(present) > 100 or not all(isinstance(p, str) for p in present):
+            raise invalid(**{f"results[{i}].present": "a list of element ids"})
+        if v not in versions:
+            row = ctx.conn.execute("SELECT status, elements FROM consentvault.doc_checklist"
+                                   " WHERE org_id = (SELECT consentvault.current_org()) AND version = %s", (v,)).fetchone()
+            if row is None:
+                raise ApiError("not_found", "no such checklist version in this organization")
+            if row["status"] != "approved":
+                raise invalid(**{f"results[{i}].checklist_version": "must be an approved version"})
+            versions[v] = row["elements"]
+        elements = versions[v]
+        ids = {e["element_id"] for e in elements}
+        shown = sorted(set(present))
+        if set(shown) - ids:
+            raise invalid(**{f"results[{i}].present": "names an element that is not on the checklist"})
+        missing = [e["element_id"] for e in elements if e.get("required", True) and e["element_id"] not in shown]
+        try:
+            check_id = ctx.conn.execute("SELECT consentvault.record_doc_check(%s, %s, %s, %s, %s) AS id",
+                                        (event_id, v, shown, missing, ctx.actor.member_uuid)).fetchone()["id"]
+        except psycopg.errors.NoDataFound:
+            raise ApiError("not_found", "no such record in this organization") from None
+        ctx.audit("checklist.checked", "checklist", str(v), f"record {event_id}")
+        out.append({"check_id": str(check_id), "event_id": str(event_id), "checklist_version": v, "present": shown,
+                    "missing": missing})
+    return {"items": out}
+
+
 def list_checklist_templates(ctx: Ctx, *, limit=None, cursor=None) -> dict:
     """The PEWC example: documentation elements, each pointing at a rule reference (citation and link), never quoting it."""
     ctx.actor.require(*READERS)

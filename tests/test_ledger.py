@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 import psycopg
 import pytest
 
+from conftest import superuser_of
 from consentvault import db, disclosure, ledger
 from consentvault.capture import capture
 from consentvault.errors import (
@@ -65,20 +66,22 @@ def test_chain_verifies(conn, disclosure):
 
 def test_tamper_detected(conn, disclosure):
     evs = [_grant(conn, disclosure, contact=f"212-555-01{i:02d}") for i in range(3)]
-    conn.execute("ALTER TABLE consentvault.event DISABLE TRIGGER USER")
-    conn.execute("UPDATE consentvault.event SET page_url = 'https://example.com/other' WHERE event_id = %s",
-                 (evs[1].event_id,))
-    conn.execute("ALTER TABLE consentvault.event ENABLE TRIGGER USER")
+    with superuser_of(conn) as su:  # only a superuser can switch the trigger off (the trigger guard)
+        su.execute("ALTER TABLE consentvault.event DISABLE TRIGGER USER")
+        su.execute("UPDATE consentvault.event SET page_url = 'https://example.com/other' WHERE event_id = %s",
+                   (evs[1].event_id,))
+        su.execute("ALTER TABLE consentvault.event ENABLE TRIGGER USER")
     breaks = ledger.verify_chain(conn)
     assert [(b.event_id, b.reason) for b in breaks] == [(evs[1].event_id, "row_hash_mismatch")]
 
 
 def test_a_contact_point_swapped_under_its_commitment_is_two_breaks(conn, disclosure):
     evs = [_grant(conn, disclosure, contact=f"212-555-01{i:02d}") for i in range(3)]
-    conn.execute("ALTER TABLE consentvault.event DISABLE TRIGGER USER")
-    conn.execute("ALTER TABLE consentvault.event DROP CONSTRAINT event_contact_commit_matches")
-    conn.execute("UPDATE consentvault.event SET contact_norm = '+12125550199' WHERE event_id = %s", (evs[1].event_id,))
-    conn.execute("ALTER TABLE consentvault.event ENABLE TRIGGER USER")
+    with superuser_of(conn) as su:  # only a superuser can switch the trigger off (the trigger guard)
+        su.execute("ALTER TABLE consentvault.event DISABLE TRIGGER USER")
+        su.execute("ALTER TABLE consentvault.event DROP CONSTRAINT event_contact_commit_matches")
+        su.execute("UPDATE consentvault.event SET contact_norm = '+12125550199' WHERE event_id = %s", (evs[1].event_id,))
+        su.execute("ALTER TABLE consentvault.event ENABLE TRIGGER USER")
     breaks = ledger.verify_chain(conn)
     assert [(b.event_id, b.reason) for b in breaks] == [
         (evs[1].event_id, "row_hash_mismatch"), (evs[1].event_id, "contact_commit_mismatch")]

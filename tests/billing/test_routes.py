@@ -54,8 +54,9 @@ def test_unknown_billing_path_is_not_found(tenancy, stripe):
 def test_summary_for_a_trial_org_has_no_plan_and_no_usage(tenancy, stripe):
     set_status(tenancy, tenancy.a, "trial")
     res = call(routes_for(tenancy, stripe), "GET", "/v1/billing", tenancy.a)
-    assert res.status == 200 and res.payload == {"status": "trial", "plan": None, "period": None, "included": None,
-                                                  "used": None, "last_reported_at": None}
+    assert res.status == 200 and res.payload == {"status": "trial", "past_due_since": None, "plan": None,
+                                                  "period": None, "included": None, "used": None,
+                                                  "last_reported_at": None}
 
 
 def test_summary_reports_plan_period_inclusions_and_usage_against_them(tenancy, stripe):
@@ -165,3 +166,15 @@ def test_stripe_down_is_502_stripe_unavailable_and_nothing_is_charged(tenancy, s
     assert res.status == 502 and res.payload["error"] == "stripe_unavailable"
     assert stripe.count("create_checkout_session") == 0
     assert res.payload["request_id"] == "req-1"
+
+
+def test_summary_names_the_day_the_payment_failure_made_the_org_past_due(tenancy, stripe):
+    set_status(tenancy, tenancy.a, "active")
+    assert call(routes_for(tenancy, stripe), "GET", "/v1/billing", tenancy.a).payload["past_due_since"] is None
+    set_status(tenancy, tenancy.a, "past_due")
+    since = call(routes_for(tenancy, stripe), "GET", "/v1/billing", tenancy.a).payload["past_due_since"]
+    assert since is not None and since.endswith("Z")
+    assert abs(datetime.fromisoformat(since.replace("Z", "+00:00")) - datetime.now(timezone.utc)) < timedelta(minutes=5)
+    set_status(tenancy, tenancy.a, "active")  # paid again: no failure date to show
+    assert call(routes_for(tenancy, stripe), "GET", "/v1/billing", tenancy.a).payload["past_due_since"] is None
+    assert call(routes_for(tenancy, stripe), "GET", "/v1/billing", tenancy.b).payload["past_due_since"] is None

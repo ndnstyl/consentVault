@@ -45,7 +45,8 @@ def missing_elements(conn: psycopg.Connection, event_id: str, checklist_version:
             raise PolicyStoreError("documentation-check results are not stored in this vault (no doc_check_result)")
         row = conn.execute(
             "SELECT missing FROM consentvault.doc_check_result WHERE org_id = consentvault.current_org()"
-            " AND event_id = %s::uuid AND checklist_version = %s", (event_id, checklist_version)).fetchone()
+            " AND event_id = %s::uuid AND checklist_version = %s ORDER BY checked_at DESC, check_id DESC LIMIT 1",
+            (event_id, checklist_version)).fetchone()
     except psycopg.Error as exc:
         raise PolicyStoreError(f"documentation-check results could not be read: {type(exc).__name__}") from exc
     if row is None:

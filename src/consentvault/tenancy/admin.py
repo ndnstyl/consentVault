@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 import psycopg
 
 from ..providers.errors import KeyProviderError as CustodyError
-from . import audit, invite as invite_mod
+from . import audit, invite as invite_mod, site_keys
 from .admin_base import (CLIENT_ROLES, PLATFORM_MINIMUM_RETENTION_YEARS, ROLE_ADMIN, ROLE_DEVELOPER, ROLE_OPERATOR,
                          ROLE_VIEWER, Actor, ApiError, Ctx, body_dict, clean_email, invalid, iso, need_list, need_text,
                          page_list, paginate, require_can_add, require_not_closed, to_uuid, want_enum)
@@ -34,9 +34,9 @@ DEFAULT_CHANNELS = (("voice", "Voice call"), ("artificial_voice", "Artificial or
                     ("sms", "Text message"), ("email", "Email"))
 DEFAULT_PURPOSES = (("marketing", "Marketing", "Marketing contact"),)
 ORG_STATUSES = ("trial", "active", "past_due", "suspended", "offboarding", "closed")
-OPERATOR_STATUS_TARGETS = ("suspended", "active", "offboarding")
+OPERATOR_STATUS_TARGETS = ("suspended", "active", "offboarding", "closed")
 _TRANSITIONS = {"trial": {"suspended", "offboarding"}, "active": {"suspended", "offboarding"},
-                "past_due": {"suspended", "offboarding"}, "suspended": {"active", "offboarding"}}
+                "past_due": {"suspended", "offboarding"}, "suspended": {"active", "offboarding", "suspended"}, "offboarding": {"closed"}}
 _ORIGIN = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$")
 
 
@@ -124,6 +124,11 @@ def set_org_status(conn: psycopg.Connection, *, token_key: TokenKey, operator_id
             raise ApiError("not_found", "no such organization")
         if target not in _TRANSITIONS.get(row["status"], set()):
             raise invalid(status=f"an organization in {row['status']} cannot move to {target}")
+        if target == "closed" and conn.execute(
+                "SELECT 1 FROM consentvault.destruction_record WHERE org_id = (SELECT consentvault.current_org())"
+                " AND kind = 'destroyed' LIMIT 1").fetchone() is None:
+            raise ApiError("validation_failed", "an organization closes only after its destruction record exists",
+                           {"status": "no destruction record yet"})
         conn.execute("SELECT set_config('consentvault.status_cause', 'operator', true),"
                      " set_config('consentvault.status_actor', %s, true)", (operator_id,))
         conn.execute("UPDATE consentvault.organization SET status = %s WHERE org_id = (SELECT consentvault.current_org())",
@@ -166,6 +171,36 @@ def list_brands(ctx: Ctx, *, limit=None, cursor=None) -> dict:
                     shape=lambda r: {"brand_id": str(r["brand_id"]), "display_name": r["display_name"],
                                      "created_at": iso(r["created_at"]), "source_count": r["sources"],
                                      "disclosure_count": r["disclosures"]})
+
+
+def current_org(ctx: Ctx) -> dict:
+    """GET /v1/session/current-org: the organization this session chose, for any signed-in role."""
+    ctx.actor.require(*CLIENT_ROLES)
+    row = ctx.conn.execute("SELECT org_id, name, status FROM consentvault.organization"
+                           " WHERE org_id = (SELECT consentvault.current_org())").fetchone()
+    if row is None:
+        raise ApiError("not_found", "no such organization")
+    return {"org_id": str(row["org_id"]), "name": row["name"], "role": ctx.actor.role, "status": row["status"]}
+
+
+def list_brand_names(ctx: Ctx, *, limit=None, cursor=None) -> dict:
+    """GET /v1/brand-names: id and name only, for every role that reads records (a lookup shows names, not ids)."""
+    ctx.actor.require(ROLE_ADMIN, ROLE_DEVELOPER, ROLE_VIEWER)
+    sql = ("SELECT b.brand_id, b.display_name, lower(b.display_name) AS _k1, b.brand_id::text AS _k2"
+           " FROM consentvault.brand b WHERE b.org_id = (SELECT consentvault.current_org())")
+    return paginate(ctx, endpoint="GET /v1/brand-names", select_sql=sql, params=[], key_cols=("_k1", "_k2"),
+                    key_types=("text", "text"), descending=False, limit=limit, cursor=cursor,
+                    shape=lambda r: {"brand_id": str(r["brand_id"]), "display_name": r["display_name"]})
+
+
+def list_source_names(ctx: Ctx, *, limit=None, cursor=None) -> dict:
+    """GET /v1/source-names: id and name only; no origins, brands, status or last event."""
+    ctx.actor.require(ROLE_ADMIN, ROLE_DEVELOPER, ROLE_VIEWER)
+    sql = ("SELECT s.source_id, s.name, lower(coalesce(s.name, '')) AS _k1, s.source_id::text AS _k2"
+           " FROM consentvault.capture_source s WHERE s.org_id = (SELECT consentvault.current_org())")
+    return paginate(ctx, endpoint="GET /v1/source-names", select_sql=sql, params=[], key_cols=("_k1", "_k2"),
+                    key_types=("text", "text"), descending=False, limit=limit, cursor=cursor,
+                    shape=lambda r: {"source_id": str(r["source_id"]), "name": r["name"]})
 
 
 def create_brand(ctx: Ctx, body: Any) -> dict:
@@ -378,8 +413,9 @@ def _issue(ctx: Ctx, *, name, kind, scope, source_id, public_key, algorithm, cus
         secret_hex = raw.hex()
     row = ctx.conn.execute(
         "INSERT INTO consentvault.credential (org_id, name, source_id, kind, alg, public_key, secret_ct, scope, created_by,"
-        " site_key_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING credential_id, created_at",
-        (org, name, sid, kind, alg, pem, secret_ct, [scope], ctx.actor.member_uuid, site_key)).fetchone()
+        " site_key_id, site_key_hash) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING credential_id, created_at",
+        (org, name, sid, kind, alg, pem, secret_ct, [scope], ctx.actor.member_uuid, site_key,
+         site_keys.hash_site_key(site_key) if site_key else None)).fetchone()
     cid = str(row["credential_id"])
     ctx.audit("credential.issued", "credential", cid, scope)
     out = {"credential_id": cid, "name": name, "kind": kind, "scope": scope,
@@ -450,7 +486,7 @@ def revoke_credential(ctx: Ctx, credential_id, body: Any) -> dict:
     ctx.actor.require(ROLE_ADMIN, ROLE_DEVELOPER)
     reason = need_text(body_dict(body), "reason", max_len=500)
     cid = to_uuid(credential_id, "credential")
-    cur = ctx.conn.execute("SELECT scope, created_by, revoked_at FROM consentvault.credential"
+    cur = ctx.conn.execute("SELECT scope, created_by, created_at, revoked_at FROM consentvault.credential"
                            " WHERE org_id = (SELECT consentvault.current_org()) AND credential_id = %s FOR UPDATE",
                            (cid,)).fetchone()
     if cur is None:
@@ -463,7 +499,7 @@ def revoke_credential(ctx: Ctx, credential_id, body: Any) -> dict:
                            " WHERE org_id = (SELECT consentvault.current_org()) AND credential_id = %s RETURNING revoked_at",
                            (ctx.actor.member_uuid, reason, cid)).fetchone()
     ctx.audit("credential.revoked", "credential", str(cid), reason)
-    return {"credential_id": str(cid), "revoked_at": iso(row["revoked_at"])}
+    return {"credential_id": str(cid), "created_at": iso(cur["created_at"]), "revoked_at": iso(row["revoked_at"])}
 
 
 # ======================================================================================================================

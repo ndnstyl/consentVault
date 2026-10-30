@@ -9,6 +9,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
+from conftest import superuser_of
 from consentvault import ledger, seal
 from consentvault.errors import ConfigError
 
@@ -145,11 +146,13 @@ def _seal_count(conn):
 
 
 def _tamper(conn, sql, params=()):
-    conn.execute("ALTER TABLE consentvault.event DISABLE TRIGGER event_append_only")
-    try:
-        conn.execute(sql, params)
-    finally:
-        conn.execute("ALTER TABLE consentvault.event ENABLE TRIGGER event_append_only")
+    """Only a superuser can switch a vault trigger off (the trigger guard), so the tamper runs as one."""
+    with superuser_of(conn) as su:
+        su.execute("ALTER TABLE consentvault.event DISABLE TRIGGER event_append_only")
+        try:
+            su.execute(sql, params)
+        finally:
+            su.execute("ALTER TABLE consentvault.event ENABLE TRIGGER event_append_only")
 
 
 def test_seal_then_verify_ok(conn, disclosure, tsa):
@@ -350,9 +353,10 @@ def test_seal_times_that_run_backwards_against_seq_fail(conn, disclosure, tsa):
 def test_stored_gen_time_must_match_the_token(conn, disclosure, tsa):
     ev = _grant(conn, disclosure)
     seal.seal_pending(conn, tsa.url, backoff=0)
-    conn.execute("ALTER TABLE consentvault.seal DISABLE TRIGGER seal_guard")
-    conn.execute("UPDATE consentvault.seal SET gen_time = gen_time + interval '3 hours'")
-    conn.execute("ALTER TABLE consentvault.seal ENABLE TRIGGER seal_guard")
+    with superuser_of(conn) as su:  # only a superuser can switch the trigger off (the trigger guard)
+        su.execute("ALTER TABLE consentvault.seal DISABLE TRIGGER seal_guard")
+        su.execute("UPDATE consentvault.seal SET gen_time = gen_time + interval '3 hours'")
+        su.execute("ALTER TABLE consentvault.seal ENABLE TRIGGER seal_guard")
     res = seal.verify(conn, ev.event_id)
     assert not res.ok and "differs from the token" in res.reason
 

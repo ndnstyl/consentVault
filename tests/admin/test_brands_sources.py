@@ -114,5 +114,5 @@ def test_last_event_fields_come_from_the_ledger_and_carry_no_personal_field(vaul
 
 def _fp(vault, org_id):
     from consentvault.tenancy.tokens import mint_org_token, org_transaction
-    with vault.owner() as c, org_transaction(c, mint_org_token(vault.key, org_id, ["admin"], credential_id=None)):
+    with vault.operator() as c, org_transaction(c, mint_org_token(vault.key, org_id, ["admin"], credential_id=None)):
         return c.execute("SELECT wrapped FROM consentvault.org_fingerprint_secret").fetchone()["wrapped"]

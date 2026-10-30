@@ -57,7 +57,7 @@ def build_empty_tenancy(dsn: str, port: int) -> Tenancy:
     dbname = dsn.rsplit("/", 1)[1]
     key = TokenKey("test-k1", os.urandom(32))
     provider = FakeKeyProvider()
-    with db.connect(dsn) as owner:
+    with db.connect(dsn) as owner:  # the migrator: these setup steps (and a seam chain) have no console grants
         owner.execute("SELECT consentvault.install_token_key(%s, %s)", (key.key_id, key.secret))
         home = owner.execute("SELECT consentvault.home_org() AS h").fetchone()["h"]
         owner.execute("SELECT consentvault.enable_multi_tenant()")
@@ -65,7 +65,10 @@ def build_empty_tenancy(dsn: str, port: int) -> Tenancy:
         b = create_org(owner, key, provider, "bravo")
     app_dsn = make_login_role(port, dbname, "consentvault_app")
     super_dsn = f"postgresql://postgres@127.0.0.1:{port}/{dbname}"
-    return Tenancy(dsn, super_dsn, app_dsn, key, TenantCrypto(provider), provider, a, b, home)
+    from conftest import operator_dsn_for
+
+    return Tenancy(operator_dsn_for(dsn), super_dsn, app_dsn, key, TenantCrypto(provider), provider, a, b, home,
+                   migrator_dsn=dsn)
 
 
 def worker_dsn(t: Tenancy, port: int) -> str:

@@ -64,6 +64,7 @@ class Identity:
     multi_factor: bool
     expires_at: datetime
     claims: Mapping
+    auth_time: Optional[datetime] = None  # when the person last proved who they are (OIDC ``auth_time``), if the issuer says
 
 
 def amr_is_multi_factor(amr: Sequence[str]) -> bool:
@@ -173,6 +174,11 @@ class OIDCIdentityProvider(IdentityProvider):
         auds = [aud] if isinstance(aud, str) else aud if isinstance(aud, list) else []
         if self._aud not in auds:
             raise AudienceMismatchError(f"token audience {aud!r} does not include {self._aud!r}")
+        azp = claims.get("azp")
+        if len(auds) > 1 and azp is None:
+            raise AudienceMismatchError(f"token audience {aud!r} lists several audiences and has no authorized party (azp)")
+        if azp is not None and azp != self._aud:
+            raise AudienceMismatchError(f"token authorized party {azp!r} is not {self._aud!r}")
         now = self._clock().timestamp()
         exp, nbf = claims.get("exp"), claims.get("nbf")
         if isinstance(exp, bool) or not isinstance(exp, (int, float)):
@@ -191,7 +197,10 @@ class OIDCIdentityProvider(IdentityProvider):
         mfa = amr_is_multi_factor(amr)
         if require_mfa and not mfa:
             raise MfaRequiredError(f"the token's amr {list(amr)} does not show a multi-factor login")
-        return Identity(self._iss, sub, amr, mfa, datetime.fromtimestamp(exp, timezone.utc), claims)
+        at = claims.get("auth_time")
+        auth_time = (datetime.fromtimestamp(at, timezone.utc)
+                     if isinstance(at, (int, float)) and not isinstance(at, bool) and 0 < at < 4e9 else None)
+        return Identity(self._iss, sub, amr, mfa, datetime.fromtimestamp(exp, timezone.utc), claims, auth_time)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):

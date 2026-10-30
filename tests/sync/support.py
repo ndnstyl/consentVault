@@ -152,7 +152,7 @@ class SyncEnv:
             public = Ed25519PrivateKey.from_private_bytes(secret).public_key().public_bytes(
                 serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
         sealed = seal_credentials(self.custody, org.org_id, secret)
-        with self.t.owner() as o, org_transaction(o, self.t.admin_token(org.org_id)):
+        with self.t.operator() as o, org_transaction(o, self.t.admin_token(org.org_id)):
             sid = o.execute(
                 "INSERT INTO consentvault.connected_system (org_id, name, kind, endpoint, signature, contact_form,"
                 " retry_window_hours, public_key, credentials_ct) VALUES (%s, %s, 'crm', %s, %s, %s, %s, %s, %s)"

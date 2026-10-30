@@ -321,7 +321,7 @@ def test_a_worker_token_reads_no_evidence_row(two):
 ])
 def test_capture_side_functions_refuse_a_worker_token(two, fn, args):
     env, a, b = two
-    with env.t.owner() as o:  # the owner can execute everything, so only the scope check refuses
+    with env.t.migrator() as o:  # the owner's rights can execute everything, so only the scope check refuses
         with pytest.raises(psycopg.errors.InsufficientPrivilege, match="none of the scopes"):
             with org_transaction(o, env.dispatch(env.worker_conn(), a.org)):
                 o.execute(f"SELECT * FROM consentvault.{fn}", args)
@@ -336,7 +336,7 @@ def test_capture_side_functions_refuse_a_worker_token(two, fn, args):
 @pytest.mark.parametrize("scope", ["capture", "admin", "proof_read", "developer", "gate_read"])
 def test_worker_functions_refuse_every_non_worker_scope(two, fn, args, scope):
     env, a, b = two
-    with env.t.owner() as o:
+    with env.t.migrator() as o:
         with pytest.raises(psycopg.errors.InsufficientPrivilege, match="none of the scopes"):
             with org_transaction(o, env.t.token(a.org, scopes=(scope,))):
                 o.execute(f"SELECT * FROM consentvault.{fn}", args)
@@ -395,7 +395,7 @@ def test_every_sync_function_is_owned_by_the_schema_owner_and_pins_its_search_pa
 
 def test_the_row_level_fence_holds_even_without_a_functions_own_filter(two):
     env, a, b = two
-    with env.t.owner() as o:  # the owner is bound by FORCE; a function that forgot its filter would still be fenced
+    with env.t.migrator() as o:  # the owner's rights are bound by FORCE; a function that forgot its filter is still fenced
         for org, other in ((a.org, b.org), (b.org, a.org)):
             with org_transaction(o, env.t.admin_token(org.org_id)):
                 for table in SYNC_TABLES + ("connected_system",):
@@ -411,7 +411,7 @@ def test_the_row_level_fence_holds_even_without_a_functions_own_filter(two):
 
 def test_no_token_in_multi_mode_reads_nothing_and_calls_nothing(two):
     env, a, b = two
-    with env.t.owner() as o:
+    with env.t.migrator() as o:
         for table in SYNC_TABLES + ("connected_system",):
             assert o.execute(f"SELECT count(*) AS n FROM consentvault.{table}").fetchone()["n"] == 0
         with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
@@ -423,7 +423,7 @@ def test_no_token_in_multi_mode_reads_nothing_and_calls_nothing(two):
 
 def test_a_forged_token_is_refused_by_every_function(two):
     env, a, b = two
-    with env.t.owner() as o:
+    with env.t.migrator() as o:
         o.execute("SELECT set_config('consentvault.org_token', %s, false)", ("v1.test-k1.00.00",))
         try:
             with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):

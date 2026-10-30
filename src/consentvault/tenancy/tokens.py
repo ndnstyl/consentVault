@@ -79,6 +79,18 @@ def mint_org_token(
     return f"{signed}.{sig}"
 
 
+def token_expires_at(token: str):
+    """When a tenant token the database has already accepted stops being accepted (read from its payload, not verified
+    here: call it only for a token ``org_transaction`` entered)."""
+    from datetime import datetime, timezone
+
+    try:
+        exp = json.loads(bytes.fromhex(token.split(".")[2]))["exp"]
+        return datetime.fromtimestamp(int(exp), timezone.utc)
+    except (IndexError, ValueError, KeyError, TypeError) as exc:
+        raise TenantTokenError("the tenant token has no readable expiry") from exc
+
+
 @contextmanager
 def org_transaction(conn: psycopg.Connection, token: str) -> Iterator[uuid.UUID]:
     """Open a transaction, enter the tenant the token names, and yield its org id.

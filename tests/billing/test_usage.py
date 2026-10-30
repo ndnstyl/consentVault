@@ -20,7 +20,7 @@ YESTERDAY = closed_day()
 
 
 def worker_conn(tenancy, pg_server):
-    dsn = make_login_role(pg_server["port"], tenancy.owner_dsn.rsplit("/", 1)[1], "consentvault_worker")
+    dsn = make_login_role(pg_server["port"], tenancy.operator_dsn.rsplit("/", 1)[1], "consentvault_worker")
     return db.connect(dsn)
 
 

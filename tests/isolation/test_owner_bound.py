@@ -1,4 +1,5 @@
-"""A non-superuser schema owner migrates once a superuser has made the two group roles, and FORCE binds it."""
+"""A NOLOGIN, non-superuser schema owner, reached through a migrator login whose default role is the owner, migrates
+once a superuser has made the group roles, and FORCE binds the owner's rights."""
 
 import os
 import uuid
@@ -21,11 +22,15 @@ def owner_dsn(pg_server):
                    " IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_worker') THEN CREATE ROLE consentvault_worker NOLOGIN; END IF;"
                    " IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_operator') THEN CREATE ROLE consentvault_operator NOLOGIN BYPASSRLS; END IF;"
                    " END $$")
-        su.execute(f'CREATE ROLE "{owner}" LOGIN IN ROLE consentvault_operator')
+        su.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_console')"
+                   " THEN CREATE ROLE consentvault_console NOLOGIN; END IF; END $$")
+        su.execute(f'CREATE ROLE "{owner}" NOLOGIN IN ROLE consentvault_operator')
+        su.execute(f'CREATE ROLE "{owner}_m" LOGIN IN ROLE "{owner}"')
+        su.execute(f'ALTER ROLE "{owner}_m" SET role = \'{owner}\'')
         su.execute(f'ALTER DATABASE "{name}" OWNER TO "{owner}"')
     with psycopg.connect(f"postgresql://postgres@127.0.0.1:{port}/{name}", autocommit=True) as su:
         su.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
-    return f"postgresql://{owner}@127.0.0.1:{port}/{name}"
+    return f"postgresql://{owner}_m@127.0.0.1:{port}/{name}"
 
 
 def test_a_non_superuser_owner_migrates_and_is_bound_by_row_level_security(owner_dsn):

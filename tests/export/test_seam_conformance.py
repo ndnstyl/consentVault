@@ -6,6 +6,7 @@ import uuid
 import psycopg
 import pytest
 
+from conftest import MIGRATOR_ROLE, create_vault_database
 from consentvault import db
 from consentvault.errors import MigrationError
 
@@ -21,16 +22,15 @@ GRANTS = ("SELECT column_name, privilege_type FROM information_schema.column_pri
           " ORDER BY column_name, privilege_type")
 
 
-def _fresh(port: int, owner: str) -> str:
+def _fresh(port: int) -> str:
+    """A second vault database laid out like the fixture's: owned by the NOLOGIN owner, reached as the migrator."""
     name = "seam_" + uuid.uuid4().hex[:10]
-    with psycopg.connect(f"postgresql://postgres@127.0.0.1:{port}/postgres", autocommit=True) as su:
-        su.execute(f'CREATE DATABASE "{name}" OWNER {owner}')
-    return f"postgresql://{owner}@127.0.0.1:{port}/{name}"
+    create_vault_database(port, name)
+    return f"postgresql://{MIGRATOR_ROLE}@127.0.0.1:{port}/{name}"
 
 
 def test_the_seam_matches_the_real_export_job_table(raw_dsn, pg_server, tmp_path):
-    owner = raw_dsn.split("//")[1].split("@")[0]
-    seam_dsn = _fresh(pg_server["port"], owner)
+    seam_dsn = _fresh(pg_server["port"])
     with db.connect(seam_dsn) as c:
         db.migrate(c, seam_migrations(tmp_path / "pinned"))
     try:

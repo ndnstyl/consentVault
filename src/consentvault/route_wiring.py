@@ -17,6 +17,8 @@ Every principal is produced here from what the request proves, never from what i
 from __future__ import annotations
 
 import json
+import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
@@ -26,6 +28,9 @@ import psycopg
 from .errors import ConsentVaultError
 
 TENANT_TOKEN_PREFIX = "v1."
+DEFAULT_OPERATOR_MAX_SIGNIN_AGE_S = 900  # an operator proved who they are within the last 15 minutes, configurable
+
+_log = logging.getLogger("consentvault.route_wiring")
 
 
 @dataclass
@@ -47,6 +52,18 @@ class PortalPrincipal:
 
 class BodyNotJson(ConsentVaultError):
     """The request body is not JSON."""
+
+
+class OperatorRefusalNotRecorded(ConsentVaultError):
+    """An operator attempt was refused, and the audit row that must record the refusal could not be written."""
+
+
+@dataclass(frozen=True)
+class OperatorDecision:
+    """The outcome of checking the operator console credential: an operator id, or a named refusal (never both)."""
+    operator_id: str | None
+    reason: str          # "verified" or the refusal reason: a name, never token text
+    actor: str           # "issuer|subject" once the identity provider verified the token, else "unverified"
 
 
 def _lower(headers: Mapping[str, str] | None) -> dict[str, str]:
@@ -80,14 +97,22 @@ class Authenticator:
 
     ``connect``       a runtime-role connection (closed here) for checking portal session tokens.
     ``access_tokens`` the platform's ``AccessTokenSigner`` (machine tokens).
-    ``identity``      the identity provider (``verify(token, require_mfa=...)``) for operator sign-in.
+    ``identity``      the operator console's own identity provider (``verify(token, require_mfa=...)``). It is built
+                      with the console's own audience, so a token minted for the member portal never verifies here.
     ``operators``     {(issuer, subject): operator_id}; the deployment's operator list.
+    ``max_signin_age_s``  how recently the operator must have signed in (the token's ``auth_time``); default 15 minutes.
+                      A token with no ``auth_time`` cannot prove recency and is refused.
+    ``clock``         seconds since the epoch; injectable for tests.
     """
 
     def __init__(self, *, connect: Callable[[], psycopg.Connection], access_tokens, identity=None,
-                 operators: Mapping[tuple[str, str], str] | None = None) -> None:
+                 operators: Mapping[tuple[str, str], str] | None = None,
+                 max_signin_age_s: int = DEFAULT_OPERATOR_MAX_SIGNIN_AGE_S, clock: Callable[[], float] = time.time) -> None:
+        if not isinstance(max_signin_age_s, int) or isinstance(max_signin_age_s, bool) or not 1 <= max_signin_age_s <= 86400:
+            raise ConsentVaultError("operator max_signin_age_s must be a whole number of seconds from 1 to 86400")
         self._connect, self._access, self._identity = connect, access_tokens, identity
         self._operators = dict(operators or {})
+        self._max_age, self._clock = max_signin_age_s, clock
 
     def portal(self, headers) -> PortalPrincipal | None:
         from .tenancy.admin_base import ApiError
@@ -117,17 +142,39 @@ class Authenticator:
         except OAuthError:  # loud-failure-exempt: an unverified token is no caller; the route answers unauthenticated
             return None
 
-    def operator(self, headers) -> str | None:
+    def operator_decision(self, headers) -> OperatorDecision:
+        """Check the operator console credential and say why it was refused when it is."""
         from .providers.errors import ProviderError
 
         token = _bearer(headers)
-        if not token or self._identity is None or token.startswith(TENANT_TOKEN_PREFIX):
-            return None
+        if not token:
+            return OperatorDecision(None, "no_credential", "unverified")
+        if token.startswith(TENANT_TOKEN_PREFIX):
+            return OperatorDecision(None, "member_session_not_accepted", "unverified")
+        if self._identity is None:
+            return OperatorDecision(None, "operator_identity_not_configured", "unverified")
         try:
             who = self._identity.verify(token, require_mfa=True)
-        except (ProviderError, ConsentVaultError):  # loud-failure-exempt: no verified operator; the route answers unauthenticated
-            return None
-        return self._operators.get((who.issuer, who.subject))
+        except ProviderError as exc:
+            return OperatorDecision(None, f"token_rejected_{type(exc).__name__}", "unverified")
+        except ConsentVaultError as exc:
+            return OperatorDecision(None, f"token_rejected_{type(exc).__name__}", "unverified")
+        actor = f"{who.issuer}|{who.subject}"[:200]
+        operator_id = self._operators.get((who.issuer, who.subject))
+        if operator_id is None:
+            return OperatorDecision(None, "not_on_operator_list", actor)
+        auth_time = getattr(who, "auth_time", None)
+        if auth_time is None:
+            return OperatorDecision(None, "sign_in_time_unproven", actor)
+        age = self._clock() - auth_time.timestamp()
+        if age > self._max_age:
+            return OperatorDecision(None, "sign_in_not_recent", actor)
+        if age < -30:
+            return OperatorDecision(None, "sign_in_time_in_the_future", actor)
+        return OperatorDecision(operator_id, "verified", actor)
+
+    def operator(self, headers) -> str | None:
+        return self.operator_decision(headers).operator_id
 
     def billing_caller(self, headers):
         """The ``portal_caller`` producer for the server (billing's ``Caller``)."""
@@ -135,6 +182,24 @@ class Authenticator:
 
         p = self.portal(headers)
         return None if p is None else Caller(p.org_id, p.role, _rid(headers))
+
+
+def record_operator_refusal(owner_connect, decision: OperatorDecision, method: str, handler: str, rid: str) -> None:
+    """One platform audit row per refused operator attempt: who it claimed to be, which route, the reason name."""
+    from .tenancy import audit
+
+    if owner_connect is None:
+        raise OperatorRefusalNotRecorded("this server has no operator console connection to write the audit row with")
+    request_id = rid if rid and audit._REQUEST_ID.match(rid) else "refused-" + uuid.uuid4().hex
+    try:
+        conn = owner_connect()
+        try:
+            audit.append_platform(conn, operator_id=decision.actor, action="operator.refused", target_kind="route",
+                                  target_id=f"{method} {handler}"[:200], reason=decision.reason, request_id=request_id)
+        finally:
+            conn.close()
+    except (ConsentVaultError, psycopg.Error) as exc:  # AuditError and DatabaseError are both ConsentVaultError
+        raise OperatorRefusalNotRecorded(f"{type(exc).__name__}: {exc}") from exc
 
 
 class AdminRoutes:
@@ -157,7 +222,18 @@ class AdminRoutes:
         bearer = _bearer(headers)
         tenant = bearer if bearer and bearer.startswith(TENANT_TOKEN_PREFIX) else None
         identity = bearer if bearer and not tenant else None
-        operator_id = self._auth.operator(headers) if route is not None and route.kind == "operator" else None
+        operator_id = None
+        if route is not None and route.kind == "operator":
+            decision = self._auth.operator_decision(headers)
+            operator_id = decision.operator_id
+            if operator_id is None:
+                try:
+                    record_operator_refusal(getattr(self._app, "_owner_connect", None), decision, method, route.handler,
+                                            rid)
+                except OperatorRefusalNotRecorded as exc:
+                    _log.critical("operator refusal NOT recorded (request %s): %s", rid or "-", exc)
+                    return _err(503, "audit_unavailable", "the attempt was refused, but its audit row could not be "
+                                "written; nothing else was done", rid)
         res = self._app.handle(Request(method, path, dict(query or {}), parsed, tenant_token=tenant,
                                        identity_token=identity, request_id=rid, operator_id=operator_id))
         return Reply(res.status, res.body, dict(res.headers or {}))
@@ -221,3 +297,6 @@ class ExportRouteAdapter:
                 principal = Principal(p.org_id, uuid.UUID(p.member_id), "portal", role=p.role)
         res = handle(self._service, Request(method, path, dict(query or {}), parsed, principal, rid))
         return Reply(res.status, res.body, dict(res.headers or {}), res.raw)
+
+
+def lifecycle_routes(app, auth): from .tenancy.lifecycle_routes import LifecycleRoutes; return LifecycleRoutes(app, auth)  # noqa: E701,E702,E704  erasure, offboarding, legal holds, operator access

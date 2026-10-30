@@ -168,7 +168,7 @@ def test_two_simultaneous_accepts_of_one_link_make_one_member(vault):
 
 def test_with_no_mailer_the_operator_gets_the_link_token_once(vault):
     from consentvault.tenancy import admin
-    with vault.owner() as c:
+    with vault.operator() as c:
         out = admin.create_org(c, token_key=vault.key, custody=vault.custody, operator_id="op-1", request_id="r",
                                name="Manual", admin_email="m@manual.example")
     assert len(out["invite_token"]) >= 40 and "invite_token" not in str(vault.mailer.sent)

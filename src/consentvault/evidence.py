@@ -1063,6 +1063,9 @@ class Actor:
             raise ExportError("an actor is a member or a credential")
 
 
+FINAL_EXPORT_LINK_TTL_SECONDS = 23 * 3600
+
+
 class ExportService:
     """Builds, caches and serves evidence packages for one vault. Holds no tenant state: every call enters the tenant
     with a short token minted for exactly the scope it needs.
@@ -1334,13 +1337,13 @@ class ExportService:
 
     # links and download -------------------------------------------------------------------------------------------
 
-    def _new_link(self, org_id, export_id) -> tuple[str, datetime]:
+    def _new_link(self, org_id, export_id, *, path: str | None = None, ttl: int | None = None) -> tuple[str, datetime]:
         now = self._clock()
-        expires = now + timedelta(seconds=self._link_ttl)
+        expires = now + timedelta(seconds=self._link_ttl if ttl is None else ttl)
         body = json.dumps({"o": str(org_id), "e": str(export_id), "n": uuid.uuid4().hex, "i": now.timestamp(),
                            "x": expires.timestamp()}, sort_keys=True, separators=(",", ":")).encode("utf-8")
         sig = hmac.new(self._secret, body, hashlib.sha256).digest()
-        return f"{self._path}/{export_id}/download?link={_b64u(body)}.{_b64u(sig)}", expires
+        return f"{path or self._path + '/' + str(export_id) + '/download'}?link={_b64u(body)}.{_b64u(sig)}", expires
 
     def _read_link(self, token: str) -> dict:
         try:
@@ -1372,6 +1375,31 @@ class ExportService:
             url, expires = self._new_link(org_id, job["export_id"])
             self._audit(conn, actor.kind, actor.id, "export.link", job["export_id"], request_id)
         return {"download_url": url, "expires_at": _canon_time(expires)}
+
+    def issue_final_export_link(self, org_id, offboarding_request_id) -> dict:
+        """The one-time download link for an organisation's final export (offboarding). Same signed, single-use link as a
+        contact's package; it names the organisation and the offboarding request, lives 23 hours (the replay guard's
+        longest memory is a day) and is claimed once by ``claim_final_export_link``."""
+        url, expires = self._new_link(org_id, offboarding_request_id, ttl=FINAL_EXPORT_LINK_TTL_SECONDS,
+                                      path=f"/v1/offboarding/{offboarding_request_id}/final-export")
+        return {"download_url": url, "expires_at": _canon_time(expires)}
+
+    def claim_final_export_link(self, offboarding_request_id, token: str):
+        """Check a final-export link and spend it. Returns the organisation id. A second use is ``ExportLinkUsedError``."""
+        link = self._read_link(token)
+        if str(link["export_id"]) != str(offboarding_request_id):
+            raise ExportLinkInvalidError("the download link is not for this final export")
+        conn = self._connect()
+        try:
+            claimed = conn.execute(
+                "SELECT consentvault.claim_replay_nonce(%s, %s, %s) AS ok",
+                (link["org"], "export-link:" + link["nonce"], datetime.fromtimestamp(link["expires"], timezone.utc)
+                 + timedelta(minutes=1))).fetchone()["ok"]
+        finally:
+            conn.close()
+        if not claimed:
+            raise ExportLinkUsedError("this download link was already used")
+        return link["org"], link["nonce"]
 
     def download(self, export_id, token: str, *, request_id: str | None = None) -> tuple[bytes, str]:
         """Serve the package once for a link. Returns (zip bytes, sha256). The link is the credential: it names the

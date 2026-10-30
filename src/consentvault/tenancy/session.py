@@ -21,9 +21,9 @@ import psycopg
 
 from ..providers.errors import IdentityError, MfaRequiredError
 from . import audit
-from .admin_base import (CLIENT_ROLES, ROLE_SCOPES, Actor, ApiError, decode_cursor, encode_cursor, parse_limit,
+from .admin_base import (CLIENT_ROLES, ROLE_SCOPES, Actor, ApiError, decode_cursor, encode_cursor, iso, parse_limit,
                          to_uuid)
-from .tokens import TokenKey, mint_org_token, org_transaction
+from .tokens import TokenKey, mint_org_token, org_transaction, token_expires_at
 
 PORTAL_TOKEN_SECONDS = 300
 MEMBER_CREDENTIAL_PREFIX = "member:"
@@ -38,10 +38,12 @@ class OrgSession:
     status: str
     member_id: str
     expires_in: int
+    expires_at: str = ""
 
     def body(self) -> dict:
         """The answer to POST /v1/session/org. The token travels to the edge worker, never to the browser."""
-        return {"org_id": self.org_id, "name": self.name, "role": self.role, "status": self.status}
+        return {"org_id": self.org_id, "name": self.name, "role": self.role, "status": self.status,
+                "expires_at": self.expires_at}
 
 
 class SessionMinter:
@@ -81,7 +83,8 @@ class SessionMinter:
         nxt = encode_cursor(self._cursor_key, "GET /v1/session", [str(page[-1]["org_id"])], stamp) \
             if page and start + n < len(rows) else None
         claims = who.claims
-        return {"user": {"display_name": claims.get("name") if isinstance(claims.get("name"), str) else None,
+        return {"expires_at": iso(who.expires_at),
+                "user": {"display_name": claims.get("name") if isinstance(claims.get("name"), str) else None,
                          "email": claims.get("email") if isinstance(claims.get("email"), str) else None},
                 "items": [{"org_id": str(r["org_id"]), "name": r["org_name"], "role": r["role"], "status": r["status"]}
                           for r in page],
@@ -129,7 +132,7 @@ class SessionMinter:
             audit.append(conn, actor_kind="member", actor_id=str(mine["member_id"]), action="session.opened",
                          target_kind="org", target_id=str(wanted), request_id=request_id)
         return OrgSession(token, str(wanted), org_name, mine["role"], mine["status"], str(mine["member_id"]),
-                          self._ttl)
+                          self._ttl, iso(token_expires_at(token)))
 
 
 def actor_from_token(conn: psycopg.Connection) -> Actor:

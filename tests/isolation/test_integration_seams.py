@@ -211,9 +211,17 @@ def test_the_postgres_send_log_appends_domain_only_rows_the_operator_reads(tenan
 OPERATOR_COLUMNS = {
     "audit_event": "*", "notify_send_log": "*", "operator_alarm": "*",
     "billing_account": {"org_id", "stripe_customer_id"},
-    "capture_source": {"org_id", "source_id", "allowed_origins"},
-    "credential": {"org_id", "credential_id", "source_id", "kind", "alg", "public_key", "scope", "revoked_at"},
+    # brand_ids and status: the site-key lookup answers a retired source by name (0015)
+    "capture_source": {"org_id", "source_id", "allowed_origins", "brand_ids", "status"},
+    # site_key_hash: the hash the site-key lookup compares (0015); never the key itself
+    "credential": {"org_id", "credential_id", "source_id", "kind", "alg", "public_key", "scope", "revoked_at",
+                   "site_key_hash"},
+    # the checklist writer checks the version is approved; check_id is what the insert returns (0015)
+    "doc_checklist": {"org_id", "version", "status"},
+    "doc_check_result": {"org_id", "check_id"},
     "event": {"org_id", "event_id", "received_at", "seq", "source_id"},
+    # an offboarding org leaves the evidence jobs once its final export is taken (0014)
+    "offboarding_request": {"org_id", "state", "final_export_at"},
     # pending invitees' addresses: accepted 2026-10-29 (staff addresses, not consumers; the invitation lookup needs them)
     "invite": {"org_id", "invite_id", "email_norm", "role", "token_digest", "invited_by", "invited_by_operator",
                "expires_at", "accepted_at", "withdrawn_at"},

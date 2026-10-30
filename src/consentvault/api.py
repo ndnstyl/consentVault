@@ -18,7 +18,7 @@ import threading
 import time
 import tomllib
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Mapping
@@ -388,33 +388,136 @@ class CloudApiSettings:
     region: str | None = None
     routes: tuple = ()  # route objects of other lanes: handles(method, path) -> bool; handle(method, path, ...)
     portal_caller: object = None  # callable(headers) -> caller for portal routes (session lane), or None
+    edge_signing_secret: bytes | None = None  # the capture edge's HMAC secret; None means edge captures are refused
+    edge_timestamp_window_s: int = 300
 
     def __repr__(self) -> str:
         return f"CloudApiSettings(token_endpoint_url={self.token_endpoint_url!r}, hosts={self.allowed_hosts!r})"
 
 
+_SESSION_RIGHTS = """
+SELECT r.rolname AS login, r.rolsuper AS superuser,
+       EXISTS (SELECT 1 FROM pg_catalog.pg_namespace n
+                WHERE n.nspname OPERATOR(pg_catalog.=) 'consentvault'
+                  AND (n.nspowner OPERATOR(pg_catalog.=) r.oid OR pg_catalog.pg_has_role(r.oid, n.nspowner, 'MEMBER')))
+           AS owner,
+       (SELECT pg_catalog.string_agg(b.rolname::text, ', ' ORDER BY b.rolname) FROM pg_catalog.pg_roles b
+         WHERE b.rolbypassrls AND pg_catalog.pg_has_role(r.oid, b.oid, 'MEMBER')) AS bypass
+  FROM pg_catalog.pg_roles r WHERE r.rolname OPERATOR(pg_catalog.=) session_user
+"""
+
+
+def _session_refusal(conn) -> str | None:
+    """Why the login itself must not serve tenants, or None: it is a superuser, the schema owner or a member of it, or a
+    member of a BYPASSRLS role (row security would not bind it, or it could SET ROLE to one that it does not bind)."""
+    me = conn.execute(_SESSION_RIGHTS).fetchone()
+    if me is None:
+        return "the session's login role could not be read"
+    if me["superuser"]:
+        return f"the login {me['login']} is a superuser"
+    if me["owner"]:
+        return f"the login {me['login']} is the schema owner or a member of it (it would hold the owner's rights)"
+    if me["bypass"]:
+        return f"the login {me['login']} is a member of the BYPASSRLS role(s) {me['bypass']}"
+    return None
+
+
+# Every role that can log in and acts with the schema owner's rights through membership (direct or through other roles):
+# a migration login. One exists only during a migration run; a superuser (or the managed service's master user) is the
+# break-glass and is not one.
+_MIGRATION_LOGINS = """
+WITH RECURSIVE owner AS (
+    SELECT n.nspowner AS oid FROM pg_catalog.pg_namespace n WHERE n.nspname OPERATOR(pg_catalog.=) 'consentvault'
+), members(oid) AS (
+    SELECT m.member FROM pg_catalog.pg_auth_members m, owner WHERE m.roleid OPERATOR(pg_catalog.=) owner.oid
+    UNION
+    SELECT m.member FROM pg_catalog.pg_auth_members m JOIN members x ON m.roleid OPERATOR(pg_catalog.=) x.oid
+)
+SELECT r.rolname::text AS login FROM members JOIN pg_catalog.pg_roles r ON r.oid OPERATOR(pg_catalog.=) members.oid
+ WHERE r.rolcanlogin AND NOT r.rolsuper
+   AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles g WHERE g.rolname OPERATOR(pg_catalog.=) 'rds_superuser'
+                    AND pg_catalog.pg_has_role(r.oid, g.oid, 'MEMBER'))
+ ORDER BY 1
+"""
+
+
+def _migration_logins(conn) -> list[str]:
+    """The login roles that hold the schema owner's rights (a migration login), by name."""
+    return [r["login"] for r in conn.execute(_MIGRATION_LOGINS).fetchall()]
+
+
+def _manifest_drift(conn) -> list[str]:
+    """The live security surface against the manifest shipped with this build; every drifted object by name."""
+    from . import surface
+
+    try:
+        return surface.drift(surface.live_surface(conn), surface.load_manifest())
+    except surface.ManifestError as exc:
+        return [str(exc)]
+
+
 def startup_check(dsn: str) -> None:
-    """Conditions 1 and 2 of the tenancy review: refuse to serve unless the vault is in multi mode and every
-    owner-rights function and row-secured table is owned by the non-superuser schema owner or the operator role."""
+    """Conditions 1 and 2 of the tenancy review: refuse to serve unless the vault is in multi mode, the login is neither
+    a superuser, the schema owner (or a member of it) nor a member of a BYPASSRLS role, every owner-rights function and
+    row-secured table is owned by the non-superuser schema owner or the operator role, no member of the operator console
+    bypasses row security, and every pinned trigger guard is as pinned (read from the superuser-owned guard schema
+    directly too, so a replaced consentvault.owner_rights_violations() cannot hide a changed guard). Then no migration
+    login may still log in (one exists only during a migration run), and the live security surface must match the
+    manifest shipped with this build (consentvault.surface), read from the system catalogs: any drift refuses, naming
+    every object added, changed or removed."""
     try:
         with connect(dsn) as conn:
+            refusal = _session_refusal(conn)
+            if refusal is not None:
+                raise StartupRefusedError(f"the multi-tenant API will not serve this database: {refusal}")
             conn.execute("SELECT consentvault.require_multi_tenant()")
             bad = conn.execute("SELECT * FROM consentvault.owner_rights_violations()").fetchall()
+            if conn.execute("SELECT to_regprocedure('consentvault_guard.pin_violations()') IS NULL AS missing"
+                            ).fetchone()["missing"]:
+                bad.append({"object_kind": "event trigger", "object_name": "consentvault_guard.pin_violations()",
+                            "owner_name": "-", "problem": "the trigger guard predates guard pinning: run "
+                            "docker/initdb/20-trigger-guard.sql again as a superuser"})
+            else:
+                bad += conn.execute("SELECT * FROM consentvault_guard.pin_violations()").fetchall()
+            logins = _migration_logins(conn)
+            drifted = _manifest_drift(conn)
     except psycopg.Error as exc:
         raise StartupRefusedError(f"the multi-tenant API will not serve this database: "
                                   f"{exc.diag.message_primary or type(exc).__name__}") from exc
+    except StartupRefusedError:
+        raise
     except ConsentVaultError as exc:
         raise StartupRefusedError(f"the multi-tenant API cannot reach the database: {exc}") from exc
     if bad:
         first = bad[0]
         raise StartupRefusedError(f"the multi-tenant API will not serve this database: {first['object_kind']} "
                                   f"{first['object_name']} (owner {first['owner_name']}): {first['problem']}")
+    if logins:
+        raise StartupRefusedError(
+            f"the multi-tenant API will not serve this database: the migration login {', '.join(logins)} can still log "
+            "in; a migration login exists only during a migration run (as the superuser: ALTER ROLE <login> NOLOGIN, or "
+            "DROP ROLE, once the run and the superuser's pin_guards() are done)")
+    if drifted:
+        raise StartupRefusedError(
+            "the multi-tenant API will not serve this database: its security surface differs from the security manifest "
+            "shipped with this build (" + str(len(drifted)) + "): " + "; ".join(drifted))
 
 
 def _api_error(name: str, detail: str, fields: dict | None = None):
     from .tenancy.admin_base import ApiError
 
     return ApiError(name, detail, fields)
+
+
+@dataclass(frozen=True)
+class _EdgeClaims:
+    """Stands where verified access-token claims stand, for a capture the edge forwarded: capture scope only, one minute."""
+    org_id: object
+    credential_id: object
+    scopes: tuple = ("capture",)
+
+    def seconds_left(self) -> int:
+        return 60
 
 
 class _CloudHandler(BaseHTTPRequestHandler):
@@ -635,8 +738,11 @@ class _CloudHandler(BaseHTTPRequestHandler):
         from .release import release_after_tenant_grant
         from .tenancy.pipeline import parse_capture
 
-        claims = self._claims("capture", "capture_verified")
-        req = parse_capture(self._json(body), body, claims.scopes)
+        if not (self.headers.get("Authorization") or "").strip() and self.headers.get(SIGNATURE_HEADER):
+            claims, payload = self._edge_claims(body)  # a browser capture the edge signed and forwarded
+        else:
+            claims, payload = self._claims("capture", "capture_verified"), self._json(body)
+        req = parse_capture(payload, body, claims.scopes)
         token = self._tenant_token(claims)
         try:
             with connect(self.settings.dsn) as conn:
@@ -663,6 +769,59 @@ class _CloudHandler(BaseHTTPRequestHandler):
                                  {"event": "LedgerError"}) from None
             raise
         self._send(201, {"ok": True, "event_id": result.event_id, "receipt": result.receipt})
+
+    def _edge_claims(self, body: bytes):
+        """The claims of a browser capture forwarded by the edge: the edge's HMAC over ``<timestamp>.<body>`` proves the
+        edge sent it, and the site key in the body (found by its hash) names the organisation and the source. Whatever
+        the browser could have put in ``source_id`` or ``brand_ids`` is checked against the source, never trusted."""
+        from .tenancy.admin_base import ApiError
+        from .tenancy.errors import ReplayError
+        from .tenancy.replay import claim_nonce
+        from .tenancy.site_keys import resolve_site_key
+
+        secret = self.settings.edge_signing_secret
+        if not secret:
+            raise _api_error("unauthenticated", "this server does not accept edge-forwarded captures")
+        ts = self.headers.get(TIMESTAMP_HEADER) or ""
+        sig = (self.headers.get(SIGNATURE_HEADER) or "").strip().lower()
+        expected = hmac.new(secret, ts.encode("ascii", "replace") + b"." + body, hashlib.sha256).hexdigest()
+        if not ts or not hmac.compare_digest(sig.encode("utf-8"), expected.encode("utf-8")):
+            raise _api_error("invalid_client", "the edge signature does not match the body")
+        try:
+            sent = float(ts)
+        except ValueError:
+            raise _api_error("invalid_client", "the edge timestamp must be unix seconds") from None
+        now = time.time()
+        window = self.settings.edge_timestamp_window_s
+        if abs(now - sent) > window:
+            raise _api_error("invalid_client", f"the edge timestamp is outside the {window} second window")
+        payload = self._json(body)
+        if not isinstance(payload, dict):
+            raise _api_error("invalid_request", "the body must be a JSON object")
+        payload = dict(payload)
+        site_key = payload.pop("site_key", None)
+        payload.pop("payload_sha256", None)  # the edge's own digest of the browser's body; the evidence holds the body
+        if payload.get("origin", "consumer") != "consumer" or payload.get("method") in ("staff", "import"):
+            raise _api_error("role_not_allowed", "a browser capture forwarded by the edge is always a consumer capture;"
+                                                 " the origin staff, import or regulatory is refused")
+        payload["origin"] = "consumer"
+        with connect(self.settings.dsn) as conn:
+            owner = resolve_site_key(conn, site_key)
+            if owner is None or owner.state == "revoked":
+                raise _api_error("invalid_client", "the site key is not known")
+            if owner.state != "active":
+                raise _api_error("source_not_allowed", "the capture source behind this site key is retired")
+            sent_source = payload.get("source_id")
+            if sent_source is not None and str(sent_source) != str(owner.source_id):
+                raise _api_error("source_not_allowed", "the source does not belong to the site key")
+            payload["source_id"] = str(owner.source_id)
+            if payload.get("event_type") == "grant" and not payload.get("brand_ids"):
+                payload["brand_ids"] = list(owner.brand_ids)
+            try:
+                claim_nonce(conn, owner.org_id, "edge:" + sig, datetime.now(timezone.utc) + timedelta(seconds=2 * window))
+            except ReplayError:
+                raise _api_error("invalid_client", "this signed edge request was already accepted") from None
+        return _EdgeClaims(owner.org_id, owner.credential_id), payload
 
     def _release_alarm(self, conn, token: str, event_id: str, exc: BaseException) -> None:
         from .alarms import ALARM_RELEASE_NOT_WRITTEN, AlarmWriteError, raise_operator_alarm
@@ -726,8 +885,18 @@ class _CloudHandler(BaseHTTPRequestHandler):
                 return self._send(200, {"items": answers, "batch_id": batch_id})
         except (GateRecordError, psycopg.Error, ServiceUnavailableError) as exc:
             _log.error("gate unavailable (request %s): %s", self.request_id, type(exc).__name__)
-            self._send(503, {"evidence_status": "unavailable:database", "policy_action": None,
+            cause = "restore_in_progress" if self._restore_pending() else "database"
+            self._send(503, {"evidence_status": f"unavailable:{cause}", "policy_action": None,
+                             **({"error": "restore_in_progress"} if cause == "restore_in_progress" else {}),
                              "notice": NOTICE, "request_id": self.request_id})
+
+    def _restore_pending(self) -> bool:
+        """True while a database restore is unreconciled (the gate refuses to answer until an operator finishes it)."""
+        try:
+            with connect(self.settings.dsn) as conn:
+                return bool(conn.execute("SELECT consentvault.restore_pending() AS p").fetchone()["p"])
+        except (ConsentVaultError, psycopg.Error):  # loud-failure-exempt: the answer is already a 503 naming the database
+            return False
 
     def _permission(self, body: bytes) -> None:
         self._gate(body, False)

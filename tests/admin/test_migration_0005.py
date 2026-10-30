@@ -102,7 +102,7 @@ def test_the_down_file_refuses_while_any_admin_record_exists(vault):
 
 
 def test_the_down_file_refuses_a_filtered_role(vault):
-    with vault.owner() as o:  # the schema owner is bound by row security: it must get an error, not a count of zero
+    with vault.operator() as o:  # the schema owner is bound by row security: it must get an error, not a count of zero
         with pytest.raises(psycopg.Error):
             o.execute(open(DOWN).read())
         o.execute("ROLLBACK")

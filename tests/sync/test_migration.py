@@ -86,7 +86,7 @@ def test_the_database_itself_refuses_a_non_https_endpoint_and_a_bad_shape(env):
     a = env.t.a
     base = ("INSERT INTO consentvault.connected_system (org_id, name, kind, endpoint, signature, contact_form, public_key,"
             " credentials_ct) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)")
-    with env.t.owner() as o, org_transaction(o, env.t.admin_token(a.org_id)):
+    with env.t.operator() as o, org_transaction(o, env.t.admin_token(a.org_id)):
         for endpoint in ("http://crm.example.test/hook", "https://user:pw@crm.example.test/hook", "https://", "ftp://x"):
             with pytest.raises(psycopg.errors.CheckViolation):
                 with o.transaction():

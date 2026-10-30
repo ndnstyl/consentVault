@@ -15,7 +15,8 @@ Kinds of route:
 - ``identity``  a signed-in person's identity token and no organisation chosen yet.
 - ``public``    no sign-in (the invitation read); the edge rate-limits it.
 - ``accept``    an identity token plus the invitation token in the path.
-- ``operator``  an operator id the operator console established; runs on the schema owner's connection.
+- ``operator``  an operator id the operator console established; runs on the operator console login's connection
+                (``owner_connect``; a member of consentvault_console, never the schema owner).
 """
 
 from __future__ import annotations
@@ -28,9 +29,9 @@ from typing import Any, Callable, Optional
 import psycopg
 
 from . import admin, admin_policy as pol, invite as invite_mod, session as session_mod
-from .admin_base import (ROLE_ADMIN, ROLE_DEVELOPER, ROLE_VIEWER, ApiError, Ctx, body_dict)
+from .admin_base import (ROLE_ADMIN, ROLE_DEVELOPER, ROLE_VIEWER, ApiError, Ctx, body_dict, iso)
 from .errors import TenantTokenError
-from .tokens import TokenKey, org_transaction
+from .tokens import TokenKey, org_transaction, token_expires_at
 
 A, D, V = ROLE_ADMIN, ROLE_DEVELOPER, ROLE_VIEWER
 
@@ -73,6 +74,7 @@ ROUTES: tuple[Route, ...] = (
     # session and organisation (session.md)
     _r("GET", "/v1/session", "identity", (), 200, "session_get"),
     _r("POST", "/v1/session/org", "identity", (), 200, "session_choose"),
+    _r("GET", "/v1/session/current-org", "current_org", (A, D, V), 200, "current_org"),
     _r("GET", "/v1/org", "tenant", (A, D, V), 200, "org_get"),
     _r("GET", "/v1/health", "tenant", (A, D, V), 200, "health"),
     # operator (admin.md section 1)
@@ -82,6 +84,8 @@ ROUTES: tuple[Route, ...] = (
     # brands, sources, credentials, retention (admin.md)
     _r("GET", "/v1/brands", "tenant", (A, D), 200, "brands_list"),
     _r("POST", "/v1/brands", "tenant", (A,), 201, "brands_create"),
+    _r("GET", "/v1/brand-names", "tenant", (A, D, V), 200, "brand_names"),
+    _r("GET", "/v1/source-names", "tenant", (A, D, V), 200, "source_names"),
     _r("GET", "/v1/sources", "tenant", (A, D), 200, "sources_list"),
     _r("GET", "/v1/sources/{source_id}", "tenant", (A, D), 200, "sources_get"),
     _r("POST", "/v1/sources", "tenant", (A, D), 201, "sources_create"),
@@ -125,6 +129,7 @@ ROUTES: tuple[Route, ...] = (
     _r("POST", "/v1/checklists", "tenant", (A,), 201, "checklists_create"),
     _r("PUT", "/v1/checklists/{version}", "tenant", (A,), 200, "checklists_update"),
     _r("POST", "/v1/checklists/{version}:approve", "tenant", (A,), 200, "checklists_approve"),
+    _r("POST", "/v1/doc-checks", "tenant", (A,), 201, "doc_checks"),
     _r("GET", "/v1/rule-references", "tenant", (A, D, V), 200, "rule_references"),
 )
 
@@ -198,6 +203,16 @@ class AdminApp:
         finally:
             conn.close()
 
+    def _run_current_org(self, route: Route, params: dict, req: Request):
+        if req.tenant_token:
+            out = dict(self._run_tenant(route, params, req))
+            out["expires_at"] = iso(token_expires_at(req.tenant_token))
+            return out
+        if req.identity_token and self._sessions is not None:
+            self._sessions.verify(req.identity_token)
+            raise ApiError("no_org_selected", "no organization is chosen for this session; choose one with POST /v1/session/org")
+        raise ApiError("unauthenticated", "no session token was presented")
+
     def _run_public(self, route: Route, params: dict, req: Request):
         conn = self._connect()
         try:
@@ -244,6 +259,18 @@ class AdminApp:
                                                public_key=b.get("public_key"), algorithm=b.get("algorithm"))
 
     # ---- tenant handlers -----------------------------------------------------------------------------------------------
+    def h_current_org(self, ctx, p, q, b):
+        return admin.current_org(ctx)
+
+    def h_brand_names(self, ctx, p, q, b):
+        return admin.list_brand_names(ctx, **_paging(q))
+
+    def h_source_names(self, ctx, p, q, b):
+        return admin.list_source_names(ctx, **_paging(q))
+
+    def h_doc_checks(self, ctx, p, q, b):
+        return pol.record_doc_checks(ctx, b)
+
     def h_org_get(self, ctx, p, q, b):
         return admin.get_org(ctx)
 

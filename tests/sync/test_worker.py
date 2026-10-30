@@ -638,3 +638,90 @@ def test_the_starting_org_rotates_and_pushes_per_org_are_capped(env):
     assert len(set(firsts)) > 1  # a different organisation went first
     with pytest.raises(WorkerError, match="lease_seconds"):
         WorkerConfig(batch_size=50, lease_seconds=60)
+
+
+# ---- wave 2 hardening, item (c): organisations drain in parallel on a bounded pool ----------------------------------
+def _parallel(env, **config):
+    worker = env.make_worker(**config)
+    with env.worker_conn() as w:
+        return worker.run_once(w, raise_on_error=False, connect=env.worker_conn)
+
+
+def test_a_slow_receiver_holds_one_thread_and_another_org_goes_out_in_the_same_moment(env):
+    import threading
+    import time as _time
+    a, b = env.t.a, env.t.b
+    slow = env.add_system(a, "crm")
+    fast = env.add_system(b, "crm")
+    for phone in PHONES[:3]:
+        env.stop(a, phone)
+    env.stop(b, P1)
+    b_sent, real_send = threading.Event(), env.transport.send
+
+    def send(request):
+        if request.target_url == slow.endpoint:
+            assert b_sent.wait(20), "org B's stop did not go out while org A's receiver was stuck: the drain is serial"
+        elif request.target_url == fast.endpoint:
+            b_sent.set()
+        return real_send(request)
+    env.transport.send = send
+    t0 = _time.monotonic()
+    report = _parallel(env, max_parallel_orgs=2)
+    assert _time.monotonic() - t0 < 15
+    assert len(env.transport.to(fast.endpoint)) == 1 and len(env.transport.to(slow.endpoint)) == 3
+    assert (of(report, a).acknowledged, of(report, b).acknowledged) == (3, 1) and report.ok
+
+
+def test_the_parallel_drain_keeps_each_orgs_cap_and_matches_the_serial_counts(env):
+    a, b = env.t.a, env.t.b
+    env.add_system(a, "crm")
+    env.add_system(b, "crm")
+    for phone in PHONES[:10]:
+        env.stop(a, phone)
+    for phone in PHONES[:3]:
+        env.stop(b, phone)
+    report = _parallel(env, max_parallel_orgs=4, max_pushes_per_org=4)
+    assert of(report, a).acknowledged == 4 and of(report, a).capped
+    assert of(report, b).acknowledged == 3 and not of(report, b).capped and report.ok
+    again = _parallel(env, max_parallel_orgs=4, max_pushes_per_org=4)  # the next run continues where the cap stopped
+    assert of(again, a).acknowledged == 4
+
+
+def test_the_parallel_drain_keeps_the_per_org_deadline(env):
+    a, b = env.t.a, env.t.b
+    slow = env.add_system(a, "crm")
+    env.add_system(b, "crm")
+    for phone in PHONES[:30]:
+        env.stop(a, phone)
+    env.stop(b, P1)
+    real_send = env.transport.send
+
+    def send(request):
+        if request.target_url == slow.endpoint:
+            env.clock.advance(seconds=20)
+        return real_send(request)
+    env.transport.send = send
+    report = _parallel(env, max_parallel_orgs=2)
+    assert 0 < of(report, a).acknowledged < 30 and any("deadline" in e for e in of(report, a).errors)
+    assert of(report, b).acknowledged == 1
+
+
+def test_a_pool_thread_that_cannot_connect_is_a_named_run_error_not_a_skip(env):
+    env.add_system(env.t.a, "crm")
+    env.add_system(env.t.b, "crm")
+    env.stop(env.t.a, P1)
+    env.stop(env.t.b, P1)
+
+    def no_connect():
+        raise psycopg.OperationalError("the database is gone")
+    worker = env.make_worker(max_parallel_orgs=2)
+    with env.worker_conn() as w:
+        with pytest.raises(WorkerError, match="could not open its connection") as e:
+            worker.run_once(w, connect=no_connect)
+    assert all("no pool thread could run it" in " ".join(o.errors) for o in e.value.report.orgs)
+
+
+def test_the_pool_size_is_bounded():
+    for bad in (0, 65):
+        with pytest.raises(WorkerError, match="max_parallel_orgs"):
+            WorkerConfig(max_parallel_orgs=bad)

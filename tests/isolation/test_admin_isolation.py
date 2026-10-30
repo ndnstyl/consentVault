@@ -62,7 +62,7 @@ def populate(vault, name, domain):
                                 method="checkbox", origin="consumer", disclosure_sha256=word, source_id=uuid.UUID(src),
                                 brand_ids=[uuid.UUID(brand)])
     # an export job row as the evidence-export lane would hold it
-    with vault.owner() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
+    with vault.operator() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
         o.execute("INSERT INTO consentvault.export_job (org_id, contact_fp, requested_by) VALUES (%s, %s, %s)",
                   (org["org_id"], "ab" * 32, boss.member_id))
     t = Two()
@@ -72,7 +72,7 @@ def populate(vault, name, domain):
 
 
 def wrapped_fp(vault, org_id):
-    with vault.owner() as c, org_transaction(c, mint_org_token(vault.key, org_id, ["admin"], credential_id=None)):
+    with vault.operator() as c, org_transaction(c, mint_org_token(vault.key, org_id, ["admin"], credential_id=None)):
         return c.execute("SELECT wrapped FROM consentvault.org_fingerprint_secret").fetchone()["wrapped"]
 
 
@@ -93,7 +93,7 @@ def tok(vault, t, scopes=("admin",)):
 def test_a_token_for_one_org_sees_only_its_own_rows_in_every_admin_table(two, table):
     a, b = two
     vault = a.vault
-    with vault.owner() as o, org_transaction(o, tok(vault, a)):  # the owner, bound by row security like everyone
+    with vault.operator() as o, org_transaction(o, tok(vault, a)):  # the owner, bound by row security like everyone
         seen = {r["org_id"] for r in o.execute(f"SELECT org_id FROM consentvault.{table}")}
         assert seen == {uuid.UUID(a.org["org_id"])}, table
     with vault.superuser() as su:  # and the table really does hold B's rows, so the empty read above means something
@@ -106,7 +106,7 @@ def test_a_token_for_one_org_cannot_update_or_delete_the_others_rows(two, table)
     vault = a.vault
     with vault.superuser() as su:
         before = su.execute(f"SELECT count(*) AS n FROM consentvault.{table} WHERE org_id = %s", (b.org["org_id"],)).fetchone()["n"]
-    with vault.owner() as o, org_transaction(o, tok(vault, a)):
+    with vault.migrator() as o, org_transaction(o, tok(vault, a)):  # owner rights: still fenced by row security
         # both statements match no row of B (row security hides them) or are refused by a guard; neither touches B
         for sql in (f"DELETE FROM consentvault.{table} WHERE org_id = %s", f"UPDATE consentvault.{table} SET org_id = org_id WHERE org_id = %s"):
             try:
@@ -308,7 +308,7 @@ def test_a_policy_approval_in_one_org_leaves_the_others_in_force(two):
 def test_suspending_one_org_leaves_the_other_working(two):
     a, b = two
     from consentvault.tenancy import admin
-    with a.vault.owner() as o:
+    with a.vault.operator() as o:
         admin.set_org_status(o, token_key=a.vault.key, operator_id="op", request_id="r", org_id=a.org["org_id"], status="suspended", reason="x")
     a.boss.err("POST", "/v1/systems", body={"name": "n", "kind": "crm", "endpoint": "https://x.example/", "signature": "hmac",
                                             "contact_form": "fingerprint"}, name="org_suspended")

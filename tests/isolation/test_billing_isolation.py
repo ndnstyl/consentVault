@@ -74,13 +74,13 @@ def test_events_counted_are_the_tokens_own_org_only(tenancy):
             counts[org.name] = app.execute("SELECT consentvault.usage_events_for_day(%s) AS n", (today,)).fetchone()["n"]
     with tenancy.superuser() as su:
         total = su.execute("SELECT count(*) AS n FROM consentvault.event WHERE org_id IN (%s, %s)"
-                           " AND received_at::date = %s", (tenancy.a.org_id, tenancy.b.org_id, today)).fetchone()["n"]
+                           " AND (received_at AT TIME ZONE 'UTC')::date = %s", (tenancy.a.org_id, tenancy.b.org_id, today)).fetchone()["n"]
     assert counts == {"alpha": 2, "bravo": 2} and total == 4  # never the sum of both
 
 
 def test_usage_writes_land_on_the_tokens_org_and_cannot_name_another(tenancy, pg_server):
     seed_billing(tenancy)
-    worker = db.connect(make_login_role(pg_server["port"], tenancy.owner_dsn.rsplit("/", 1)[1], "consentvault_worker"))
+    worker = db.connect(make_login_role(pg_server["port"], tenancy.operator_dsn.rsplit("/", 1)[1], "consentvault_worker"))
     with worker:
         tok = worker.execute("SELECT token FROM consentvault.dispatch_orgs('usage') WHERE org_id = %s",
                              (tenancy.a.org_id,)).fetchone()["token"]
@@ -97,7 +97,7 @@ def test_usage_writes_land_on_the_tokens_org_and_cannot_name_another(tenancy, pg
 
 
 def test_webhook_functions_are_the_app_roles_alone(tenancy, pg_server):
-    worker = db.connect(make_login_role(pg_server["port"], tenancy.owner_dsn.rsplit("/", 1)[1], "consentvault_worker"))
+    worker = db.connect(make_login_role(pg_server["port"], tenancy.operator_dsn.rsplit("/", 1)[1], "consentvault_worker"))
     with worker:
         for sql in ("SELECT consentvault.billing_record_event('evt_1', 'x')",
                     "SELECT consentvault.billing_apply_status(gen_random_uuid(), 'active', 'invoice_paid', 'evt_1')",

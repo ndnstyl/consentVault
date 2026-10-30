@@ -92,7 +92,7 @@ def test_hmac_secret_is_shown_once_and_stored_only_encrypted(world):
     c = dev.ok("POST", "/v1/credentials", body={"name": "Webhook", "kind": "hmac_fallback", "scope": "capture", "source_id": src})
     assert c["shown_once"] is True and len(c["secret"]) == 64
     raw = bytes.fromhex(c["secret"])
-    with vault.owner() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
+    with vault.operator() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
         ct = bytes(o.execute("SELECT secret_ct FROM consentvault.credential WHERE credential_id = %s",
                              (c["credential_id"],)).fetchone()["secret_ct"])
     assert raw not in ct and vault.custody.unwrap(org["org_id"], ct) == raw
@@ -130,7 +130,7 @@ def test_production_check_credentials_only_after_a_policy_is_approved(world):
 
 def test_the_operator_alone_issues_capture_verified_and_never_to_a_site_key(world):
     vault, org, boss, dev, viewer, src = world
-    with vault.owner() as o:
+    with vault.operator() as o:
         c = admin.issue_verified_credential(o, token_key=vault.key, custody=vault.custody, operator_id="op-1", request_id="r",
                                             org_id=org["org_id"], name="verified", kind="hmac_fallback", source_id=src)
         assert c["scope"] == "capture_verified" and c["shown_once"]
@@ -169,12 +169,12 @@ def test_revoke(world):
 def test_suspended_and_offboarding_organisations_issue_nothing_new(world):
     vault, org, boss, dev, viewer, src = world
     body = {"name": "late", "kind": "hmac_fallback", "scope": "capture", "source_id": src}
-    with vault.owner() as o:
+    with vault.operator() as o:
         admin.set_org_status(o, token_key=vault.key, operator_id="op", request_id="r", org_id=org["org_id"], status="suspended", reason="x")
     boss.err("POST", "/v1/credentials", body=body, name="org_suspended", status=403)
     existing = boss.ok("GET", "/v1/credentials")  # reads continue
     assert existing["items"] == []
-    with vault.owner() as o:
+    with vault.operator() as o:
         admin.set_org_status(o, token_key=vault.key, operator_id="op", request_id="r", org_id=org["org_id"], status="offboarding", reason="x")
     boss.err("POST", "/v1/credentials", body=body, name="org_not_active", status=403)
 

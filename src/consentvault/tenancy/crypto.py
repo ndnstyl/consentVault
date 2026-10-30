@@ -188,6 +188,17 @@ class TenantCrypto:
             raise KeyProviderError(f"unwrap_data_key must return {DATA_KEY_BYTES} bytes")
         return data_key
 
+    def rewrap_contact_key(self, org_id: uuid.UUID | str, wrapped: WrappedKey) -> WrappedKey:
+        """The same contact data key wrapped under the organisation's active key version (key rotation). The data key
+        never changes, so nothing it encrypted changes."""
+        org = _org(org_id)
+        data_key = self.open_contact_key(org, wrapped)
+        out = self._call("wrap_data_key", org, data_key)
+        if not isinstance(out, WrappedKey) or not isinstance(out.ciphertext, bytes) \
+                or not isinstance(out.key_version, int) or out.key_version < 1:
+            raise KeyProviderError("wrap_data_key must return a WrappedKey with bytes and a key version >= 1")
+        return out
+
     def _call(self, method: str, *args):
         try:
             return getattr(self._provider, method)(*args)

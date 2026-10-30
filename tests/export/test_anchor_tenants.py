@@ -116,7 +116,7 @@ def test_an_organization_with_no_sink_is_a_named_failure_and_an_empty_ledger_is_
     assert err.value.failures[0][0] == str(t.b.org_id) and "no anchor sink" in err.value.failures[0][1]
     from isolation.harness import create_org
 
-    with db.connect(t.owner_dsn) as owner:
+    with db.connect(t.operator_dsn) as owner:
         c = create_org(owner, t.key, t.provider, "charlie")
     sinks = {**anchors["sinks"], c.org_id: FileAnchorSink(anchors["tmp"] / "charlie.jsonl")}
     results = run(anchors, sinks)

@@ -1,0 +1,28 @@
+# Placeholder settings for the self-host stack. bin/make-settings.sh copies this to selfhost.settings (gitignored)
+# with random values in place of every CHANGE_ME. Never commit the filled copy.
+POSTGRES_ADMIN_PASSWORD=CHANGE_ME
+CONSENTVAULT_MIGRATOR_PASSWORD=CHANGE_ME
+CONSENTVAULT_OPERATOR_PASSWORD=CHANGE_ME
+CONSENTVAULT_APP_PASSWORD=CHANGE_ME
+KEYCLOAK_DB_PASSWORD=CHANGE_ME
+# Write-once evidence store (RustFS, S3 API). Credentials of the store itself, not of a cloud account.
+S3_ACCESS_KEY=CHANGE_ME
+S3_SECRET_KEY=CHANGE_ME
+S3_EVIDENCE_BUCKET=evidence
+S3_DEFAULT_RETENTION_DAYS=1
+KEYCLOAK_ADMIN=CHANGE_ME
+KEYCLOAK_ADMIN_PASSWORD=CHANGE_ME
+# The address people and the vault use to reach Keycloak. It is the token issuer, so it must stay stable.
+KEYCLOAK_PUBLIC_URL=http://localhost:8081
+CONSENTVAULT_PURPOSES=marketing,service
+CONSENTVAULT_TSA_URL=CHANGE_ME_TSA_URL
+CONSENTVAULT_ANCHOR_SINK=CHANGE_ME_ANCHOR_WEBHOOK_URL
+CONSENTVAULT_API_SECRET=CHANGE_ME
+CONSENTVAULT_API_TOKEN=CHANGE_ME
+# Loopback ports the stack publishes (change when one is taken on the host).
+DB_PORT=5432
+S3_PORT=9000
+OPENBAO_PORT=8200
+KEYCLOAK_PORT=8081
+VAULT_PORT=8080
+SUITES_DB_PORT=55432

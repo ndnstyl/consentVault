@@ -67,7 +67,7 @@ def _pem(public_key) -> str:
 
 def add_credential(t: Tenancy, org: Org, scope: str, alg: str) -> Client:
     key = ec.generate_private_key(ec.SECP256R1()) if alg == "ES256" else ed25519.Ed25519PrivateKey.generate()
-    with t.owner() as o, org_transaction(o, t.admin_token(org.org_id)):
+    with t.operator() as o, org_transaction(o, t.admin_token(org.org_id)):
         cid = o.execute(
             "INSERT INTO consentvault.credential (org_id, source_id, kind, alg, public_key, scope)"
             " VALUES (%s, %s, 'jwt_public_key', %s, %s, %s) RETURNING credential_id",
@@ -77,7 +77,7 @@ def add_credential(t: Tenancy, org: Org, scope: str, alg: str) -> Client:
 
 def approve_policy(t: Tenancy, org: Org, rules: dict, version: int = 1) -> int:
     member = uuid.uuid4()
-    with t.owner() as o, org_transaction(o, t.admin_token(org.org_id)):
+    with t.operator() as o, org_transaction(o, t.admin_token(org.org_id)):
         o.execute("UPDATE consentvault.policy SET status = 'retired', retired_at = now(), retired_by_version = %s"
                   " WHERE org_id = %s AND status = 'approved'", (version, org.org_id))
         o.execute("INSERT INTO consentvault.policy (org_id, version, rules, status, approved_by, approved_at)"
@@ -90,7 +90,7 @@ def approve_policy(t: Tenancy, org: Org, rules: dict, version: int = 1) -> int:
 
 def provision(t: Tenancy, org: Org) -> CloudOrg:
     co = CloudOrg(org)
-    with t.owner() as o, org_transaction(o, t.admin_token(org.org_id)):
+    with t.operator() as o, org_transaction(o, t.admin_token(org.org_id)):
         for ch in CHANNELS:
             o.execute("INSERT INTO consentvault.channel (org_id, channel, label) VALUES (%s, %s, %s)",
                       (org.org_id, ch, ch))
@@ -108,7 +108,7 @@ def provision(t: Tenancy, org: Org) -> CloudOrg:
 
 
 class Cloud:
-    def __init__(self, t: Tenancy, evidence_dir: str):
+    def __init__(self, t: Tenancy, evidence_dir: str, **settings_extra):
         self.t = t
         self.access = AccessTokenSigner.generate(key_id="at-test", issuer="https://api.consentvault.test")
         self.receipts = ReceiptSigner.generate(key_id="rcpt-test")
@@ -116,7 +116,7 @@ class Cloud:
         self.settings = api.CloudApiSettings(
             dsn=t.app_dsn, token_key=t.key, access_tokens=self.access, receipts=self.receipts, crypto=t.crypto,
             evidence_store=self.store, token_endpoint_url=TOKEN_URL, cursor_key=os.urandom(32),
-            allowed_hosts=("127.0.0.1",), default_retain_years=7, region="US")
+            allowed_hosts=("127.0.0.1",), default_retain_years=7, region="US", **settings_extra)
         self.a = provision(t, t.a)
         self.b = provision(t, t.b)
         self.a.policy_version = approve_policy(t, t.a, policy_rules())

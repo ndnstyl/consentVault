@@ -110,3 +110,22 @@ test('error cause lines follow the formula and never hide an unknown name', () =
   assert.equal(causeLine(418, 'teapot'), 'The service answered 418 teapot');
   assert.equal(causeLine(0, 'unreachable'), 'The service could not be reached (unreachable)');
 });
+
+test('the admin confirms the final export by posting the fingerprint of the file they received', async () => {
+  const sha = 'a'.repeat(64);
+  const seen: { url: string; method: string; body: unknown }[] = [];
+  const stub = (async (url: string | URL | Request, init?: RequestInit) => {
+    seen.push({ url: String(url), method: String(init?.method), body: JSON.parse(String(init?.body)) });
+    return new Response(JSON.stringify({ request_id: 'req 1', final_export_delivered: { status: 'done', at: '2026-10-29T00:00:00Z', sha256: sha, via: 'link 1234abcd', confirmed_by: 'mem_1' } }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  const api = createClient({ baseUrl: 'http://vault.test', fetch: stub });
+  const out = await api.session.confirmFinalExport('req 1', sha);
+  assert.equal(out.final_export_delivered.sha256, sha);
+  assert.deepEqual(seen, [{ url: 'http://vault.test/v1/offboarding/req%201/final-export:confirm', method: 'POST', body: { sha256: sha } }]);
+});
+
+test('a fingerprint that does not match is a named error the screen can show', async () => {
+  const stub = (async () => new Response(JSON.stringify({ error: 'validation_failed', detail: 'the digest does not match the final export; download it again with a new link', request_id: 'r1', fields: { sha256: 'mismatch' } }), { status: 422 })) as typeof fetch;
+  const api = createClient({ baseUrl: 'http://vault.test', fetch: stub });
+  await assert.rejects(api.session.confirmFinalExport('req1', 'b'.repeat(64)), (e: unknown) => e instanceof ApiError && e.code === 'validation_failed' && e.fields.sha256 === 'mismatch');
+});

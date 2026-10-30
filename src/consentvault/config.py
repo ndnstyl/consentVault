@@ -20,13 +20,18 @@ ENV_TSA = "CONSENTVAULT_TSA_URL"
 ENV_CONFIG = "CONSENTVAULT_CONFIG"
 ENV_MIGRATIONS = "CONSENTVAULT_MIGRATIONS"
 ENV_OWNER_DSN = "CONSENTVAULT_OWNER_DSN"
+ENV_OPERATOR_DSN = "CONSENTVAULT_OPERATOR_DSN"
 ENV_PURPOSES = "CONSENTVAULT_PURPOSES"
 ENV_ANCHOR_SINK = "CONSENTVAULT_ANCHOR_SINK"
 ENV_SEAL_MAX_DELAY = "CONSENTVAULT_SEAL_MAX_DELAY_SECONDS"
 ENV_UNSEALED_GRACE = "CONSENTVAULT_UNSEALED_GRACE_SECONDS"
+ENV_BACKUP_RETENTION = "CONSENTVAULT_BACKUP_RETENTION_DAYS"
 
 DEFAULT_SEAL_MAX_DELAY_SECONDS = 24 * 3600
 DEFAULT_UNSEALED_GRACE_SECONDS = 3600
+# How long the oldest database backup is kept (the managed database's automated backup window): a retired organisation
+# key version is kept this long after the last key moved off it, so a restore of any backup still opens.
+DEFAULT_BACKUP_RETENTION_DAYS = 35
 
 
 @dataclass(frozen=True)
@@ -36,18 +41,31 @@ class Config:
     tsa_url: str | None = None
     migrations_dir: str | None = None
     owner_dsn: str | None = None
+    operator_dsn: str | None = None
     purposes: tuple[str, ...] = ()
     anchor_sink: str | None = None
     seal_max_delay_seconds: int = DEFAULT_SEAL_MAX_DELAY_SECONDS
     unsealed_grace_seconds: int = DEFAULT_UNSEALED_GRACE_SECONDS
+    backup_retention_days: int = DEFAULT_BACKUP_RETENTION_DAYS
 
     def require_owner_dsn(self) -> str:
+        """The migration login (consentvault_migrator): a member of the NOLOGIN schema owner, used only by migrate."""
         if not self.owner_dsn:
             raise ConfigError(
-                f"no owner DSN: set {ENV_OWNER_DSN} or 'owner_dsn' in consentvault.toml. Migrations run as the role "
-                "that owns the schema; every other command uses the restricted 'dsn'"
+                f"no migration DSN: set {ENV_OWNER_DSN} or 'owner_dsn' in consentvault.toml to the migrator login (a "
+                "member of the schema owner). Migrations run as the schema owner; every other command uses the "
+                "restricted 'dsn'"
             )
         return self.owner_dsn
+
+    def require_operator_dsn(self) -> str:
+        """The operator console's login (consentvault_operator_login): the operator jobs, never the schema owner."""
+        if not self.operator_dsn:
+            raise ConfigError(
+                f"no operator DSN: set {ENV_OPERATOR_DSN} or 'operator_dsn' in consentvault.toml to the operator console "
+                "login (a member of consentvault_console). The operator jobs never run as the schema owner"
+            )
+        return self.operator_dsn
 
     def require_purposes(self) -> tuple[str, ...]:
         if not self.purposes:
@@ -128,14 +146,21 @@ def load_config(path: str | os.PathLike | None = None, env: Mapping[str, str] | 
         raise ConfigError("setting 'unsealed_grace_seconds' must be a whole number of seconds") from None
     if grace < 1:
         raise ConfigError("setting 'unsealed_grace_seconds' must be at least 1")
+    raw_backup = env.get(ENV_BACKUP_RETENTION) or data.get("backup_retention_days", DEFAULT_BACKUP_RETENTION_DAYS)
+    if isinstance(raw_backup, bool) or not str(raw_backup).strip().isdigit():
+        raise ConfigError("setting 'backup_retention_days' must be a whole number of days, 0 or more (the oldest "
+                          f"database backup's age; default {DEFAULT_BACKUP_RETENTION_DAYS})")
+    backup_days = int(raw_backup)
     return Config(
         dsn=pick(ENV_DSN, "dsn"),
         default_region=region.upper() if region else None,
         tsa_url=pick(ENV_TSA, "tsa_url"),
         migrations_dir=pick(ENV_MIGRATIONS, "migrations_dir"),
         owner_dsn=pick(ENV_OWNER_DSN, "owner_dsn"),
+        operator_dsn=pick(ENV_OPERATOR_DSN, "operator_dsn"),
         purposes=purposes,
         anchor_sink=pick(ENV_ANCHOR_SINK, "anchor_sink"),
         seal_max_delay_seconds=delay,
         unsealed_grace_seconds=grace,
+        backup_retention_days=backup_days,
     )

@@ -404,9 +404,10 @@ def tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any, page: 
         return [{"event_id": str(r["event_id"]), "checklist_version": r["checklist_version"],
                  "present": list(r["present"] or []), "missing": list(r["missing"] or [])}
                 for r in conn.execute(
-                    "SELECT event_id, checklist_version, present, missing FROM consentvault.doc_check_result"
+                    "SELECT DISTINCT ON (event_id, checklist_version) event_id, checklist_version, present, missing"
+                    " FROM consentvault.doc_check_result"
                     " WHERE org_id = consentvault.current_org() AND event_id = ANY(%s::uuid[])"
-                    " ORDER BY event_id, checklist_version", ([str(i) for i in ids],))]
+                    " ORDER BY event_id, checklist_version, checked_at DESC, check_id DESC", ([str(i) for i in ids],))]
 
     def chain():
         subject = {r["seq"] for r in ev_rows}

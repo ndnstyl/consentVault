@@ -11,6 +11,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
+from conftest import superuser_of
 from consentvault import anchor as anchor_mod
 from consentvault import db, disclosure as disc
 from consentvault.errors import (
@@ -57,11 +58,13 @@ def _stop(conn, event_type="revoke", **kw):
 
 
 def _as_owner_without_triggers(conn, table, sql, params=()):
-    conn.execute(f"ALTER TABLE consentvault.{table} DISABLE TRIGGER USER")
-    try:
-        conn.execute(sql, params)
-    finally:
-        conn.execute(f"ALTER TABLE consentvault.{table} ENABLE TRIGGER USER")
+    """Tamper below the triggers. Only a superuser can switch a vault trigger off (the trigger guard), so it runs as one."""
+    with superuser_of(conn) as su:
+        su.execute(f"ALTER TABLE consentvault.{table} DISABLE TRIGGER USER")
+        try:
+            su.execute(sql, params)
+        finally:
+            su.execute(f"ALTER TABLE consentvault.{table} ENABLE TRIGGER USER")
 
 
 # one migration, one hash version, ordered history ------------------------------------------------------------

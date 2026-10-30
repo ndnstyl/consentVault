@@ -43,7 +43,7 @@ def test_a_new_version_supersedes_the_old_one_both_ways_and_only_once(world):
     assert [w["sha256"] for w in boss.ok("GET", "/v1/disclosures", {"state": "superseded"})["items"]] == [v1["sha256"]]
     # nothing edits or deletes wording
     import psycopg
-    with vault.owner() as o:
+    with vault.migrator() as o:  # the owner's rights: the guard, not a missing grant, refuses
         from consentvault.tenancy.tokens import mint_org_token, org_transaction
         with org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
             with pytest.raises(psycopg.errors.IntegrityConstraintViolation):

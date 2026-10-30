@@ -39,8 +39,8 @@ def test_retention_refusals(world):
         who.err("PUT", "/v1/retention", body={"evidence_years": 8, "reason": "x"}, name="role_not_allowed")
     dev.err("GET", "/v1/retention", name="role_not_allowed")
     import psycopg
-    with vault.owner() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
-        with pytest.raises(psycopg.errors.IntegrityConstraintViolation):  # append-only
+    with vault.migrator() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
+        with pytest.raises(psycopg.errors.IntegrityConstraintViolation):  # append-only, even for the owner's rights
             o.execute("UPDATE consentvault.retention_policy SET evidence_years = 99")
 
 
@@ -60,7 +60,7 @@ def test_systems_register_with_a_one_time_secret_or_a_readable_public_key(world)
     assert [s["name"] for s in listed] == ["CRM", "Dialer"] and "hmac_secret" not in str(listed) and "PRIVATE" not in str(listed)
     assert viewer.ok("GET", f"/v1/systems/{ed['system_id']}")["public_key"] == ed["public_key"]
     # the private half and the HMAC secret exist only wrapped under the organisation key
-    with vault.owner() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
+    with vault.operator() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
         rows = {r["name"]: bytes(r["credentials_ct"]) for r in o.execute("SELECT name, credentials_ct FROM consentvault.connected_system")}
     assert vault.custody.unwrap(org["org_id"], rows["CRM"]) == bytes.fromhex(hm["hmac_secret"])
     assert len(vault.custody.unwrap(org["org_id"], rows["Dialer"])) == 32
@@ -102,7 +102,7 @@ def test_system_edit_pause_and_the_plaintext_choice_is_audited(world):
 
 def test_suspended_organisations_register_no_new_systems(world):
     vault, org, boss, dev, viewer = world
-    with vault.owner() as o:
+    with vault.operator() as o:
         admin.set_org_status(o, token_key=vault.key, operator_id="op", request_id="r", org_id=org["org_id"], status="suspended", reason="x")
     boss.err("POST", "/v1/systems", body=SYS, name="org_suspended", status=403)
 
@@ -151,7 +151,7 @@ def test_the_action_list_covers_every_action_the_log_uses(world):
 def test_the_chain_verifies_and_tampering_is_detected(world):
     vault, org, boss, dev, viewer = world
     boss.ok("POST", "/v1/brands", body={"display_name": "A"})
-    with vault.owner() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
+    with vault.operator() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
         assert audit.chain_breaks(o) == []
         head = audit.head(o)
         assert head["seq"] >= 4
@@ -159,7 +159,7 @@ def test_the_chain_verifies_and_tampering_is_detected(world):
         su.execute("ALTER TABLE consentvault.audit_event DISABLE TRIGGER audit_event_append_only")
         su.execute("UPDATE consentvault.audit_event SET reason = 'edited later' WHERE org_id = %s AND seq = 2", (org["org_id"],))
         su.execute("ALTER TABLE consentvault.audit_event ENABLE TRIGGER audit_event_append_only")
-    with vault.owner() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
+    with vault.operator() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
         broken = audit.chain_breaks(o)
         assert [(b["seq"], b["reason"]) for b in broken] == [(2, "row_hash_mismatch")]
 
@@ -168,10 +168,10 @@ def test_no_fork_no_gap_no_edit_no_delete(world):
     vault, org, boss, dev, viewer = world
     import psycopg
     tok = mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)
-    with vault.owner() as o, org_transaction(o, tok):
+    with vault.migrator() as o, org_transaction(o, tok):  # the owner's rights: the guard, not a missing grant, refuses
         with pytest.raises(psycopg.errors.IntegrityConstraintViolation):
             o.execute("UPDATE consentvault.audit_event SET action = 'x.yy'")
-    with vault.owner() as o, org_transaction(o, tok):
+    with vault.migrator() as o, org_transaction(o, tok):
         with pytest.raises(psycopg.errors.IntegrityConstraintViolation):
             o.execute("DELETE FROM consentvault.audit_event")
     with vault.superuser() as su:  # even the owner path cannot insert a row that skips ahead or forks
@@ -203,7 +203,7 @@ def test_concurrent_writers_never_fork_a_chain(world):
     [t.start() for t in ts]
     [t.join() for t in ts]
     assert not errs
-    with vault.owner() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
+    with vault.operator() as o, org_transaction(o, mint_org_token(vault.key, org["org_id"], ["admin"], credential_id=None)):
         assert audit.chain_breaks(o) == []
         n = o.execute("SELECT count(*) AS n FROM consentvault.audit_event WHERE action = 'brand.created'").fetchone()["n"]
     assert n == 20
@@ -211,7 +211,7 @@ def test_concurrent_writers_never_fork_a_chain(world):
 
 def test_the_platform_chain_is_separate_and_hidden_from_tenants(world):
     vault, org, boss, dev, viewer = world
-    with vault.owner() as o:
+    with vault.operator() as o:
         a = audit.platform_head(o)
         audit.append_platform(o, operator_id="op-1", action="org.status_changed", target_kind="org", target_id="x", request_id="r1")
         b = audit.platform_head(o)

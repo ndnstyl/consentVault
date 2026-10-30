@@ -211,7 +211,8 @@ def test_proof_shows_a_its_own_record_and_b_nothing(cloud):
     assert cloud.grant(cloud.a, X)[0] == 201
     cloud.gate(cloud.a, X)
     s, p = cloud.proof(cloud.a, X)
-    assert s == 200 and p["found"] is True and p["partial"] == ["doc_check_results"]
+    assert s == 200 and p["found"] is True and p["partial"] == []
+    assert p["doc_check_results"] == []  # stored results are readable now; this record was never checked
     assert p["timeline"]["items"][0]["event_type"] == "grant"
     assert p["gate_decisions"]["items"][0]["evidence_status"] == "consent_record_found"
     assert p["permissions"][0]["policy_action"] == "proceed"

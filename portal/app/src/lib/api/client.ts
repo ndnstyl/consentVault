@@ -106,6 +106,8 @@ export function createClient(opts: ClientOptions = {}) {
       org: () => get<T.Org>('/v1/org'),
       health: () => get<T.Health>('/v1/health'),
       requestOffboarding: (reason: string, org_name: string) => post<{ request_id: string; status: 'requested'; requested_at: string }>('/v1/offboarding-requests', { reason, org_name }),
+      // admin.md, final export delivery: the admin posts the sha256 of the file they downloaded; delivery is recorded only on a match
+      confirmFinalExport: (request_id: string, sha256: string) => post<T.FinalExportConfirmation>(`/v1/offboarding/${enc(request_id)}/final-export:confirm`, { sha256 }),
     },
     // members.md
     invites: {

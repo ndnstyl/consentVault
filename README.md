@@ -63,8 +63,9 @@ company's control. The gate, the consent timeline and the evidence bundle all re
 
 ```
 git clone https://github.com/ndnstyl/consentVault.git && cd consentVault
-export CONSENTVAULT_ADMIN_PASSWORD=$(openssl rand -hex 16)   # bootstrap role, used once to create the two below
-export CONSENTVAULT_OWNER_PASSWORD=$(openssl rand -hex 16)   # owns the schema; only `migrate` uses it
+export CONSENTVAULT_ADMIN_PASSWORD=$(openssl rand -hex 16)   # bootstrap superuser, used once to create the roles below
+export CONSENTVAULT_MIGRATOR_PASSWORD=$(openssl rand -hex 16) # migrator login; only `migrate` uses it (the owner cannot log in)
+export CONSENTVAULT_OPERATOR_PASSWORD=$(openssl rand -hex 16) # operator console login; owns nothing
 export CONSENTVAULT_APP_PASSWORD=$(openssl rand -hex 16)     # runtime role: SELECT and INSERT only
 export CONSENTVAULT_API_SECRET=$(openssl rand -hex 32)       # signs capture-edge requests
 export CONSENTVAULT_API_TOKEN=$(openssl rand -hex 32)        # bearer token for read endpoints
@@ -95,7 +96,7 @@ docker compose run --rm vault consentvault verify-chain
 ### Without Docker
 
 `uv sync` (or `pip install -e .[dev]`), point `CONSENTVAULT_DSN` at a PostgreSQL 15+ database,
-run `consentvault migrate` with `CONSENTVAULT_OWNER_DSN` set (the owner role), then use the restricted `CONSENTVAULT_DSN` for
+run `consentvault migrate` with `CONSENTVAULT_OWNER_DSN` set (the migrator login), then use the restricted `CONSENTVAULT_DSN` for
 everything else. See [deployment](docs/deployment.md).
 
 ### Command line tour

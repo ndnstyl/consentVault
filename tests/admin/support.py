@@ -28,13 +28,16 @@ class FakeIdentity:
     def __init__(self) -> None:
         self.known: dict[str, Identity] = {}
 
-    def issue(self, subject: str, email: str, *, name: str | None = None, mfa: bool = True, verified: bool = True) -> str:
+    def issue(self, subject: str, email: str, *, name: str | None = None, mfa: bool = True, verified: bool = True,
+              signed_in_s_ago: float | None = 0) -> str:
         token = "idt-" + uuid.uuid4().hex
         claims = {"sub": subject, "email": email, "email_verified": verified}
         if name:
             claims["name"] = name
         amr = ("hwk", "user") if mfa else ("pwd",)
-        self.known[token] = Identity(ISSUER, subject, amr, mfa, datetime.now(timezone.utc) + timedelta(hours=1), claims)
+        now = datetime.now(timezone.utc)
+        at = None if signed_in_s_ago is None else now - timedelta(seconds=signed_in_s_ago)
+        self.known[token] = Identity(ISSUER, subject, amr, mfa, now + timedelta(hours=1), claims, at)
         return token
 
     def verify(self, token, *, require_mfa=False):
@@ -92,7 +95,7 @@ class Person:
 
 @dataclass
 class Vault:
-    owner_dsn: str
+    operator_dsn: str
     app_dsn: str
     super_dsn: str
     key: TokenKey
@@ -102,9 +105,15 @@ class Vault:
     sessions: SessionMinter
     app: AdminApp
     people: int = 0
+    migrator_dsn: str = ""
 
-    def owner(self) -> psycopg.Connection:
-        return db.connect(self.owner_dsn)
+    def operator(self) -> psycopg.Connection:
+        """The operator console's login (a member of consentvault_console); owns nothing."""
+        return db.connect(self.operator_dsn)
+
+    def migrator(self) -> psycopg.Connection:
+        """The migration login, acting as the NOLOGIN schema owner: the strongest role a guard must still refuse."""
+        return db.connect(self.migrator_dsn)
 
     def appconn(self) -> psycopg.Connection:
         return db.connect(self.app_dsn)
@@ -113,7 +122,7 @@ class Vault:
         return db.connect(self.super_dsn)
 
     def create_org(self, name: str, admin_email: str, **kw) -> dict:
-        with self.owner() as c:
+        with self.operator() as c:
             return admin.create_org(c, token_key=self.key, custody=self.custody, operator_id="op-1",
                                     request_id="req-create", name=name, admin_email=admin_email, mailer=self.mailer, **kw)
 

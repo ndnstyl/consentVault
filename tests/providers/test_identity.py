@@ -83,8 +83,25 @@ def test_rs256_and_es256_tokens_verify():
     assert p.verify(sign(claims(), key=EC_KEY, kid="ec1", alg="ES256")).subject == "user-1"
 
 
-def test_audience_may_be_a_list():
-    assert provider().verify(sign(claims(aud=["other", AUD]))).subject == "user-1"
+def test_audience_list_with_matching_azp_is_accepted():
+    assert provider().verify(sign(claims(aud=["other", AUD], azp=AUD))).subject == "user-1"
+
+
+def test_multiple_audiences_without_azp_refused():
+    with pytest.raises(AudienceMismatchError):
+        provider().verify(sign(claims(aud=["other", AUD])))
+
+
+def test_wrong_azp_refused():
+    with pytest.raises(AudienceMismatchError):
+        provider().verify(sign(claims(aud=AUD, azp="someone-else")))
+    with pytest.raises(AudienceMismatchError):
+        provider().verify(sign(claims(aud=["other", AUD], azp="other")))
+
+
+def test_single_correct_audience_needs_no_azp():
+    assert provider().verify(sign(claims(aud=AUD))).subject == "user-1"
+    assert provider().verify(sign(claims(aud=[AUD]))).subject == "user-1"
 
 
 def test_wrong_signature_key_refused():

@@ -38,7 +38,7 @@ TEST_WEBHOOK_KEY = "test-only-webhook-key"
 
 
 class Wired:
-    def __init__(self, cloud: Cloud, tmp_path, pg_server):
+    def __init__(self, cloud: Cloud, tmp_path, pg_server, **settings_extra):
         t = cloud.t
         self.cloud, self.t = cloud, t
         self.identity = FakeIdentity()
@@ -47,7 +47,7 @@ class Wired:
                              operators={OPERATOR: "op-1"})
         self.custody = LocalFileKeyProvider(tmp_path / "keys", TEST_PASSPHRASE)
         self.mailer = RecordingMailer()
-        admin_app = AdminApp(connect=connect, owner_connect=lambda: db.connect(t.owner_dsn), token_key=t.key,
+        admin_app = AdminApp(connect=connect, owner_connect=lambda: db.connect(t.operator_dsn), token_key=t.key,
                              sessions=SessionMinter(self.identity, t.key), custody=self.custody, mailer=self.mailer)
         sync = SyncRoutes(connect, t.crypto)
         self.exports = ExportService(connect=connect,
@@ -56,9 +56,9 @@ class Wired:
                                      store=LocalAppendOnlyEvidenceStore(tmp_path / "exports"), link_secret=os.urandom(32))
         billing = BillingRoutes(connect=connect, mint_token=lambda o, s: mint_org_token(t.key, o, s, credential_id=None),
                                 client=FakeStripe(), webhook_secret=TEST_WEBHOOK_KEY)
-        routes = (AdminRoutes(admin_app, auth), SyncRouteAdapter(sync, auth, t.key),
+        self.routes = routes = (AdminRoutes(admin_app, auth), SyncRouteAdapter(sync, auth, t.key),
                   ExportRouteAdapter(self.exports, auth), billing)
-        settings = dataclasses.replace(cloud.settings, routes=routes, portal_caller=auth.billing_caller)
+        settings = dataclasses.replace(cloud.settings, routes=routes, portal_caller=auth.billing_caller, **settings_extra)
         self.server = api.make_cloud_server(settings, "127.0.0.1", 0)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -123,7 +123,7 @@ def test_sync_signal_runs_through_the_server_on_a_bound_machine_credential(wired
     a = wired.t.a
     crm = wired.env.add_system(a, "crm")
     cred = wired.cloud.a.clients["capture"].credential_id
-    with wired.t.owner() as o, org_transaction(o, wired.t.admin_token(a.org_id)):
+    with wired.t.operator() as o, org_transaction(o, wired.t.admin_token(a.org_id)):
         bind_signal_credential(o, crm.system_id, cred)
     body = {"contact": X, "channel": "sms", "purpose": "marketing", "claimed_state": "denied",
             "external_ref": str(uuid.uuid4())}

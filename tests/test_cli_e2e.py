@@ -18,7 +18,7 @@ WORDING = "I agree to receive texts about my account. Reply STOP to end."
 
 @pytest.fixture
 def cli_dsns(raw_dsn, pg_server):
-    """(owner DSN for migrate, restricted runtime DSN for everything else) on a fresh, unmigrated database."""
+    """(migrator DSN for migrate, restricted runtime DSN for everything else) on a fresh, unmigrated database."""
     import psycopg
     role = "cli_" + uuid.uuid4().hex[:10]
     with psycopg.connect(f"postgresql://postgres@127.0.0.1:{pg_server['port']}/postgres", autocommit=True) as c:

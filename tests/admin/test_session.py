@@ -48,7 +48,9 @@ def test_choosing_an_organisation_mints_a_scoped_short_token_and_audits_it(vault
     org, boss = vault.org_with_admin("Acme", "boss@acme.example")
     idt = vault.idp.issue(boss.subject, "boss@acme.example")
     r = call(vault, "POST", "/v1/session/org", idt, {"org_id": org["org_id"]})
-    assert r.status == 200 and r.body == {"org_id": org["org_id"], "name": "Acme", "role": "admin", "status": "trial"}
+    assert r.status == 200 and {k: v for k, v in r.body.items() if k != "expires_at"} == {
+        "org_id": org["org_id"], "name": "Acme", "role": "admin", "status": "trial"}
+    assert r.body["expires_at"].endswith("Z")
     assert "token" not in r.body  # the token goes to the edge, never to the browser
     with vault.appconn() as c:
         s = vault.sessions.choose_org(c, idt, org["org_id"], request_id="r1")

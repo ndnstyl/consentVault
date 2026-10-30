@@ -15,7 +15,7 @@ def test_creation_makes_the_key_chain_prefix_lists_retention_and_invite(vault):
     assert vault.custody.status(oid).state == "active"  # the key provider made the organisation key
     sent = vault.mailer.sent[-1]
     assert sent["to"] == "boss@acme.example" and sent["role"] == "admin" and "invite_token" not in org
-    with vault.owner() as c, org_transaction(c, mint_org_token(vault.key, oid, ["admin"], credential_id=None)):
+    with vault.operator() as c, org_transaction(c, mint_org_token(vault.key, oid, ["admin"], credential_id=None)):
         key = c.execute("SELECT version, kms_key_ref, status FROM consentvault.org_key").fetchone()
         assert key == {"version": 1, "kms_key_ref": f"local:{oid}", "status": "active"}
         wrapped = c.execute("SELECT wrapped FROM consentvault.org_fingerprint_secret").fetchone()["wrapped"]
@@ -30,7 +30,7 @@ def test_creation_makes_the_key_chain_prefix_lists_retention_and_invite(vault):
         actions = [r["action"] for r in c.execute("SELECT action FROM consentvault.audit_event ORDER BY seq")]
         assert actions == ["org.created", "member.invited"]
         assert audit.chain_breaks(c) == []
-    with vault.owner() as c:
+    with vault.operator() as c:
         assert audit.platform_head(c)["seq"] >= 1
 
 
@@ -57,7 +57,7 @@ def test_a_key_provider_failure_is_a_named_error_and_nothing_is_written(vault):
         def create_org_key(self, org_id):
             from consentvault.providers.errors import KeyProviderError
             raise KeyProviderError("down")
-    with vault.owner() as c, pytest.raises(ApiError) as e:
+    with vault.operator() as c, pytest.raises(ApiError) as e:
         admin.create_org(c, token_key=vault.key, custody=Broken(), operator_id="op-1", request_id="r1", name="X",
                          admin_email="a@x.example")
     assert e.value.name == "key_unavailable" and e.value.status == 503
@@ -68,13 +68,13 @@ def test_a_key_provider_failure_is_a_named_error_and_nothing_is_written(vault):
 def test_creation_validates_its_input(vault):
     for kw in ({"name": "", "admin_email": "a@x.example"}, {"name": "X", "admin_email": "not-an-email"},
                {"name": "X", "admin_email": "a@x.example", "status": "closed"}):
-        with vault.owner() as c, pytest.raises(ApiError) as e:
+        with vault.operator() as c, pytest.raises(ApiError) as e:
             admin.create_org(c, token_key=vault.key, custody=vault.custody, operator_id="op", request_id="r", **kw)
         assert e.value.name == "validation_failed"
 
 
 def _status(vault, oid, status, reason="because"):
-    with vault.owner() as c:
+    with vault.operator() as c:
         return admin.set_org_status(c, token_key=vault.key, operator_id="op-1", request_id="r-status", org_id=oid,
                                     status=status, reason=reason)
 

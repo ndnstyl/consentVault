@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 import psycopg
+from psycopg import sql as _sql
 from psycopg.rows import dict_row
 
 from .errors import ConfigError, DatabaseError, MigrationDriftError, MigrationError
@@ -50,11 +51,37 @@ def file_sha256(path: Path) -> str:
 def migrate(conn: psycopg.Connection, directory: str | Path | None = None) -> list[str]:
     """Apply pending migrations in order. Returns the names applied.
 
-    Refuses if an applied file changed on disk, an applied file is missing, or a pending file is numbered
-    at or below the highest applied one (history is never inserted in the middle).
+    The connection is the migrator's login. Every migration runs under SET ROLE to the database's owner (the NOLOGIN
+    schema owner), so the owner owns everything the migrations make. The migrator's login default is that role
+    (``ALTER ROLE <migrator> SET role = <owner>``), so a migration that runs RESET ROLE stays the owner; a migration
+    that leaves the session as any other role is rolled back by name. A login that is not a member of the owner is
+    refused by name. Refuses if an applied file changed on disk, an applied file is missing,
+    or a pending file is numbered at or below the highest applied one (history is never inserted in the middle).
     """
     folder = Path(directory) if directory else default_migrations_dir()
     files = list_migrations(folder)
+    try:
+        who = conn.execute("SELECT current_user AS me, pg_get_userbyid(d.datdba) AS owner FROM pg_database d"
+                           " WHERE d.datname = current_database()").fetchone()
+    except psycopg.Error as exc:
+        raise DatabaseError(f"cannot read the database owner: {exc}") from exc
+    if who["me"] == who["owner"]:
+        return _migrate_as_owner(conn, folder, files, who["owner"])
+    try:
+        conn.execute(_sql.SQL("SET ROLE {}").format(_sql.Identifier(who["owner"])))
+    except psycopg.Error as exc:
+        raise MigrationError(f"the migration login {who['me']} cannot SET ROLE to the database owner {who['owner']}: "
+                             f"make it a member of {who['owner']} ({exc.diag.message_primary})") from exc
+    try:
+        return _migrate_as_owner(conn, folder, files, who["owner"])
+    finally:
+        try:
+            conn.execute(_sql.SQL("SET ROLE {}").format(_sql.Identifier(who["me"])))
+        except psycopg.Error as exc:
+            raise DatabaseError(f"migrations ran but the role could not be reset to {who['me']}: {exc}") from exc
+
+
+def _migrate_as_owner(conn: psycopg.Connection, folder: Path, files: list[Path], owner: str) -> list[str]:
     try:
         with conn.transaction():
             conn.execute("CREATE SCHEMA IF NOT EXISTS consentvault")
@@ -93,6 +120,12 @@ def migrate(conn: psycopg.Connection, directory: str | Path | None = None) -> li
         try:
             with conn.transaction():
                 conn.execute(sql)
+                now = conn.execute("SELECT current_user AS u, session_user AS s").fetchone()
+                if now["u"] != owner:
+                    raise MigrationError(
+                        f"migration {path.name} left the session as role {now['u']}, not the schema owner {owner}, and "
+                        f"was rolled back: set the migration login's default role (ALTER ROLE {now['s']} SET role = "
+                        f"{owner}) so a RESET ROLE inside a migration returns to the owner")
                 conn.execute(
                     "INSERT INTO consentvault.schema_migration (name, sha256) VALUES (%s, %s)",
                     (path.name, file_sha256(path)),

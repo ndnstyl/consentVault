@@ -20,7 +20,7 @@ def _stored(vault, org_id):
 def test_the_adapter_reads_each_organisations_own_fingerprint_secret(vault):
     a, boss_a = vault.org_with_admin("Acme", "boss@acme.example")
     b, _ = vault.org_with_admin("Bravo", "boss@bravo.example")
-    adapter = CustodyKeyAdapter.from_database(vault.custody, vault.owner, vault.key)
+    adapter = CustodyKeyAdapter.from_database(vault.custody, vault.operator, vault.key)
     sa, sb = adapter.fingerprint_secret(uuid.UUID(a["org_id"])), adapter.fingerprint_secret(uuid.UUID(b["org_id"]))
     assert sa == vault.custody.unwrap(a["org_id"], _stored(vault, a["org_id"])) and len(sa) == 32
     assert sb == vault.custody.unwrap(b["org_id"], _stored(vault, b["org_id"])) and sa != sb

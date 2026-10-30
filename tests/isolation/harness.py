@@ -104,7 +104,7 @@ class Org:
 
 @dataclass
 class Tenancy:
-    owner_dsn: str
+    operator_dsn: str
     super_dsn: str
     app_dsn: str
     key: TokenKey
@@ -113,6 +113,7 @@ class Tenancy:
     a: Org
     b: Org
     home: uuid.UUID
+    migrator_dsn: str = ""
 
     def token(self, org: Org, scopes=("capture", "gate_read"), **kw) -> str:
         return mint_org_token(self.key, org.org_id, scopes, credential_id=str(org.credential_id), **kw)
@@ -120,9 +121,15 @@ class Tenancy:
     def app(self) -> psycopg.Connection:
         return db.connect(self.app_dsn)
 
-    def owner(self) -> psycopg.Connection:
-        """The schema owner: not a superuser, bound by row-level security like everyone else."""
-        return db.connect(self.owner_dsn)
+    def operator(self) -> psycopg.Connection:
+        """The operator console's login (a member of consentvault_console): owns nothing, holds only the console's
+        grants, bound by row-level security like everyone else."""
+        return db.connect(self.operator_dsn)
+
+    def migrator(self) -> psycopg.Connection:
+        """The migration login: a member of the NOLOGIN schema owner, so it acts with the owner's rights (setup steps
+        such as installing the token key). Bound by row-level security (FORCE) and refused trigger changes."""
+        return db.connect(self.migrator_dsn)
 
     def superuser(self) -> psycopg.Connection:
         """Out-of-band inspection only (a DBA's view): bypasses row security. The vault never runs as this."""
@@ -142,11 +149,11 @@ def make_login_role(port: int, dbname: str, group: str) -> str:
     return f"postgresql://{role}@127.0.0.1:{port}/{dbname}"
 
 
-def create_org(owner: psycopg.Connection, key: TokenKey, provider: FakeKeyProvider, name: str) -> Org:
+def create_org(conn: psycopg.Connection, key: TokenKey, provider: FakeKeyProvider, name: str) -> Org:
     """Create an organisation the way the admin path must in multi mode: inside a token for the new org's id."""
     org_id = uuid.uuid4()
-    with org_transaction(owner, mint_org_token(key, org_id, ["admin"], credential_id=None)):
-        org = _fill_org(owner, provider, name, org_id)
+    with org_transaction(conn, mint_org_token(key, org_id, ["admin"], credential_id=None)):
+        org = _fill_org(conn, provider, name, org_id)
     return org
 
 
@@ -208,22 +215,30 @@ def _populate(t: Tenancy, org: Org) -> None:
 def build_tenancy(dsn: str, port: int) -> Tenancy:
     """Two active organisations, A and B, in multi mode, plus the home organisation the migration made.
 
-    ``dsn`` is the non-superuser schema owner's; the owner is bound by row-level security throughout.
+    ``dsn`` is the migrator's (a member of the NOLOGIN schema owner): it installs the token key and switches the vault to
+    multi mode. The organisations are created on the operator console's login, the way the console creates them. Every
+    login is bound by row-level security throughout.
     """
+    from conftest import operator_dsn_for
+
     dbname = dsn.rsplit("/", 1)[1]
     key = TokenKey("test-k1", os.urandom(32))
     provider = FakeKeyProvider()
-    with db.connect(dsn) as owner:
-        me = owner.execute("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user").fetchone()
-        assert me == {"rolsuper": False, "rolbypassrls": False}, "the isolation suite must run under a bound owner"
-        owner.execute("SELECT consentvault.install_token_key(%s, %s)", (key.key_id, key.secret))
-        home = owner.execute("SELECT consentvault.home_org() AS h").fetchone()["h"]
-        owner.execute("SELECT consentvault.enable_multi_tenant()")
-        a = create_org(owner, key, provider, "alpha")
-        b = create_org(owner, key, provider, "bravo")
+    operator_dsn = operator_dsn_for(dsn)
+    with db.connect(dsn) as migrator:
+        me = migrator.execute("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user").fetchone()
+        assert me == {"rolsuper": False, "rolbypassrls": False}, "the isolation suite must run under a bound migrator"
+        migrator.execute("SELECT consentvault.install_token_key(%s, %s)", (key.key_id, key.secret))
+        home = migrator.execute("SELECT consentvault.home_org() AS h").fetchone()["h"]
+        migrator.execute("SELECT consentvault.enable_multi_tenant()")
+    with db.connect(operator_dsn) as operator:
+        me = operator.execute("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user").fetchone()
+        assert me == {"rolsuper": False, "rolbypassrls": False}, "the operator console must be bound by row security"
+        a = create_org(operator, key, provider, "alpha")
+        b = create_org(operator, key, provider, "bravo")
     app_dsn = make_login_role(port, dbname, "consentvault_app")
     super_dsn = f"postgresql://postgres@127.0.0.1:{port}/{dbname}"
-    t = Tenancy(dsn, super_dsn, app_dsn, key, TenantCrypto(provider), provider, a, b, home)
+    t = Tenancy(operator_dsn, super_dsn, app_dsn, key, TenantCrypto(provider), provider, a, b, home, migrator_dsn=dsn)
     _populate(t, a)
     _populate(t, b)
     return t

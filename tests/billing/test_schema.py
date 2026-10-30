@@ -52,7 +52,7 @@ def test_trial_and_past_due_orgs_are_live_for_capture_lookups(tenancy, status, e
     with tenancy.app() as app:
         assert app.execute("SELECT status FROM consentvault.resolve_credential(%s)",
                            (tenancy.a.credential_id,)).fetchone()["status"] == expected
-    with tenancy.owner() as owner:
+    with tenancy.operator() as owner:
         live = {r["active_org_ids"] for r in owner.execute("SELECT * FROM consentvault.active_org_ids()")}
     with tenancy.app() as app:
         members = app.execute("SELECT * FROM consentvault.resolve_member('https://idp.example.com', 'user_alpha')").fetchall()

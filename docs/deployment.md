@@ -55,7 +55,12 @@ break-glass). Its functions live in the schema `consentvault_guard`, owned by th
 neither replace nor drop them. The multi-tenant API refuses to start (`require_multi_tenant()`) while the guard is
 missing or disabled, while the owner can log in, while anything in the schema is owned by another role, or while
 `consentvault_console` or any of its members is a superuser, the owner or a member of it, or a member of a `BYPASSRLS`
-role. It also refuses when its own login is any of those.
+role. A member is a role that can act as the console: one that holds an `INHERIT` or `SET` membership in it, directly
+or through other such memberships (migration `0026`). An admin-only membership, which lets a role grant the console but
+not act as it, does not count; PostgreSQL 16 and later give exactly that to the role that creates a role, so the master
+user on a managed database, which creates the console roles, is not a member. Nothing is exempt by role name: a master
+that holds an `INHERIT` or `SET` membership in the console or in a console login is a violation like any other role.
+On PostgreSQL 15, which records no such options, every membership counts. It also refuses when its own login is any of those.
 
 A vault table's partitions and inheritance children are guarded in any schema. The guard records each child as
 `CREATE TABLE ... PARTITION OF` made it in the vault schema, and a fifth event trigger refuses, for the same roles, a

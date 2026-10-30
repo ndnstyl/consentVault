@@ -1,9 +1,9 @@
 {
  "exit_code": 0,
- "finished_at": "2026-10-30T06:20:27.534562Z",
+ "finished_at": "2026-10-30T08:01:34.850182Z",
  "format": "consentvault-selfhost-receipt/2",
- "manifest_sha256": "cebddfab61492784f43a49ebb6fe2d8a68ddd2421867930375e479572ec1e1e4",
- "product_sha256": "ece21e15947c2638b0dfaa462824c87764ec5e1193d6c864df5da02d0c5ab9a4",
+ "manifest_sha256": "e8386d7d93d80e1ff991eb5af5246bafc76ddeb97ddaab35405a833290654e05",
+ "product_sha256": "eb426d8ee27e63173086328883083983696f8d1f78be417c1a9f3941e140c4b3",
  "sections": {
   "integrity: ledger, seal, proof, evidence": "passed",
   "isolation": "passed",

@@ -244,9 +244,6 @@ def tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None,
     ``contact``: the lookup then needs no contact point, so a record whose contact key was erased answers with the stops it
     still holds.
     """
-    import time as _time
-    from datetime import datetime, timezone
-
     from .gate import tenant_evidence
     from .gate_rules import engine
     from .tenancy.admin_base import ApiError, decode_cursor, encode_cursor
@@ -262,8 +259,8 @@ def tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None,
             fp = crypto.contact_fingerprint(org, kind, norm)
         except KeyProviderError as exc:
             raise ApiError("key_unavailable", "the organization key could not be used; nothing was read") from exc
-    now_s = _time.time() if now is None else now
-    evaluated_at = _iso_z(datetime.now(timezone.utc))
+    now_s = dbclock.epoch(conn) if now is None else now
+    evaluated_at = _iso_z(dbclock.now(conn))
     after: list[str] | None = None
     if cursor is not None:
         values = decode_cursor(cursor_key, f"proof:{section}", cursor, now_s)

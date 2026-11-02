@@ -1,5 +1,5 @@
--- Reverses 0066_token_issued_at_database_clock.sql: a token stamped in the database's future is accepted again (its expiry
--- is still judged on the database's clock, as in 0057).
+-- Reverses 0066_token_issued_at_database_clock.sql: a token stamped in the database's future and a token with no issued-at time are accepted again
+-- Its expiry is still judged on the database's clock, as in 0057.
 BEGIN;
 
 DO $$

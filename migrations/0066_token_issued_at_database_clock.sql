@@ -2,7 +2,8 @@
 -- clock; the database already refuses a token that is expired or lives past fifteen minutes by its clock, but a host running
 -- ahead could still mint a token that outlived the lifetime it asked for by its skew. A token stamped more than thirty seconds
 -- in the database's future is now refused, so no host clock can lengthen a token's life: it can only get the token refused,
--- loudly, and the database's clock decides every acceptance.
+-- loudly, and the database's clock decides every acceptance. A token with no issued-at time (or one that is not a whole number
+-- of seconds) is refused too: the mint always stamps one, so its absence means the token was not minted by this service.
 CREATE OR REPLACE FUNCTION consentvault.verify_org_token(p_token text)
     RETURNS TABLE (org_id uuid, scopes text[], credential_id text, expires_at timestamptz)
     LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -36,7 +37,8 @@ BEGIN
     END IF;
     -- a token stamped in the future was minted by a host whose clock runs ahead of this database's: refused, never given the
     -- extra life that host's clock would have bought it (a host behind this database mints tokens already expired, also refused)
-    IF payload ? 'iat' AND to_timestamp((payload ->> 'iat')::bigint) > statement_timestamp() + interval '30 seconds' THEN
+    IF NOT (payload ? 'iat') OR (payload ->> 'iat') !~ '^[0-9]{1,12}$'
+       OR to_timestamp((payload ->> 'iat')::bigint) > statement_timestamp() + interval '30 seconds' THEN
         RETURN;
     END IF;
     org_id := (payload ->> 'org')::uuid;

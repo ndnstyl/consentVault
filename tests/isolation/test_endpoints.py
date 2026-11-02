@@ -280,3 +280,20 @@ def test_the_api_refuses_to_serve_when_an_owner_rights_function_lost_its_owner(c
         su.execute("ALTER TABLE consentvault.gate_decision OWNER TO postgres")
     with pytest.raises(api.StartupRefusedError, match="gate_decision"):
         api.startup_check(cloud.t.app_dsn)
+
+
+@pytest.mark.parametrize("by", [660.0, -660.0], ids=["ahead", "behind"])
+def test_an_assertion_stamped_eleven_minutes_off_the_database_clock_is_refused(cloud, by):
+    cap = cloud.a.clients["capture"]
+    s, b = cloud.call("/v1/oauth/token", form=cloud.token_form(cap, now=time.time() + by))
+    assert (s, b["error"]) == (401, "invalid_client")
+
+
+@pytest.mark.parametrize("by", [660.0, -660.0], ids=["ahead", "behind"])
+def test_the_token_endpoint_judges_an_assertion_on_the_database_clock_whatever_the_host_clock(cloud, monkeypatch, by):
+    cap = cloud.a.clients["capture"]
+    form = cloud.token_form(cap)                      # stamped with the true time
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + by)   # this host's clock, 11 minutes out
+    s, b = cloud.call("/v1/oauth/token", form=form)
+    assert s == 200, b

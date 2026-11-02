@@ -225,3 +225,36 @@ def test_a_token_valid_when_its_transaction_opened_holds_the_tenant_to_the_end_o
         with pytest.raises(TenantTokenError):
             with org_transaction(app, token):
                 pass
+
+
+def test_a_token_stamped_120_seconds_in_the_future_sees_nothing_and_cannot_be_entered(tenancy):
+    ahead = tenancy.token(tenancy.a, now=time.time() + 120)
+    with tenancy.app() as app:
+        _assert_empty(_with_setting(app, ahead))
+        with pytest.raises(TenantTokenError):
+            with org_transaction(app, ahead):
+                pass
+
+
+@pytest.mark.parametrize("by", [660.0, -660.0], ids=["ahead", "behind"])
+def test_a_token_minted_by_a_host_eleven_minutes_out_is_refused(tenancy, by):
+    token = tenancy.token(tenancy.a, now=time.time() + by)
+    with tenancy.app() as app:
+        _assert_empty(_with_setting(app, token))
+
+
+def test_a_token_stamped_inside_the_thirty_second_leeway_is_accepted(tenancy):
+    near = tenancy.token(tenancy.a, now=time.time() + 5)
+    with tenancy.app() as app:
+        assert _with_setting(app, near)["event"] > 0
+
+
+def test_a_token_with_no_issued_at_time_sees_nothing(tenancy):
+    now = int(time.time())
+    bare = _sign(tenancy.key.secret, tenancy.key.key_id,
+                 {"org": str(tenancy.a.org_id), "scp": ["gate_read"], "cid": None, "exp": now + 300})
+    garbled = _sign(tenancy.key.secret, tenancy.key.key_id,
+                    {"org": str(tenancy.a.org_id), "scp": ["gate_read"], "cid": None, "iat": "x", "exp": now + 300})
+    with tenancy.app() as app:
+        _assert_empty(_with_setting(app, bare))
+        _assert_empty(_with_setting(app, garbled))

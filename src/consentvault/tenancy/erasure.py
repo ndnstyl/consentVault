@@ -213,11 +213,12 @@ class LifecycleLedger:
             prev = self._get(org, seq - 1) if seq > 1 else None
             if seq > 1 and prev is None:
                 raise LedgerIntegrityError(f"the lifecycle ledger of {org} has a gap before entry {seq}")
-            body = dict(entry, v=1, seq=seq, org_id=org, at=self._clock().isoformat(),
+            written_at = self._clock()
+            body = dict(entry, v=1, seq=seq, org_id=org, at=written_at.isoformat(),
                         prev_sha256=hashlib.sha256(prev).hexdigest() if prev is not None else None)
             data = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
             try:
-                self._store.put(org, self._key(seq), data, retain_until=self._clock() + timedelta(days=self._retain))
+                self._store.put(org, self._key(seq), data, retain_until=written_at + timedelta(days=self._retain))
             except EvidenceExistsError:  # loud-failure-exempt: the slot is taken (the database was behind); probe the next
                 seq += 1
                 continue

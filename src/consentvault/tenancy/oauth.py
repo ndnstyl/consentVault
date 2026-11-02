@@ -30,6 +30,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature, encode_dss_signature
 
+from .. import dbclock
 from ..lengths import is_bytes_of_len
 from .errors import ReplayError, TenancyError
 from .replay import claim_nonce
@@ -238,7 +239,7 @@ def issue_token(
     *,
     token_endpoint_url: str,
     signer: AccessTokenSigner,
-    now: Callable[[], float] = time.time,
+    now: Callable[[], float] | None = None,
 ) -> IssuedToken:
     """Verify one client-credentials request and issue an access token. Raises an ``OAuthError`` subclass."""
     bad_client = InvalidClientError("client authentication failed")
@@ -268,7 +269,7 @@ def issue_token(
     if not _signature_ok(alg, public_key, signing_input, signature):
         raise bad_client
 
-    t = now()
+    t = dbclock.epoch(conn) if now is None else now()   # the assertion is judged on the database's clock; a test may pin one
     exp, aud, jti = payload.get("exp"), payload.get("aud"), payload.get("jti")
     auds = aud if isinstance(aud, list) else [aud]
     if (payload.get("sub") != payload.get("iss") or token_endpoint_url not in auds
@@ -290,7 +291,7 @@ def issue_token(
                     datetime.fromtimestamp(max(exp, int(t) + 1) + CLOCK_LEEWAY, timezone.utc))
     except ReplayError:
         raise bad_client from None
-    issued_at = int(t)
+    issued_at = int(time.time() if now is None else t)   # the token this service mints and verifies itself carries the host's time
     token = signer.issue({
         "iss": signer.issuer, "org_id": str(row["org_id"]), "credential_id": client_id,
         "scope": " ".join(scopes), "jti": str(uuid.uuid4()), "iat": issued_at, "exp": issued_at + ACCESS_TOKEN_TTL,

@@ -17,7 +17,8 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 SRC = REPO / "src" / "consentvault"
 ALLOW = json.loads((REPO / "tests" / "clock_allowlist.json").read_text())
 CLOCK = {"datetime.datetime.now", "datetime.datetime.utcnow", "datetime.datetime.today", "datetime.date.today",
-         "time.time", "time.time_ns", "time.monotonic", "time.monotonic_ns"}
+         "time.time", "time.time_ns", "time.monotonic", "time.monotonic_ns", "time.perf_counter", "time.perf_counter_ns",
+         "time.process_time", "time.gmtime", "time.localtime", "time.strftime", "time.ctime", "time.asctime"}
 HELPERS = {"_dt", "_clock"}   # the confirmation service's own clock helper and the clock it is built on; a call is a read of the
 # worker's clock unless its one argument is a literal time
 HELPER_FILES = {   # outside the confirm package, the files whose decisions moved to the database's clock; every file inside it is scanned too
@@ -37,7 +38,8 @@ def _chain(n):
 
 
 def scan_source(text: str, rel: str) -> dict[str, set[str]]:
-    """qualified function -> the clock expressions read there. Names are resolved through the module's imports, so an aliased
+    """path::qualified function::clock expression -> that expression. Every distinct read in a function is its own key, so a listed
+    read never covers a second, different one beside it. Names are resolved through the module's imports, so an aliased
     module, a from-import and a from-import under another name are all caught; a bare reference (a default bound to the clock)
     counts as much as a call."""
     tree = ast.parse(text)
@@ -53,7 +55,7 @@ def scan_source(text: str, rel: str) -> dict[str, set[str]]:
     stack: list[str] = []
 
     def add(expr: str) -> None:
-        sites.setdefault(f"{rel}::{'.'.join(stack) or '<module>'}", set()).add(expr)
+        sites.setdefault(f"{rel}::{'.'.join(stack) or '<module>'}::{expr}", set()).add(expr)   # one key per clock read
 
     class Visitor(ast.NodeVisitor):
         def _scope(self, n):
@@ -96,7 +98,7 @@ def scan_source(text: str, rel: str) -> dict[str, set[str]]:
 
 
 def python_sites() -> dict[str, set[str]]:
-    """path::qualified function -> the clock expressions read there (a call, or a default bound to one)."""
+    """path::qualified function::clock expression (a call, or a default bound to one)."""
     sites: dict[str, set[str]] = {}
     for p in sorted(SRC.rglob("*.py")):
         for k, v in scan_source(p.read_text(encoding="utf-8"), p.relative_to(SRC).as_posix()).items():
@@ -163,6 +165,12 @@ PATTERNS = {
     "from-import of the function": "from time import time\n\ndef f():\n    return time()\n",
     "from-import under another name": "from time import time as wall\n\ndef f():\n    return wall()\n",
     "from-import of monotonic": "from time import monotonic\n\ndef f():\n    return monotonic()\n",
+    "time.perf_counter": "import time\n\ndef f():\n    return time.perf_counter()\n",
+    "time.gmtime": "import time\n\ndef f():\n    return time.gmtime()\n",
+    "time.localtime": "import time\n\ndef f():\n    return time.localtime()\n",
+    "time.strftime": "import time\n\ndef f():\n    return time.strftime('%Y')\n",
+    "time.ctime": "import time\n\ndef f():\n    return time.ctime()\n",
+    "from-import of gmtime": "from time import gmtime\n\ndef f():\n    return gmtime()\n",
     "a default bound to the clock": "import time\n\ndef f(now=time.time):\n    return now()\n",
     "the service's own helper": "class S:\n    def f(self):\n        return self._dt()\n",
     "the service's own clock": "class S:\n    def f(self):\n        return self._clock()\n",

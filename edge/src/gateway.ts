@@ -45,6 +45,8 @@ const INVITE_VIEW_RE = /^\/v1\/invites\/[^/:]+$/; // the public view of an invit
 const ACCEPT_RE = /^\/v1\/invites\/[^/]+:accept$/;
 // The Twenty receiver (twenty.md 3.1): the signature over the raw body is the credential, so no bearer; 256 KB at most.
 const TWENTY_WEBHOOK_RE = /^\/v1\/connectors\/twenty\/[A-Za-z0-9_-]{1,128}\/webhook$/;
+// Stripe's live webhook: the Stripe-Signature over the raw body is the credential, so no bearer; this one exact path and method.
+const STRIPE_WEBHOOK_PATH = "/v1/billing/webhook";
 const TWENTY_WEBHOOK_MAX_BODY = 256 * 1024;
 const TENANT_LEAD_SECONDS = 20;
 const REFRESH_LEAD_SECONDS = 30;
@@ -134,7 +136,7 @@ export async function handleGateway(request: Request, env: GatewayEnv, deps: Gat
     const auth = request.headers.get("authorization");
     const cookieHeader = request.headers.get("cookie");
     const downloadLink = request.method === "GET" && (DOWNLOAD_RE.test(url.pathname) || INVITE_VIEW_RE.test(url.pathname));
-    const twentyWebhook = request.method === "POST" && TWENTY_WEBHOOK_RE.test(url.pathname);
+    const twentyWebhook = request.method === "POST" && (TWENTY_WEBHOOK_RE.test(url.pathname) || url.pathname === STRIPE_WEBHOOK_PATH);
     const portalMode = !auth && !downloadLink && !twentyWebhook && !!env.SESSIONS && !!cookieValue(cookieHeader, SESSION_COOKIE);
     if (!auth && !portalMode && !downloadLink && !twentyWebhook) throw new Refusal(401, "bearer_missing", "an Authorization: Bearer token is required");
     if (auth && !twentyWebhook) {

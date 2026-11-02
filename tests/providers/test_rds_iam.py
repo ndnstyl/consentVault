@@ -317,6 +317,31 @@ def test_iam_config_builds_one_rds_iam_dsn_for_the_service_and_the_operator_jobs
     assert cfg.require_operator_dsn() == dsn
 
 
+def test_iam_operator_login_may_be_its_own_so_the_vault_operator_path_is_not_the_runtime():
+    """Found live 2026-11-02: with one login for both, the cloud vault's operator connection (organization creation, the
+    key ledger, the key adapter's wrapped-secret reads) ran as consentvault_runtime, which holds none of those grants."""
+    cfg = load_config(env={**IAM_ENV, "CONSENTVAULT_DB_OPERATOR_USER": "consentvault_onboarding_login"})
+    assert cfg.require_dsn().startswith(f"rds-iam://consentvault_runtime@{HOST}:5432/consentvault?")
+    op = cfg.require_operator_dsn()
+    assert op.startswith(f"rds-iam://consentvault_onboarding_login@{HOST}:5432/consentvault?")
+    assert op.split("?", 1)[1] == cfg.require_dsn().split("?", 1)[1], "same host, region and CA bundle"
+
+
+def test_iam_operator_login_reads_the_cloud_task_name():
+    cfg = load_config(env={**IAM_ENV, "CV_DB_OPERATOR_USER": "consentvault_onboarding_login"})
+    assert cfg.require_operator_dsn().startswith(f"rds-iam://consentvault_onboarding_login@{HOST}")
+
+
+@pytest.mark.parametrize("bad", ["Consentvault", "a b", "x;drop", "", " "])
+def test_iam_operator_login_must_be_a_plain_name(bad):
+    if not bad.strip():
+        assert load_config(env={**IAM_ENV, "CONSENTVAULT_DB_OPERATOR_USER": bad}).require_operator_dsn() == \
+            load_config(env=IAM_ENV).require_dsn(), "unset or blank keeps the one login"
+        return
+    with pytest.raises(ConfigError, match="CONSENTVAULT_DB_OPERATOR_USER"):
+        load_config(env={**IAM_ENV, "CONSENTVAULT_DB_OPERATOR_USER": bad})
+
+
 def test_iam_config_reads_the_names_the_cloud_task_sets():
     cfg = load_config(env={"CV_DB_AUTH": "iam", "CV_DB_HOST": HOST, "CV_DB_NAME": "consentvault",
                            "CV_DB_USER": "consentvault_operator_login", "AWS_REGION": "us-east-1",

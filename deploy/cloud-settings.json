@@ -368,6 +368,18 @@
       ]
     },
     {
+      "name": "CONSENTVAULT_DB_OPERATOR_USER",
+      "kind": "setting",
+      "required": "no; IAM mode only (or CV_DB_OPERATOR_USER): the operator connection's own login, else CONSENTVAULT_DB_USER serves both",
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
       "name": "CONSENTVAULT_DEFAULT_REGION",
       "kind": "setting",
       "required": false,
@@ -1375,6 +1387,18 @@
         "vault",
         "sync",
         "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CV_DB_OPERATOR_USER",
+      "kind": "setting",
+      "required": "no; IAM mode only (or CONSENTVAULT_DB_OPERATOR_USER)",
+      "used_by": [
+        "vault"
       ],
       "read_by": "product",
       "deployments": [

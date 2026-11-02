@@ -46,6 +46,9 @@ DEFAULT_RDS_CA_BUNDLE = "/etc/consentvault/rds-global-bundle.pem"
 _DIGITS = re.compile(r"[0-9]+")
 _RDS_HOST_REGION = re.compile(r"\.([a-z]{2}(?:-[a-z]+)+-[0-9]+)\.rds\.amazonaws\.com(?:\.cn)?$")
 ENV_DB_PORT = "CONSENTVAULT_DB_PORT"
+# IAM mode only: the operator connection's own login (the cloud vault's console member), else the one login serves both.
+ENV_DB_OPERATOR_USER = ("CONSENTVAULT_DB_OPERATOR_USER", "CV_DB_OPERATOR_USER")
+_DB_LOGIN = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 DB_AUTH_MODES = ("password", "iam")
 
 DEFAULT_SEAL_MAX_DELAY_SECONDS = 24 * 3600
@@ -186,6 +189,12 @@ def load_config(path: str | os.PathLike | None = None, env: Mapping[str, str] | 
     auth = auth.strip().lower()
     if auth == "iam":
         dsn = operator_dsn = _iam_dsn(env, data, dsn, operator_dsn)
+        op_user = next((env[k].strip() for k in ENV_DB_OPERATOR_USER if (env.get(k) or "").strip()), None)
+        if op_user is not None:
+            if not _DB_LOGIN.fullmatch(op_user):
+                raise ConfigError(f"setting {ENV_DB_OPERATOR_USER[0]} (or {ENV_DB_OPERATOR_USER[1]}) must be a plain "
+                                  f"lower-case database login name, not {op_user!r}")
+            operator_dsn = _iam_dsn({**env, "CONSENTVAULT_DB_USER": op_user, "CV_DB_USER": op_user}, data, None, None)
     edge_keys = _edge_keys(env.get(ENV_EDGE_KEYS), data.get("edge_assertion_keys"))
     return Config(
         dsn=dsn,
@@ -222,7 +231,10 @@ def _edge_keys(raw_env: str | None, from_file) -> dict:
 
 
 def _iam_dsn(env: Mapping[str, str], data: dict, dsn: str | None, operator_dsn: str | None) -> str:
-    """IAM login: the task's one login (its role's database user) serves both the service and the operator jobs.
+    """IAM login: the task's one login (its role's database user) serves both the service and the operator jobs, unless
+    CONSENTVAULT_DB_OPERATOR_USER (CV_DB_OPERATOR_USER) names a separate login for the operator connection (the cloud
+    vault: its runtime login holds no console grants, so organization creation and the key ledger sign in as the
+    onboarding login).
 
     The migration login stays on its own password DSN (owner_dsn): only the one-off migration task holds that secret.
     """

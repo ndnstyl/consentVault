@@ -1,0 +1,76 @@
+{
+  "entries": [
+    {
+      "tool": "bandit",
+      "id": "B608",
+      "path": "scripts/build_security_manifest.py",
+      "reason": "f-string pastes only the module's own role-name constants into a throwaway server's setup; no input reaches it",
+      "expires": "2027-01-15",
+      "count": 1
+    },
+    {
+      "tool": "bandit",
+      "id": "B608",
+      "path": "src/consentvault/evidence.py",
+      "reason": "f-strings paste only module constants (the org predicate, column lists, a fixed table tuple); every value is a bound parameter; dynamic columns go through psycopg.sql (see _update_sql)",
+      "expires": "2027-01-15",
+      "count": 12
+    },
+    {
+      "tool": "bandit",
+      "id": "B608",
+      "path": "src/consentvault/seal.py",
+      "reason": "f-string pastes the _SEAL_COLUMNS constant; the event id is a bound parameter",
+      "expires": "2027-01-15",
+      "count": 1
+    },
+    {
+      "tool": "bandit",
+      "id": "B608",
+      "path": "src/consentvault/tenancy/admin.py",
+      "reason": "WHERE clauses are joined from literal fragments with %s placeholders, selects are literals; every value is a bound parameter",
+      "expires": "2027-01-15",
+      "count": 7
+    },
+    {
+      "tool": "bandit",
+      "id": "B608",
+      "path": "src/consentvault/tenancy/admin_base.py",
+      "reason": "paginate() refuses any sort-key name or type that is not a plain SQL name before the f-string; values are bound parameters",
+      "expires": "2027-01-15",
+      "count": 1
+    },
+    {
+      "tool": "bandit",
+      "id": "B608",
+      "path": "src/consentvault/tenancy/admin_policy.py",
+      "reason": "clauses are literal fragments joined with AND, with bound parameters; the table name now goes through psycopg.sql.Identifier",
+      "expires": "2027-01-15",
+      "count": 5
+    },
+    {
+      "tool": "bandit",
+      "id": "B608",
+      "path": "src/consentvault/tenancy/holds.py",
+      "reason": "concatenates the HOLD_COLUMNS constant only; every value is a bound parameter",
+      "expires": "2027-01-15",
+      "count": 3
+    },
+    {
+      "tool": "bandit",
+      "id": "B608",
+      "path": "src/consentvault/tenancy/key_rotation.py",
+      "reason": "concatenates the literal ' FOR UPDATE' only",
+      "expires": "2027-01-15",
+      "count": 1
+    },
+    {
+      "tool": "bandit",
+      "id": "B608",
+      "path": "src/consentvault/tenancy/offboard.py",
+      "reason": "concatenates the literal ' FOR UPDATE' only; dynamic columns go through psycopg.sql.Identifier",
+      "expires": "2027-01-15",
+      "count": 1
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+# A throwaway Twenty CRM for the connector's contract suite (tests/connectors/twenty). It listens on this machine only, on
+# port 3100, keeps no volume past `down -v`, and holds no real data. Start it with ./up.sh (writes random settings to a
+# private temporary folder), stop and remove everything with ./down.sh.
+name: cv-twenty-test
+
+services:
+  server:
+    image: twentycrm/twenty:${TAG:?set TAG to the pinned Twenty version}
+    ports:
+      - "127.0.0.1:${PORT:-3100}:3000"
+    environment:
+      NODE_PORT: 3000
+      PG_DATABASE_URL: postgres://postgres:${PG_DATABASE_PASSWORD:?}@db:5432/default
+      SERVER_URL: http://localhost:${PORT:-3100}
+      REDIS_URL: redis://redis:6379
+      STORAGE_TYPE: local
+      APP_SECRET: ${APP_SECRET:?}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?}
+      IS_MULTIWORKSPACE_ENABLED: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: curl --fail http://localhost:3000/healthz
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  worker:
+    image: twentycrm/twenty:${TAG:?}
+    command: ["yarn", "worker:prod"]
+    environment:
+      PG_DATABASE_URL: postgres://postgres:${PG_DATABASE_PASSWORD:?}@db:5432/default
+      SERVER_URL: http://localhost:${PORT:-3100}
+      REDIS_URL: redis://redis:6379
+      STORAGE_TYPE: local
+      APP_SECRET: ${APP_SECRET:?}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?}
+      DISABLE_DB_MIGRATIONS: "true"
+      DISABLE_CRON_JOBS_REGISTRATION: "true"
+    depends_on:
+      server:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: default
+      POSTGRES_PASSWORD: ${PG_DATABASE_PASSWORD:?}
+      POSTGRES_USER: postgres
+    healthcheck:
+      test: pg_isready -U postgres -h localhost -d postgres
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.4
+    command: ["--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20

@@ -1,0 +1,774 @@
+{
+ "_about": "Requirement to test map for the ConsentVault cloud spec. tests: node ids (python file::function; other files file::title text). owner: who proves the part no repo test can (infrastructure or a human step). note: a gap inside a mapped requirement. A requirement with no tests and no owner is unmapped and fails the traceability test. receipt: the receipt file that shows a mapped test outside this checkpoint's run passed (today only tests/selfhost/receipts/selfhost-suites.json, written by tests/selfhost/run_suites.sh); a requirement with a test under an ignored path names an owner and that receipt. covered_by: for a mapped test that does not run here (the network seal test), the tests of the same requirement that ran and passed here and prove it without the network.",
+ "spec_ids": [
+  "FR-001",
+  "FR-002",
+  "FR-003",
+  "FR-004",
+  "FR-005",
+  "FR-006",
+  "FR-007",
+  "FR-008",
+  "FR-009",
+  "FR-010",
+  "FR-011",
+  "FR-012",
+  "FR-013",
+  "FR-014",
+  "FR-015",
+  "FR-016",
+  "FR-017",
+  "FR-018",
+  "FR-019",
+  "FR-020",
+  "FR-021",
+  "FR-022",
+  "FR-023",
+  "FR-024",
+  "FR-025",
+  "FR-026",
+  "FR-027",
+  "FR-028",
+  "FR-029",
+  "FR-030",
+  "FR-031",
+  "FR-032",
+  "FR-033",
+  "FR-034",
+  "FR-035",
+  "FR-036",
+  "FR-037",
+  "FR-038",
+  "FR-039",
+  "FR-040",
+  "FR-041",
+  "FR-042",
+  "FR-043",
+  "FR-044",
+  "FR-045",
+  "FR-046",
+  "FR-047",
+  "FR-048",
+  "FR-049",
+  "FR-050",
+  "FR-051",
+  "FR-052",
+  "FR-053",
+  "FR-054",
+  "FR-055",
+  "FR-056",
+  "FR-057",
+  "FR-058",
+  "SC-001",
+  "SC-002",
+  "SC-003",
+  "SC-004",
+  "SC-005",
+  "SC-006",
+  "SC-007",
+  "SC-008",
+  "SC-009",
+  "SC-010",
+  "SC-011",
+  "SC-012",
+  "SC-013",
+  "SC-014",
+  "SC-015",
+  "SC-016"
+ ],
+ "requirements": {
+  "FR-001": {
+   "tests": [
+    "tests/admin/test_orgs.py::test_creation_makes_the_key_chain_prefix_lists_retention_and_invite",
+    "tests/admin/test_orgs.py::test_get_org_shapes_by_role_and_never_invents_a_value",
+    "tests/admin/test_smoke.py::test_org_admin_brand_roundtrip",
+    "tests/admin/test_brands_sources.py::test_brands_are_admin_to_add_and_admin_or_developer_to_read",
+    "tests/admin/test_brands_sources.py::test_site_key_source_rules"
+   ]
+  },
+  "FR-002": {
+   "tests": [
+    "tests/isolation/test_rls.py::test_every_tenant_table_forces_row_level_security_bound_to_the_verified_tenant",
+    "tests/isolation/test_rls.py::test_no_runtime_role_bypasses_and_the_operator_reads_no_personal_column",
+    "tests/isolation/test_tenant_token.py::test_a_valid_token_with_its_org_swapped_sees_nothing",
+    "tests/isolation/test_tenant_token.py::test_no_token_in_multi_mode_sees_nothing",
+    "tests/isolation/test_owner_bound.py::test_a_non_superuser_owner_migrates_and_is_bound_by_row_level_security",
+    "tests/isolation/test_admin_isolation.py::test_a_token_for_one_org_sees_only_its_own_rows_in_every_admin_table"
+   ]
+  },
+  "FR-003": {
+   "tests": [
+    "tests/test_ledger_tenancy.py::test_each_organisation_has_its_own_chain_from_genesis",
+    "tests/export/test_anchor_tenants.py::test_each_organization_gets_only_its_own_signed_head",
+    "tests/providers/test_anchors.py::test_s3_anchor_writes_locked_object_per_org_and_is_idempotent",
+    "tests/providers/test_anchors.py::test_tenant_sink_marks_receipts_and_hides_credentials",
+    "tests/isolation/test_attacks_regression.py::test_A2_a_tenant_cannot_stamp_another_tenants_seal"
+   ]
+  },
+  "FR-004": {
+   "tests": [
+    "tests/isolation/test_endpoints.py::test_gate_timing_does_not_reveal_another_orgs_contact",
+    "tests/isolation/test_endpoints.py::test_capture_refuses_another_orgs_source_brand_and_wording_like_ones_that_do_not_exist",
+    "tests/isolation/test_endpoints.py::test_an_assertion_naming_the_other_orgs_client_is_refused_like_an_unknown_client",
+    "tests/isolation/test_endpoints.py::test_gate_from_b_on_a_contact_only_a_holds_matches_a_contact_nobody_holds",
+    "tests/isolation/test_admin_isolation.py::test_the_operator_role_reads_no_organisation_name_and_no_person_name"
+   ]
+  },
+  "FR-005": {
+   "tests": [
+    "tests/isolation/test_endpoints.py::test_proof_shows_a_its_own_record_and_b_nothing",
+    "tests/isolation/test_endpoints.py::test_a_proof_cursor_does_not_cross_contacts_or_organisations",
+    "tests/isolation/test_sync_isolation.py::test_a_forged_token_is_refused_by_every_function",
+    "tests/isolation/test_export_isolation.py::test_another_organizations_job_package_and_link_are_unreachable",
+    "tests/isolation/test_erasure_isolation.py::test_one_orgs_erasure_request_is_invisible_and_unconfirmable_from_the_other",
+    "tests/isolation/test_billing_isolation.py::test_a_tenant_reads_only_its_own_billing_rows",
+    "tests/isolation/test_admin_isolation.py::test_a_session_of_one_org_cannot_reach_the_others_objects_by_id",
+    "tests/isolation/test_route_wiring.py::test_a_forged_operator_header_is_refused_and_only_a_verified_operator_session_passes"
+   ]
+  },
+  "FR-006": {
+   "tests": [
+    "tests/providers/test_keys.py::test_wrap_unwrap_roundtrip_and_isolation_between_orgs",
+    "tests/providers/test_keys.py::test_openbao_key_is_created_non_exportable_and_not_deletable",
+    "tests/providers/test_keys.py::test_local_key_file_is_sealed_and_private",
+    "tests/test_crypto.py::test_each_contact_gets_its_own_random_key_wrapped_per_organisation",
+    "tests/admin/test_orgs.py::test_creation_makes_the_key_chain_prefix_lists_retention_and_invite"
+   ],
+   "owner": "ops repo: hardware protection (KMS or HSM) is infrastructure, tofu/data and runbooks/key-management.md"
+  },
+  "FR-007": {
+   "tests": [
+    "tests/test_crypto.py::test_a_field_round_trips_and_every_encryption_uses_a_fresh_nonce",
+    "tests/test_crypto.py::test_field_encryption_runs_end_to_end_on_the_local_file_key_provider",
+    "tests/test_ledger_tenancy.py::test_a_version_two_row_holds_no_clear_personal_data",
+    "tests/isolation/test_rls.py::test_a_clear_contact_point_is_refused_outside_the_home_organisation",
+    "tests/export/test_service.py::test_the_cache_is_encrypted_under_the_contact_key",
+    "tests/sync/test_outbox.py::test_the_payload_is_a_ciphertext_under_the_contacts_key",
+    "tests/isolation/test_capture_pipeline.py::test_a_capture_writes_its_encrypted_evidence_object_before_the_ledger_row"
+   ],
+   "owner": "ops repo: encryption of backups is infrastructure (tofu/data)"
+  },
+  "FR-008": {
+   "tests": [
+    "tests/test_crypto.py::test_fingerprints_are_stable_per_organisation_and_unlinkable_across_them",
+    "tests/isolation/test_export_isolation.py::test_the_contact_fingerprint_of_one_organization_finds_nothing_in_the_other",
+    "tests/sync/test_signals.py::test_the_two_organisations_resolve_the_same_person_independently",
+    "tests/test_verified_contact.py::test_a_salt_is_minted_in_the_database_and_is_stable"
+   ]
+  },
+  "FR-009": {
+   "tests": [
+    "tests/test_ledger_tenancy.py::test_a_contact_key_deleted_by_hand_keeps_every_link_verifiable_and_reads_as_a_break_not_an_erasure",
+    "tests/erasure/test_erasure.py::test_erasure_deletes_the_key_and_the_fingerprint_still_matches_its_stop",
+    "tests/providers/test_keys.py::test_destruction_after_window_reports_destroyed_and_is_final",
+    "tests/providers/test_keys.py::test_nothing_destroyed_before_window_elapses",
+    "tests/erasure/test_cross_lane.py::test_an_organisation_closes_only_after_its_destruction_record_and_the_job_closes_it"
+   ],
+   "owner": "ops repo: unreadability inside real backups and write-once storage is checked on the infrastructure"
+  },
+  "FR-010": {
+   "tests": [
+    "tests/export/test_anchor_tenants.py::test_the_signature_verifies_under_the_evidence_key_and_names_the_organization",
+    "tests/export/test_bundle.py::test_an_evidence_key_kept_inside_the_bundle_is_refused",
+    "tests/export/test_service.py::test_a_signer_that_fails_marks_the_job_failed_by_name"
+   ],
+   "owner": "ops repo: the signing key living in the key service and never leaving it is infrastructure"
+  },
+  "FR-011": {
+   "tests": [
+    "tests/providers/test_key_rotation.py::test_rotation_makes_a_new_active_version_and_old_wraps_still_open",
+    "tests/providers/test_key_rotation.py::test_a_rewrap_moves_a_wrap_to_the_active_version_and_keeps_the_data_key",
+    "tests/providers/test_key_rotation.py::test_destroying_a_retired_version_shreds_its_wraps_only_and_is_idempotent",
+    "tests/providers/test_key_rotation.py::test_a_rotated_wrap_of_one_org_never_opens_for_another",
+    "tests/erasure/test_key_rotation.py::test_rotation_rewraps_every_key_in_batches_while_reads_and_the_chain_hold",
+    "tests/erasure/test_key_rotation.py::test_the_job_is_resumable_and_idempotent",
+    "tests/erasure/test_key_rotation.py::test_a_hold_blocks_destroying_the_old_version_and_the_block_is_visible",
+    "tests/erasure/test_key_rotation.py::test_a_failing_key_service_blocks_the_rotation_by_name_and_raises_an_alarm",
+    "tests/erasure/test_key_rotation.py::test_one_organisations_rotation_never_touches_another",
+    "tests/erasure/test_key_rotation.py::test_a_contact_key_changes_only_through_the_rewrap_function",
+    "tests/erasure/test_key_rotation.py::test_the_database_refuses_to_destroy_a_version_that_still_wraps_a_key",
+    "tests/erasure/test_key_rotation.py::test_the_operator_route_starts_a_rotation_and_reports_its_state",
+    "tests/erasure/test_key_rotation.py::test_the_operator_job_runs_every_open_rotation",
+    "tests/erasure/test_key_rotation.py::test_a_version_sealing_a_ledger_entry_is_retained_until_that_entry_s_retention_ends",
+    "tests/erasure/test_key_rotation.py::test_a_hold_that_cancels_an_offboarding_returns_only_the_versions_offboarding_scheduled",
+    "tests/erasure/test_attacks_wave3_final.py::test_a_rotation_keeps_the_retired_version_until_the_oldest_backup_ages_out",
+    "tests/erasure/test_attacks_wave3_final.py::test_a_rotation_blocked_by_an_undisclosed_hold_leaves_no_tenant_row_and_names_the_hold_only_to_the_operator",
+    "tests/erasure/test_attacks_wave3_final.py::test_offboarding_cancels_an_open_rotation_first_and_the_keys_end_destroyed"
+   ]
+  },
+  "FR-012": {
+   "tests": [
+    "tests/test_api.py::test_unsigned_is_401",
+    "tests/test_api.py::test_bad_signature_is_401",
+    "tests/test_api.py::test_replay_is_refused",
+    "tests/test_api.py::test_stale_timestamp_is_refused",
+    "tests/test_api.py::test_permission_and_proof_need_the_bearer_token",
+    "tests/isolation/test_hardening_wave2.py::test_an_unknown_revoked_or_unsigned_edge_capture_is_refused_by_name",
+    "tests/isolation/test_hardening_wave2.py::test_a_replayed_edge_capture_is_refused_and_recorded_once",
+    "edge/test/capture.test.ts::rate limit is per site key",
+    "tests/providers/test_anchors.py::test_webhook_requires_https_or_loopback",
+    "tests/isolation/test_rls.py::test_the_replay_guard_refuses_a_second_presentation_per_organisation"
+   ],
+   "note": "rate limit per tenant and encrypted transport at the edge are exercised in the edge tests only for the site key"
+  },
+  "FR-013": {
+   "tests": [
+    "tests/isolation/test_capture_pipeline.py::test_a_capture_writes_its_encrypted_evidence_object_before_the_ledger_row",
+    "tests/isolation/test_capture_pipeline.py::test_a_failed_commit_leaves_the_object_pending_until_reconciled_by_the_worker",
+    "tests/providers/test_evidence.py::test_s3_put_writes_compliance_lock_once_and_reads_back",
+    "tests/providers/test_evidence.py::test_s3_overwrite_refused",
+    "tests/test_seal.py::test_seal_then_verify_ok",
+    "tests/test_seal.py::test_seal_against_public_authority",
+    "tests/selfhost/test_write_once_store.py::test_delete_of_the_locked_version_is_refused_even_with_the_governance_bypass"
+   ],
+   "owner": "ops repo: real S3 Object Lock in the cloud account; the self-host tests: whoever runs tests/selfhost/run_suites.sh against the running self-host stack (deploy/selfhost), which writes the receipt",
+   "receipt": "tests/selfhost/receipts/selfhost-suites.json",
+   "covered_by": {
+    "tests/test_seal.py::test_seal_against_public_authority": [
+     "tests/test_seal.py::test_seal_then_verify_ok"
+    ]
+   }
+  },
+  "FR-014": {
+   "tests": [
+    "tests/test_ledger.py::test_append_only_refused",
+    "tests/test_ledger.py::test_chain_verifies",
+    "tests/test_ledger.py::test_current_permission_stop_outranks_grant",
+    "tests/test_ledger.py::test_concurrent_writers_do_not_fork",
+    "tests/test_ledger_guarantees.py::test_a_grant_beyond_its_disclosure_is_refused_by_name",
+    "tests/test_ledger_guarantees.py::test_a_later_stop_wins_even_if_a_grant_claims_a_later_capture_time",
+    "tests/test_gate.py::test_database_down_fails_closed",
+    "tests/test_gate.py::test_no_consent_is_denied_with_reason",
+    "tests/test_release.py::test_consumer_stop_is_released_by_later_grant",
+    "tests/test_seal.py::test_an_event_left_unsealed_past_the_grace_period_is_a_failure"
+   ]
+  },
+  "FR-015": {
+   "tests": [
+    "tests/test_proof.py::test_timeline_is_in_the_order_the_vault_received_events",
+    "tests/test_proof.py::test_chain_proof_reaches_the_head",
+    "tests/test_evidence.py::test_bundle_matches_lookup_and_verifies",
+    "tests/test_evidence.py::test_seals_verify_with_openssl_and_detect_tampering",
+    "tests/test_evidence.py::test_the_verifier_will_not_run_without_an_anchor",
+    "tests/export/test_bundle.py::test_the_bundle_carries_wording_attribution_receipts_and_the_cover",
+    "tests/export/test_service.py::test_a_build_runs_to_ready_and_downloads_once"
+   ]
+  },
+  "FR-016": {
+   "tests": [
+    "tests/sync/test_signals.py::test_a_stop_for_a_person_the_vault_never_saw_is_recorded_as_a_stop_event",
+    "tests/sync/test_signals.py::test_a_stop_from_a_signal_is_hard_and_a_later_consumer_checkbox_cannot_lift_it",
+    "tests/test_api.py::test_stop_event_is_recorded",
+    "tests/test_gate.py::test_stop_denies_and_names_both_events",
+    "tests/test_stopwords.py::test_stop"
+   ]
+  },
+  "FR-017": {
+   "tests": [],
+   "owner": "ops repo: private network and no inbound path are tofu/network and cloudflare/tunnel-ingress.yaml; tested there"
+  },
+  "FR-018": {
+   "tests": [
+    "edge/test/egress.test.ts::redirect is refused, not followed",
+    "edge/test/egress.test.ts::address classifier",
+    "edge/test/egress.test.ts::refuses an unauthorized caller",
+    "tests/sync/test_connector.py::test_the_egress_transport_needs_https_and_a_secret",
+    "tests/sync/test_connector.py::test_the_egress_transport_posts_the_exact_signed_body_and_the_door_secret"
+   ],
+   "owner": "ops repo: the network-level allow-list of destinations is infrastructure"
+  },
+  "FR-019": {
+   "tests": [
+    "tests/admin/test_routes.py::test_every_tenant_route_refuses_exactly_the_roles_its_table_does_not_list",
+    "tests/isolation/test_rls.py::test_credentials_keep_their_scope_rules",
+    "tests/isolation/test_rls.py::test_only_a_capture_verified_token_may_claim_a_verified_contact_point",
+    "tests/isolation/test_endpoints.py::test_scopes_are_held_to_their_endpoints",
+    "tests/isolation/test_sync_isolation.py::test_capture_side_functions_refuse_a_worker_token",
+    "tests/test_api.py::test_permission_and_proof_need_the_bearer_token",
+    "tests/admin/test_credentials.py::test_role_limits_on_scopes",
+    "portal/app/test/roles.test.ts::write actions follow the role matrix"
+   ]
+  },
+  "FR-020": {
+   "tests": [
+    "tests/admin/test_invites.py::test_a_sign_in_without_a_second_factor_is_refused",
+    "tests/admin/test_session.py::test_no_token_bad_token_and_no_second_factor",
+    "tests/providers/test_identity.py::test_require_mfa",
+    "tests/providers/test_identity.py::test_amr_multi_factor_reading",
+    "tests/isolation/test_operator_console.py::test_an_operator_who_signed_in_long_ago_is_refused_and_recorded_and_a_fresh_one_passes",
+    "tests/selfhost/test_keycloak_oidc.py::test_a_password_only_login_is_refused_where_mfa_is_required"
+   ],
+   "owner": "Mike: WorkOS dashboard settings (passkey or phishing-resistant factor for the operator); the self-host tests: whoever runs tests/selfhost/run_suites.sh against the running self-host stack (deploy/selfhost), which writes the receipt",
+   "receipt": "tests/selfhost/receipts/selfhost-suites.json"
+  },
+  "FR-021": {
+   "tests": [
+    "tests/admin/test_credentials.py::test_revoke",
+    "tests/admin/test_credentials.py::test_hmac_secret_is_shown_once_and_stored_only_encrypted",
+    "tests/admin/test_credentials.py::test_public_key_credentials",
+    "tests/isolation/test_hardening_wave2.py::test_a_revoke_answer_carries_the_credential_created_at_and_retention_needs_a_reason",
+    "tests/isolation/test_hardening_wave2.py::test_a_retired_source_refuses_its_site_key",
+    "tests/admin/test_routes.py::test_operator_routes_create_suspend_and_issue"
+   ]
+  },
+  "FR-022": {
+   "tests": [
+    "tests/admin/test_orgs.py::test_creation_makes_the_key_chain_prefix_lists_retention_and_invite",
+    "tests/admin/test_routes.py::test_operator_routes_create_suspend_and_issue",
+    "tests/admin/test_routes.py::test_operator_routes_need_an_operator",
+    "tests/admin/test_credentials.py::test_the_operator_alone_issues_capture_verified_and_never_to_a_site_key",
+    "tests/admin/test_smoke.py::test_org_admin_brand_roundtrip"
+   ]
+  },
+  "FR-023": {
+   "tests": [
+    "tests/erasure/test_offboard.py::test_offboard_takes_the_export_first_revokes_schedules_at_least_30_days_and_tells_the_admin",
+    "tests/erasure/test_offboard.py::test_without_a_delivery_the_run_stops_before_any_destruction",
+    "tests/erasure/test_cross_lane.py::test_destruction_waits_for_the_admin_to_download_the_final_export_once",
+    "tests/erasure/test_cross_lane.py::test_an_organisation_closes_only_after_its_destruction_record_and_the_job_closes_it",
+    "tests/providers/test_keys.py::test_destruction_window_below_30_days_refused",
+    "tests/erasure/test_attacks_wave3_final.py::test_offboarding_cancels_an_open_rotation_first_and_the_keys_end_destroyed"
+   ]
+  },
+  "FR-024": {
+   "tests": [
+    "tests/erasure/test_erasure.py::test_erasure_deletes_the_key_and_the_fingerprint_still_matches_its_stop",
+    "tests/erasure/test_erasure.py::test_erasure_expires_the_contacts_cached_packages_and_deletes_them_where_the_cache_can",
+    "tests/erasure/test_attacks_wave3_lifecycle.py::test_a_committed_erasure_writes_intent_then_commit_and_survives_a_restore",
+    "tests/test_ledger_tenancy.py::test_a_contact_key_deleted_by_hand_keeps_every_link_verifiable_and_reads_as_a_break_not_an_erasure"
+   ]
+  },
+  "FR-025": {
+   "tests": [
+    "tests/admin/test_retention_systems_audit.py::test_the_chain_verifies_and_tampering_is_detected",
+    "tests/admin/test_retention_systems_audit.py::test_no_fork_no_gap_no_edit_no_delete",
+    "tests/admin/test_retention_systems_audit.py::test_the_action_list_covers_every_action_the_log_uses",
+    "tests/admin/test_retention_systems_audit.py::test_the_platform_chain_is_separate_and_hidden_from_tenants",
+    "tests/erasure/test_cross_lane.py::test_every_lifecycle_action_is_in_the_audit_list_and_an_unlisted_one_is_refused",
+    "tests/isolation/test_operator_console.py::test_every_kind_of_refused_operator_attempt_writes_a_row_and_a_success_writes_no_refusal",
+    "tests/admin/test_orgs.py::test_status_transitions_follow_the_billing_table_and_are_audited"
+   ],
+   "owner": "ops repo: anchoring the audit log outside the service and its retention period are infrastructure"
+  },
+  "FR-026": {
+   "tests": [],
+   "owner": "ops repo: governance/controls.md (control owner, rule, check, evidence); Mike signs"
+  },
+  "FR-027": {
+   "tests": [],
+   "owner": "ops repo: governance/ai-use-register.md; Mike signs"
+  },
+  "FR-028": {
+   "tests": [],
+   "owner": "Mike: independent third-party penetration test (vendor engagement; nothing a repo test can prove)"
+  },
+  "FR-029": {
+   "tests": [],
+   "owner": "ops repo: CI release gate (dependency scan needs network, outside this checkpoint); this checkpoint script runs the secret scan, isolation and integrity suites"
+  },
+  "FR-030": {
+   "tests": [
+    "tests/erasure/test_restore.py::test_the_gate_answers_503_until_reconciliation_and_the_lost_work_comes_back",
+    "tests/erasure/test_attacks_wave3_lifecycle.py::test_restore_refuses_to_serve_while_a_chain_does_not_verify",
+    "tests/erasure/test_attacks_wave3_lifecycle.py::test_restore_refuses_to_serve_while_a_seal_does_not_verify",
+    "tests/erasure/test_attacks_wave3_lifecycle.py::test_restore_tries_every_contact_key_in_batches"
+   ],
+   "owner": "ops repo: encrypted backups, separate location and the quarterly drill (runbooks/restore.md)"
+  },
+  "FR-031": {
+   "tests": [],
+   "owner": "ops repo: governance/subprocessors.md; Mike signs"
+  },
+  "FR-032": {
+   "tests": [
+    "tests/notify/test_notify.py::test_bounce_logged_and_alarmed",
+    "tests/notify/test_notify.py::test_failed_send_logged_alarmed_and_raised",
+    "tests/isolation/test_integration_seams.py::test_an_alarm_that_cannot_be_written_fails_the_request_by_name"
+   ],
+   "owner": "ops repo: runbooks/incident.md and the channel the operator watches"
+  },
+  "FR-033": {
+   "tests": [
+    "portal/app/test/format.test.ts::copy check refuses legal conclusions and dashes, and allows only the fixed strings",
+    "tests/traceability/test_copy_check.py::test_the_repo_copy_carries_no_legal_conclusion_overclaim_or_em_dash"
+   ],
+   "owner": "Mike: the consentvault.ai Terms of Service text lives on the site, outside this repo"
+  },
+  "FR-034": {
+   "tests": [
+    "tests/test_evidence.py::test_the_verifier_accepts_hash_version_two_and_pins_its_seal_columns",
+    "tests/test_evidence.py::test_a_single_company_bundle_does_not_ask_for_an_evidence_key",
+    "tests/export/test_bundle.py::test_the_verifier_accepts_a_multi_tenant_bundle",
+    "tests/export/test_bundle.py::test_the_exported_verifier_pins_hash_version_two_and_its_seal_columns",
+    "tests/export/test_seam_conformance.py::test_the_seam_matches_the_real_export_job_table"
+   ]
+  },
+  "FR-035": {
+   "tests": [
+    "tests/test_api.py::test_edge_fields_are_accepted_and_recorded",
+    "tests/test_disclosure.py::test_wording_is_stored_and_hashed_as_its_exact_bytes",
+    "tests/admin/test_wording_checklists.py::test_a_new_version_supersedes_the_old_one_both_ways_and_only_once",
+    "tests/admin/test_wording_checklists.py::test_wording_is_stored_and_digested_exactly_as_sent",
+    "tests/export/test_bundle.py::test_the_bundle_carries_wording_attribution_receipts_and_the_cover",
+    "tests/test_evidence.py::test_missing_disclosure_fails"
+   ]
+  },
+  "FR-036": {
+   "tests": [
+    "portal/app/test/format.test.ts::copy check refuses legal conclusions and dashes, and allows only the fixed strings",
+    "tests/traceability/test_copy_check.py::test_the_repo_copy_carries_no_legal_conclusion_overclaim_or_em_dash",
+    "tests/isolation/test_endpoints.py::test_gate_answers_evidence_and_the_approved_policy_never_a_legal_conclusion",
+    "tests/export/test_bundle.py::test_a_rewritten_cover_statement_is_caught_even_when_the_hash_is_repinned"
+   ]
+  },
+  "FR-037": {
+   "tests": [
+    "tests/test_gate_rules.py::test_no_policy_gives_no_action_and_says_so",
+    "tests/test_gate_rules.py::test_the_cell_decides_and_a_stop_never_proceeds_even_if_a_cell_says_so",
+    "tests/test_gate_rules.py::test_incomplete_names_the_missing_elements_and_only_marks_a_found_record",
+    "tests/isolation/test_capture_pipeline.py::test_gate_decisions_are_append_only_and_land_in_monthly_partitions",
+    "tests/isolation/test_endpoints.py::test_gate_answers_evidence_and_the_approved_policy_never_a_legal_conclusion",
+    "tests/isolation/test_endpoints.py::test_gate_batch_answers_in_order_and_records_each_item",
+    "tests/test_attacks_wave2_gate.py::test_unavailable_holds_only_when_the_cell_says_hold",
+    "tests/test_attacks_wave2_gate.py::test_unavailable_answers_proceed_when_cell_says_proceed"
+   ]
+  },
+  "FR-038": {
+   "tests": [
+    "tests/admin/test_retention_systems_audit.py::test_retention_starts_at_the_platform_minimum_and_only_rises_with_history",
+    "tests/admin/test_retention_systems_audit.py::test_retention_refusals",
+    "tests/providers/test_evidence.py::test_s3_retention_in_the_past_or_naive_refused_before_any_request",
+    "tests/providers/test_evidence.py::test_local_missing_object_and_short_retention"
+   ]
+  },
+  "FR-039": {
+   "tests": [
+    "tests/sync/test_outbox.py::test_a_grant_queues_one_push_per_connected_system",
+    "tests/sync/test_outbox.py::test_the_event_and_its_pushes_commit_together_or_not_at_all",
+    "tests/sync/test_outbox.py::test_queuing_the_same_push_twice_in_one_transaction_is_one_row",
+    "tests/sync/test_worker.py::test_a_push_is_signed_acknowledged_and_idempotent",
+    "tests/sync/test_worker.py::test_retry_with_exponential_backoff",
+    "tests/sync/test_worker.py::test_the_retry_window_ends_in_dead",
+    "tests/sync/test_worker.py::test_dead_pushes_raise_one_alarm_per_system_and_class",
+    "tests/sync/test_worker.py::test_concurrent_workers_never_double_claim_and_never_skip_ahead",
+    "tests/sync/test_worker.py::test_the_same_idempotency_key_rides_every_retry",
+    "tests/sync/test_routes.py::test_the_delivery_query_lists_receipts_for_one_contact_without_naming_it"
+   ]
+  },
+  "FR-040": {
+   "tests": [
+    "tests/sync/test_signals.py::test_a_grant_claim_against_a_stop_is_conflict_stop_wins",
+    "tests/sync/test_signals.py::test_a_stop_the_ledger_already_holds_is_no_change_no_event_no_push",
+    "tests/sync/test_signals.py::test_a_grant_claim_with_registered_wording_becomes_an_event_pushed_to_the_others",
+    "tests/sync/test_routes.py::test_signals_answer_202_with_the_resolution_and_the_event"
+   ]
+  },
+  "FR-041": {
+   "tests": [
+    "tests/test_adapters.py::test_null_adapters_satisfy_protocols",
+    "tests/providers/test_keys.py::test_both_implement_the_interface",
+    "tests/providers/test_evidence.py::test_both_implement_the_interface",
+    "tests/providers/test_anchors.py::test_all_are_anchor_sinks",
+    "tests/selfhost/test_vault_service.py::test_the_vault_container_answers",
+    "tests/selfhost/test_openbao_keys.py::test_wrap_unwrap_and_destruction_lifecycle",
+    "tests/selfhost/test_keycloak_oidc.py::test_a_real_keycloak_token_verifies"
+   ],
+   "note": "the selfhost tests need the docker stack and run through tests/selfhost/run_suites.sh, not this checkpoint",
+   "owner": "The self-host tests: whoever runs tests/selfhost/run_suites.sh against the running self-host stack (deploy/selfhost), which writes the receipt",
+   "receipt": "tests/selfhost/receipts/selfhost-suites.json"
+  },
+  "FR-042": {
+   "tests": [
+    "tests/isolation/test_rls.py::test_every_tenant_table_forces_row_level_security_bound_to_the_verified_tenant",
+    "tests/providers/test_evidence.py::test_s3_put_writes_compliance_lock_once_and_reads_back",
+    "tests/providers/test_keys.py::test_wrap_unwrap_roundtrip_and_isolation_between_orgs",
+    "tests/export/test_bundle.py::test_the_bundle_carries_wording_attribution_receipts_and_the_cover"
+   ],
+   "owner": "ops repo: the scheduled run of these validations is infrastructure"
+  },
+  "FR-043": {
+   "tests": [
+    "portal/app/test/format.test.ts::copy check refuses legal conclusions and dashes, and allows only the fixed strings",
+    "tests/traceability/test_copy_check.py::test_the_repo_copy_carries_no_legal_conclusion_overclaim_or_em_dash",
+    "tests/test_gate_rules.py::test_evidence_mapping_describes_records_only",
+    "tests/isolation/test_endpoints.py::test_gate_answers_evidence_and_the_approved_policy_never_a_legal_conclusion"
+   ]
+  },
+  "FR-044": {
+   "tests": [
+    "tests/admin/test_policy.py::test_approval_needs_the_attestation_exactly_and_an_admin",
+    "tests/admin/test_policy.py::test_the_attestation_text_is_kept_word_for_word",
+    "tests/admin/test_policy.py::test_policy_changes_are_audited",
+    "tests/admin/test_policy.py::test_the_template_is_complete_and_is_never_in_force_by_itself",
+    "tests/admin/test_policy.py::test_one_policy_in_force_and_approval_retires_the_previous"
+   ]
+  },
+  "FR-045": {
+   "tests": [
+    "tests/test_gate_rules.py::test_a_rule_never_lifts_a_hold",
+    "tests/test_gate_rules.py::test_each_narrowing_rule_only_turns_proceed_into_hold",
+    "tests/admin/test_policy.py::test_a_stop_can_only_hold",
+    "tests/isolation/test_endpoints.py::test_a_stop_holds_whatever_the_policy_and_narrowing_rules_only_narrow"
+   ]
+  },
+  "FR-046": {
+   "tests": [
+    "tests/test_gate_rules.py::test_incomplete_names_the_missing_elements_and_only_marks_a_found_record",
+    "tests/admin/test_wording_checklists.py::test_checklist_lifecycle",
+    "tests/admin/test_wording_checklists.py::test_checklist_input_checks",
+    "tests/admin/test_wording_checklists.py::test_pewc_example_points_at_a_rule_reference_and_quotes_nothing"
+   ]
+  },
+  "FR-047": {
+   "tests": [
+    "tests/isolation/test_endpoints.py::test_ebr_and_dnc_scrub_records_land_in_the_callers_org_only"
+   ],
+   "note": "stores EBR and DNC scrub records per org; the informational date window computed from client durations has no test"
+  },
+  "FR-048": {
+   "tests": [
+    "tests/test_gate_rules.py::test_a_rule_reference_is_a_citation_only",
+    "tests/admin/test_wording_checklists.py::test_pewc_example_points_at_a_rule_reference_and_quotes_nothing",
+    "tests/admin/test_policy.py::test_rules_are_checked_against_the_organisations_own_lists"
+   ]
+  },
+  "FR-049": {
+   "tests": [
+    "tests/export/test_bundle.py::test_the_bundle_carries_wording_attribution_receipts_and_the_cover",
+    "tests/export/test_bundle.py::test_a_rewritten_cover_statement_is_caught_even_when_the_hash_is_repinned",
+    "portal/app/test/format.test.ts::copy check refuses legal conclusions and dashes, and allows only the fixed strings"
+   ],
+   "owner": "Mike: the Terms of Service responsibility table lives on the site, outside this repo"
+  },
+  "FR-050": {
+   "tests": [
+    "tests/test_ledger.py::test_append_only_refused",
+    "tests/test_ledger.py::test_tamper_detected",
+    "tests/test_ledger_guarantees.py::test_the_runtime_role_cannot_change_history_or_the_schema",
+    "tests/erasure/test_erasure.py::test_hold_and_erasure_records_cannot_be_deleted_or_rewritten",
+    "tests/test_deployment_roles.py::test_init_scripts_make_a_nologin_owner_a_migrator_an_operator_login_and_a_runtime_role",
+    "tests/erasure/test_attacks_wave3_roles.py::test_F_operator_console_cannot_disable_the_hold_trigger_and_delete_a_held_key",
+    "tests/erasure/test_attacks_wave3_roles.py::test_no_login_role_disables_or_drops_a_trigger_on_a_vault_table",
+    "tests/erasure/test_attacks_wave3_final.py::test_a_guard_changed_below_the_guard_is_reported_and_the_api_refuses_to_start",
+    "tests/erasure/test_attacks_wave3_final.py::test_the_api_refuses_an_app_login_that_can_set_role_to_a_bypassrls_role",
+    "tests/erasure/test_attacks_wave3_final.py::test_a_console_member_that_bypasses_row_security_or_acts_as_the_owner_is_a_violation"
+   ],
+   "owner": "ops repo: holding records apart from client systems is infrastructure (separate account and network)"
+  },
+  "FR-051": {
+   "tests": [
+    "tests/billing/test_webhook.py::test_first_paid_invoice_moves_trial_to_active_and_writes_history",
+    "tests/billing/test_webhook.py::test_payment_failed_moves_active_to_past_due",
+    "tests/billing/test_webhook.py::test_subscription_deleted_suspends_and_a_new_paid_subscription_reactivates",
+    "tests/billing/test_webhook.py::test_forged_signature_is_refused_before_anything_is_stored",
+    "tests/billing/test_webhook.py::test_the_same_event_delivered_twice_at_once_is_stored_once",
+    "tests/billing/test_webhook.py::test_a_webhook_never_moves_an_org_out_of_offboarding_or_closed",
+    "tests/billing/test_schema.py::test_capture_is_recorded_while_an_org_is_past_due_or_in_trial",
+    "tests/billing/test_schema.py::test_each_status_change_writes_one_history_row_with_cause_and_actor",
+    "tests/isolation/test_integration_seams.py::test_trial_past_due_and_suspended_orgs_keep_capture_and_gate",
+    "tests/export/test_service.py::test_a_suspended_organization_pauses_exports",
+    "tests/admin/test_credentials.py::test_suspended_and_offboarding_organisations_issue_nothing_new",
+    "tests/admin/test_orgs.py::test_status_transitions_follow_the_billing_table_and_are_audited"
+   ]
+  },
+  "FR-052": {
+   "tests": [
+    "tests/billing/test_schema.py::test_no_table_holds_card_bank_or_address_columns"
+   ]
+  },
+  "FR-053": {
+   "tests": [
+    "tests/billing/test_usage.py::test_counts_each_org_separately_and_reports_with_idempotency_keys",
+    "tests/billing/test_usage.py::test_stripe_503_is_retried_with_backoff_then_succeeds",
+    "tests/billing/test_usage.py::test_stripe_staying_down_raises_a_named_alarm_and_the_run_fails_loudly",
+    "tests/billing/test_usage.py::test_a_second_run_of_the_same_day_sends_nothing_again",
+    "tests/billing/test_usage.py::test_an_unreadable_gate_count_is_stored_null_alarmed_and_never_reported_as_zero",
+    "tests/billing/test_stripe_client.py::test_meter_event_uses_the_identifier_as_idempotency_key"
+   ]
+  },
+  "FR-054": {
+   "tests": [
+    "tests/billing/test_routes.py::test_summary_reports_plan_period_inclusions_and_usage_against_them",
+    "tests/billing/test_routes.py::test_plans_come_from_the_stripe_prices_sorted_by_amount_and_enterprise_has_no_list_price",
+    "tests/billing/test_schema.py::test_capture_is_recorded_while_an_org_is_past_due_or_in_trial"
+   ],
+   "note": "overage billing itself happens at Stripe from the reported usage; no test here exceeds a limit and checks capture is not refused"
+  },
+  "FR-055": {
+   "tests": [
+    "tests/billing/test_routes.py::test_checkout_creates_the_customer_with_the_org_id_and_returns_the_hosted_url",
+    "tests/billing/test_routes.py::test_portal_needs_a_customer_then_opens_the_stripe_portal"
+   ]
+  },
+  "FR-056": {
+   "tests": [
+    "tests/admin/test_invites.py::test_single_use",
+    "tests/admin/test_invites.py::test_the_invite_cannot_outlive_seven_days_or_be_forged_by_the_app",
+    "tests/admin/test_invites.py::test_with_no_mailer_the_operator_gets_the_link_token_once",
+    "tests/admin/test_invites.py::test_must_be_accepted_from_the_invited_address",
+    "tests/admin/test_orgs.py::test_creation_makes_the_key_chain_prefix_lists_retention_and_invite",
+    "tests/billing/test_routes.py::test_checkout_creates_the_customer_with_the_org_id_and_returns_the_hosted_url"
+   ],
+   "owner": "Mike: the WorkOS sign-in step is a vendor service; ops scripts/check_workos.py reads it"
+  },
+  "FR-057": {
+   "tests": [
+    "tests/notify/test_notify.py::test_consumer_email_refused",
+    "tests/notify/test_notify.py::test_phone_like_refused",
+    "tests/notify/test_notify.py::test_notifier_logs_domain_only_no_body",
+    "tests/notify/test_notify.py::test_failed_send_logged_alarmed_and_raised",
+    "tests/notify/test_notify.py::test_bounce_logged_and_alarmed",
+    "tests/notify/test_notify.py::test_templates_render_text_html_no_em_dash",
+    "tests/isolation/test_integration_seams.py::test_the_postgres_send_log_appends_domain_only_rows_the_operator_reads"
+   ]
+  },
+  "FR-058": {
+   "tests": [
+    "portal/app/e2e/run.mjs::brands partial",
+    "portal/app/e2e/run.mjs::plan empty",
+    "portal/app/e2e/run.mjs::policies empty",
+    "portal/app/e2e/run.mjs::checklists partial"
+   ],
+   "owner": "Mike: the hosted WorkOS sign-in page branding is set in the vendor dashboard"
+  },
+  "SC-001": {
+   "tests": [
+    "tests/isolation/test_endpoints.py::test_proof_shows_a_its_own_record_and_b_nothing",
+    "tests/isolation/test_endpoints.py::test_capture_refuses_another_orgs_source_brand_and_wording_like_ones_that_do_not_exist",
+    "tests/isolation/test_sync_isolation.py::test_a_forged_token_is_refused_by_every_function",
+    "tests/isolation/test_export_isolation.py::test_another_organizations_job_package_and_link_are_unreachable",
+    "tests/isolation/test_erasure_isolation.py::test_one_orgs_erasure_request_is_invisible_and_unconfirmable_from_the_other",
+    "tests/isolation/test_billing_isolation.py::test_a_tenant_reads_only_its_own_billing_rows",
+    "tests/isolation/test_admin_isolation.py::test_lists_never_include_the_other_organisation",
+    "tests/isolation/test_rls.py::test_every_tenant_table_forces_row_level_security_bound_to_the_verified_tenant"
+   ],
+   "owner": "Mike: the third-party penetration test half of this criterion"
+  },
+  "SC-002": {
+   "tests": [
+    "tests/export/test_service.py::test_a_build_runs_to_ready_and_downloads_once",
+    "tests/test_evidence.py::test_bundle_matches_lookup_and_verifies"
+   ],
+   "note": "the ten-minute bound is not timed by any test"
+  },
+  "SC-003": {
+   "tests": [
+    "tests/test_ledger_tenancy.py::test_a_version_two_row_holds_no_clear_personal_data",
+    "tests/isolation/test_rls.py::test_a_clear_contact_point_is_refused_outside_the_home_organisation",
+    "tests/test_log_scrub.py::test_a_tenant_flow_logged_at_debug_emits_no_contact_ip_or_token"
+   ],
+   "owner": "ops repo: the clear-text scan of write-once storage and backups runs on the infrastructure"
+  },
+  "SC-004": {
+   "tests": [
+    "tests/test_ledger_tenancy.py::test_a_contact_key_deleted_by_hand_keeps_every_link_verifiable_and_reads_as_a_break_not_an_erasure",
+    "tests/isolation/test_erasure_isolation.py::test_erase_contact_under_one_org_never_touches_the_other",
+    "tests/isolation/test_erasure_isolation.py::test_offboarding_one_org_leaves_the_other_untouched",
+    "tests/erasure/test_cross_lane.py::test_an_organisation_closes_only_after_its_destruction_record_and_the_job_closes_it"
+   ]
+  },
+  "SC-005": {
+   "tests": [
+    "tests/admin/test_smoke.py::test_org_admin_brand_roundtrip",
+    "tests/admin/test_routes.py::test_operator_routes_create_suspend_and_issue",
+    "tests/admin/test_invites.py::test_single_use"
+   ],
+   "owner": "Mike: the thirty-minute timing is a timed walkthrough with a first client"
+  },
+  "SC-006": {
+   "tests": [
+    "tests/admin/test_retention_systems_audit.py::test_the_chain_verifies_and_tampering_is_detected",
+    "tests/admin/test_retention_systems_audit.py::test_the_action_list_covers_every_action_the_log_uses",
+    "tests/admin/test_retention_systems_audit.py::test_no_fork_no_gap_no_edit_no_delete",
+    "tests/erasure/test_cross_lane.py::test_every_lifecycle_action_is_in_the_audit_list_and_an_unlisted_one_is_refused"
+   ],
+   "note": "the scheduled audit-chain verification job is not tested here"
+  },
+  "SC-007": {
+   "tests": [
+    "tests/test_seal.py::test_an_event_left_unsealed_past_the_grace_period_is_a_failure",
+    "tests/test_seal.py::test_the_unsealed_grace_period_is_configurable_and_defaults_to_one_hour",
+    "tests/test_seal.py::test_seal_then_verify_ok"
+   ]
+  },
+  "SC-008": {
+   "tests": [
+    "tests/test_attacks_wave2_gate.py::test_unavailable_holds_only_when_the_cell_says_hold",
+    "tests/test_attacks_wave2_gate.py::test_unavailable_answers_proceed_when_cell_says_proceed",
+    "tests/test_gate.py::test_database_down_fails_closed",
+    "tests/test_gate.py::test_bad_input_fails_closed",
+    "tests/test_api.py::test_permission_returns_the_named_denial_when_the_database_errors"
+   ],
+   "note": "the one-second 99th percentile latency is not measured by any test"
+  },
+  "SC-009": {
+   "tests": [],
+   "owner": "Mike: third-party penetration test findings (nothing a repo test can prove)"
+  },
+  "SC-010": {
+   "tests": [],
+   "owner": "ops repo: governance/controls.md sample of ten controls; Mike signs"
+  },
+  "SC-011": {
+   "tests": [
+    "tests/erasure/test_restore.py::test_the_gate_answers_503_until_reconciliation_and_the_lost_work_comes_back",
+    "tests/erasure/test_attacks_wave3_lifecycle.py::test_restore_refuses_to_serve_while_a_chain_does_not_verify",
+    "tests/erasure/test_attacks_wave3_lifecycle.py::test_restore_refuses_to_serve_while_a_seal_does_not_verify"
+   ],
+   "owner": "ops repo: the quarterly drill and its recovery time (runbooks/restore.md)"
+  },
+  "SC-012": {
+   "tests": [
+    "tests/sync/test_worker.py::test_dead_pushes_raise_one_alarm_per_system_and_class",
+    "tests/sync/test_worker.py::test_the_retry_window_ends_in_dead",
+    "tests/sync/test_worker.py::test_a_push_is_signed_acknowledged_and_idempotent",
+    "tests/sync/test_outbox.py::test_a_grant_queues_one_push_per_connected_system",
+    "tests/sync/test_routes.py::test_the_delivery_query_lists_receipts_for_one_contact_without_naming_it"
+   ],
+   "note": "the five-minute delivery bound at 99 percent is not measured by any test"
+  },
+  "SC-013": {
+   "tests": [
+    "tests/selfhost/test_vault_service.py::test_migrations_applied_by_the_owner",
+    "tests/selfhost/test_vault_service.py::test_runtime_role_cannot_update_delete_or_alter_the_ledger",
+    "tests/selfhost/test_vault_service.py::test_the_vault_container_answers",
+    "tests/selfhost/test_write_once_store.py::test_bucket_default_is_compliance",
+    "tests/selfhost/test_openbao_keys.py::test_wrap_unwrap_and_destruction_lifecycle",
+    "tests/selfhost/test_keycloak_oidc.py::test_a_real_keycloak_token_verifies"
+   ],
+   "note": "run through tests/selfhost/run_suites.sh against the docker stack, not through this checkpoint",
+   "owner": "The self-host tests: whoever runs tests/selfhost/run_suites.sh against the running self-host stack (deploy/selfhost), which writes the receipt",
+   "receipt": "tests/selfhost/receipts/selfhost-suites.json"
+  },
+  "SC-014": {
+   "tests": [
+    "tests/traceability/test_copy_check.py::test_the_repo_copy_carries_no_legal_conclusion_overclaim_or_em_dash",
+    "portal/app/test/format.test.ts::copy check refuses legal conclusions and dashes, and allows only the fixed strings",
+    "tests/notify/test_notify.py::test_templates_render_text_html_no_em_dash",
+    "tests/test_gate_rules.py::test_evidence_mapping_describes_records_only"
+   ]
+  },
+  "SC-015": {
+   "tests": [
+    "tests/billing/test_webhook.py::test_first_paid_invoice_moves_trial_to_active_and_writes_history",
+    "tests/billing/test_webhook.py::test_payment_failed_moves_active_to_past_due",
+    "tests/billing/test_webhook.py::test_subscription_deleted_suspends_and_a_new_paid_subscription_reactivates",
+    "tests/billing/test_webhook.py::test_subscription_updated_past_due_then_recovered",
+    "tests/billing/test_webhook.py::test_the_same_event_delivered_twice_at_once_is_stored_once",
+    "tests/billing/test_webhook.py::test_a_replayed_event_changes_nothing_and_asks_stripe_nothing",
+    "tests/billing/test_webhook.py::test_forged_signature_is_refused_before_anything_is_stored",
+    "tests/billing/test_webhook.py::test_checkout_completed_links_customer_subscription_and_plan"
+   ]
+  },
+  "SC-016": {
+   "tests": [
+    "tests/admin/test_invites.py::test_single_use",
+    "tests/admin/test_invites.py::test_with_no_mailer_the_operator_gets_the_link_token_once",
+    "tests/admin/test_smoke.py::test_org_admin_brand_roundtrip",
+    "tests/test_e2e_edge.py::test_checked_box_becomes_a_grant_and_unchecked_never_does",
+    "portal/app/e2e/run.mjs::overview new org"
+   ],
+   "owner": "Mike: the thirty-minute timing is a timed walkthrough with a first client"
+  }
+ }
+}

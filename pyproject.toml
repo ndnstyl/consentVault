@@ -24,7 +24,9 @@ Repository = "https://github.com/ndnstyl/consentVault"
 Issues = "https://github.com/ndnstyl/consentVault/issues"
 
 [project.optional-dependencies]
-dev = ["pytest"]
+# Multi-tenant layer: field encryption and token verification. The single-company core needs none of it.
+cloud = ["cryptography>=43"]
+dev = ["pytest", "cryptography>=43"]
 
 [project.scripts]
 consentvault = "consentvault.cli:main"
@@ -37,5 +39,10 @@ packages = ["src/consentvault"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The live self-host tests need the stack running; they run only through tests/selfhost/run_suites.sh
+# (or `pytest -o addopts="" tests/selfhost`), where a missing stack fails loudly.
+addopts = "--ignore=tests/selfhost -m 'not contract_pending'"
 pythonpath = ["src"]
-markers = ["network: needs outbound network access (for example a live timestamp authority); deselect with -m \"not network\""]
+markers = ["contract_pending: executable contract for records, confirmations and setup, written before the implementation; excluded from the default run, run with -m contract_pending until the build starts",
+           "network: needs outbound network access (for example a live timestamp authority); deselect with -m \"not network\"",
+           "migration_login_check: the start check also refuses the suite's own migration login (every other test keeps it, to act as the owner)"]

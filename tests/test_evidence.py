@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import pytest
 
 import tsa as tsa_mod
+from conftest import superuser_of
 from consentvault.capture import capture
 from consentvault.evidence import export as _export_bundle, render_verifier
 from consentvault import seal
@@ -345,10 +346,13 @@ def test_a_bundle_exported_after_the_tail_was_cut_fails_against_the_anchor(conn,
                  method="keyword", origin="consumer")
     _seal_all(conn, throwaway_tsa)
     anchor_mod.anchor(conn, str(tmp_path / "anchors.jsonl"))
-    conn.execute("ALTER TABLE consentvault.seal DISABLE TRIGGER USER")
-    conn.execute("ALTER TABLE consentvault.event DISABLE TRIGGER USER")
-    conn.execute("DELETE FROM consentvault.seal WHERE event_id IN (SELECT event_id FROM consentvault.event WHERE seq = 2)")
-    conn.execute("DELETE FROM consentvault.event WHERE seq = 2")
+    with superuser_of(conn) as su:  # only a superuser can switch the triggers off (the trigger guard)
+        su.execute("ALTER TABLE consentvault.seal DISABLE TRIGGER USER")
+        su.execute("ALTER TABLE consentvault.event DISABLE TRIGGER USER")
+        su.execute("DELETE FROM consentvault.seal WHERE event_id IN (SELECT event_id FROM consentvault.event WHERE seq = 2)")
+        su.execute("DELETE FROM consentvault.event WHERE seq = 2")
+        su.execute("ALTER TABLE consentvault.seal ENABLE TRIGGER USER")
+        su.execute("ALTER TABLE consentvault.event ENABLE TRIGGER USER")
     out = tmp_path / "bundle"
     export(conn, PHONE_A, out)
     sink_line = json.loads((tmp_path / "anchors.jsonl").read_text().splitlines()[-1])
@@ -573,3 +577,21 @@ def test_a_bundled_anchor_that_is_not_on_the_path_is_refused(conn, disclosure, t
     _reseal_manifest(out, data)
     proc = _verify(out, ca)
     assert proc.returncode != 0 and "FAIL bundled anchor 9 (seq 7)" in proc.stdout
+
+
+def test_the_verifier_accepts_hash_version_two_and_pins_its_seal_columns():
+    text = render_verifier("0" * 64)
+    ns = {}
+    head = text.split("def report(")[0].replace("HERE = os.path.dirname(os.path.abspath(__file__))", "HERE = ''")
+    exec(head, ns)  # the pinned tables only; nothing in the verifier runs
+    assert ns["HASH_VERSIONS"]["2"] == list(HASH_VERSIONS[2])
+    assert ns["SEAL_HASH_VERSIONS"]["2"] == list(HASH_VERSIONS[2]) + ["prev_hash", "row_hash"]
+    assert ns["SEAL_HASH_VERSIONS"]["1"] == list(seal.SEAL_HASH_VERSIONS[1])
+    assert "Verified" not in text and "--evidence-key" in text
+
+
+def test_a_single_company_bundle_does_not_ask_for_an_evidence_key(populated, ca, tmp_path):
+    out = tmp_path / "bundle"
+    export(populated, PHONE_A, out)
+    proc = _verify(out, ca)
+    assert proc.returncode == 0 and "evidence public key" not in proc.stdout

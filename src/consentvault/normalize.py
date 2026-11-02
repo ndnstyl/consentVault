@@ -35,6 +35,8 @@ def normalize_phone(raw: str, region: str | None = None) -> str:
         raise NormalizationError(
             f"phone {raw!r} has no '+' prefix and no default region is configured"
         )
+    if region.upper() in TRUNK_REGIONS:
+        return _national_with_trunk(digits, TRUNK_REGIONS[region.upper()], raw)
     if region.upper() not in NANP_REGIONS:
         raise NormalizationError(
             f"region {region!r} is not supported without a '+' prefix; give the number as +<country code>..."
@@ -44,6 +46,23 @@ def normalize_phone(raw: str, region: str | None = None) -> str:
     if len(digits) != 10:
         raise NormalizationError(f"not a 10-digit NANP number: {raw!r}")
     return _check_nanp("+1" + digits, raw)
+
+
+# regions whose national format is a trunk prefix "0" then the number: region -> (country code, digits after the trunk prefix)
+TRUNK_REGIONS = {"GB": ("44", (9, 10))}
+
+
+def _national_with_trunk(digits: str, rule: tuple, raw: str) -> str:
+    code, lengths = rule
+    if not digits.startswith("0") or len(digits) - 1 not in lengths:
+        raise NormalizationError(f"not a national number for this region: {raw!r}")
+    return _normalized_international("+" + code + digits[1:], raw)
+
+
+def _normalized_international(candidate: str, raw: str) -> str:
+    if not _E164.match(candidate):
+        raise NormalizationError(f"not a valid international number: {raw!r}")
+    return candidate
 
 
 def _check_nanp(candidate: str, raw: str) -> str:

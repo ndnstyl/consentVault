@@ -1,14 +1,32 @@
 # Copy to consentvault.toml (gitignored). Environment variables win over this file:
-# CONSENTVAULT_DSN, CONSENTVAULT_OWNER_DSN, CONSENTVAULT_DEFAULT_REGION, CONSENTVAULT_TSA_URL, CONSENTVAULT_MIGRATIONS, CONSENTVAULT_PURPOSES,
+# CONSENTVAULT_DSN, CONSENTVAULT_OWNER_DSN, CONSENTVAULT_OPERATOR_DSN, CONSENTVAULT_DEFAULT_REGION, CONSENTVAULT_TSA_URL, CONSENTVAULT_MIGRATIONS, CONSENTVAULT_PURPOSES,
 # CONSENTVAULT_ANCHOR_SINK, CONSENTVAULT_SEAL_MAX_DELAY_SECONDS, CONSENTVAULT_UNSEALED_GRACE_SECONDS.
 
 # PostgreSQL 15+ connection string for the RUNTIME role: a login role that is a member of the group role
 # consentvault_app (SELECT and INSERT only). Every command except `migrate` uses this one.
 dsn = "postgresql://consentvault_runtime:change-me@db:5432/consentvault"
 
-# Connection string for the OWNER role, the one that runs `consentvault migrate` and owns the schema.
+# Connection string for the MIGRATOR login, the one that runs `consentvault migrate`. It is a member of the NOLOGIN
+# schema owner (consentvault_owner) and its default role is that owner, so the owner owns what migrations make.
 # Keep it out of the runtime environment: put it in this file only on the machine that runs migrations.
-# owner_dsn = "postgresql://consentvault_owner:change-me@db:5432/consentvault"
+# owner_dsn = "postgresql://consentvault_migrator:change-me@db:5432/consentvault"
+
+# Connection string for the OPERATOR CONSOLE login (a member of consentvault_console; owns nothing). The operator jobs
+# (`consentvault erasure-resume`) use it. It cannot switch a trigger off or replace a function.
+# operator_dsn = "postgresql://consentvault_operator_login:change-me@db:5432/consentvault"
+
+# AWS RDS with IAM database authentication (the cloud tasks): set db_auth = "iam" and leave dsn and operator_dsn unset.
+# Each task logs in as its role's database user with a 15-minute token signed from the task role's credentials, over TLS
+# verified against the RDS CA bundle (verify-full). Environment: CONSENTVAULT_DB_AUTH, CONSENTVAULT_DB_HOST,
+# CONSENTVAULT_DB_NAME, CONSENTVAULT_DB_USER, CONSENTVAULT_DB_REGION, CONSENTVAULT_DB_CA_BUNDLE, CONSENTVAULT_DB_PORT
+# (the cloud task names CV_DB_AUTH, CV_DB_HOST, CV_DB_NAME, CV_DB_USER and AWS_REGION are read too). owner_dsn keeps
+# its password: only the one-off migration task holds it. Self-host leaves db_auth at its default, "password".
+# db_auth = "iam"
+# db_host = "consentvault.xxxxxxxx.us-east-1.rds.amazonaws.com"
+# db_name = "consentvault"
+# db_user = "consentvault_runtime"
+# db_region = "us-east-1"
+# db_ca_bundle = "/etc/consentvault/rds-global-bundle.pem"
 
 # Region used to read phone numbers written without a country code (ISO 3166 alpha-2).
 default_region = "US"
@@ -29,6 +47,10 @@ anchor_sink = "https://anchors.example.com/hook"
 
 # Longest an event may stay unsealed before `consentvault verify-seals` fails it (seconds). Default 3600.
 # unsealed_grace_seconds = 3600
+
+# How long the oldest database backup is kept, in days. A retired organisation key version is kept this long after a
+# key rotation moves every key off it, so a restore of any backup still opens. Match it to the backup window.
+# backup_retention_days = 35
 
 # Optional: directory of migrations (defaults to the ones shipped with the package).
 # migrations_dir = "migrations"

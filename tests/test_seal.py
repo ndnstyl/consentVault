@@ -9,6 +9,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
+from conftest import superuser_of
 from consentvault import ledger, seal
 from consentvault.errors import ConfigError
 
@@ -145,11 +146,13 @@ def _seal_count(conn):
 
 
 def _tamper(conn, sql, params=()):
-    conn.execute("ALTER TABLE consentvault.event DISABLE TRIGGER event_append_only")
-    try:
-        conn.execute(sql, params)
-    finally:
-        conn.execute("ALTER TABLE consentvault.event ENABLE TRIGGER event_append_only")
+    """Only a superuser can switch a vault trigger off (the trigger guard), so the tamper runs as one."""
+    with superuser_of(conn) as su:
+        su.execute("ALTER TABLE consentvault.event DISABLE TRIGGER event_append_only")
+        try:
+            su.execute(sql, params)
+        finally:
+            su.execute("ALTER TABLE consentvault.event ENABLE TRIGGER event_append_only")
 
 
 def test_seal_then_verify_ok(conn, disclosure, tsa):
@@ -199,12 +202,13 @@ def test_new_hash_version_leaves_old_seals_valid(conn, disclosure, tsa, monkeypa
     first = _grant(conn, disclosure, "212-555-0101")
     seal.seal_pending(conn, tsa.url, backoff=0)
     old = seal.current_hash_version()
+    new = max(seal.SEAL_HASH_VERSIONS) + 1  # the next free number (2 is the multi-tenant line)
     conn.execute("ALTER TABLE consentvault.event ADD COLUMN extra_note text")
-    monkeypatch.setitem(seal.SEAL_HASH_VERSIONS, old + 1, seal.SEAL_HASH_VERSIONS[old] + ("extra_note",))
+    monkeypatch.setitem(seal.SEAL_HASH_VERSIONS, new, seal.SEAL_HASH_VERSIONS[old] + ("extra_note",))
     second = _grant(conn, disclosure, "212-555-0102")
     assert seal.seal_pending(conn, tsa.url, backoff=0) == [second.event_id]
     versions = {str(r["event_id"]): r["hash_version"] for r in conn.execute("SELECT * FROM consentvault.seal")}
-    assert versions == {first.event_id: old, second.event_id: old + 1}
+    assert versions == {first.event_id: old, second.event_id: new}
     assert seal.verify_all(conn) == (2, [])
     _tamper(conn, "UPDATE consentvault.event SET extra_note = 'late edit' WHERE event_id = %s", (second.event_id,))
     checked, failures = seal.verify_all(conn)
@@ -349,9 +353,10 @@ def test_seal_times_that_run_backwards_against_seq_fail(conn, disclosure, tsa):
 def test_stored_gen_time_must_match_the_token(conn, disclosure, tsa):
     ev = _grant(conn, disclosure)
     seal.seal_pending(conn, tsa.url, backoff=0)
-    conn.execute("ALTER TABLE consentvault.seal DISABLE TRIGGER seal_guard")
-    conn.execute("UPDATE consentvault.seal SET gen_time = gen_time + interval '3 hours'")
-    conn.execute("ALTER TABLE consentvault.seal ENABLE TRIGGER seal_guard")
+    with superuser_of(conn) as su:  # only a superuser can switch the trigger off (the trigger guard)
+        su.execute("ALTER TABLE consentvault.seal DISABLE TRIGGER seal_guard")
+        su.execute("UPDATE consentvault.seal SET gen_time = gen_time + interval '3 hours'")
+        su.execute("ALTER TABLE consentvault.seal ENABLE TRIGGER seal_guard")
     res = seal.verify(conn, ev.event_id)
     assert not res.ok and "differs from the token" in res.reason
 
@@ -363,3 +368,26 @@ def test_a_runtime_role_seals_and_verifies_through_the_function_only(app_conn, c
     assert conn.execute("SELECT verified_at FROM consentvault.seal").fetchone()["verified_at"] is not None
     with pytest.raises(psycopg.Error):
         app_conn.execute("UPDATE consentvault.seal SET verified_at = now()")
+
+
+def test_verify_seals_reports_a_failure_by_class_and_code_never_its_text(dsn, conn, disclosure, tsa, monkeypatch, capsys):
+    """An error raised while checking a seal reaches stdout and stderr as its class and stable code; its text (which can quote a
+    value) never does, and the failed event is still reported."""
+    from consentvault import cli
+    from consentvault import seal as seal_mod
+    from error_names import named
+
+    _grant(conn, disclosure)
+    monkeypatch.setenv("CONSENTVAULT_DSN", dsn)
+    monkeypatch.setenv("CONSENTVAULT_TSA_URL", tsa.url)
+    assert cli.main(["seal"]) == 0
+    capsys.readouterr()
+
+    def leak(*a, **k):
+        raise seal_mod.SealError("call +18135550199 or dana.whitfield@example.com, ask for Dana Whitfield")
+    monkeypatch.setattr(seal_mod, "_digest_columns", leak)
+    assert cli.main(["verify-seals"]) == cli.EXIT_BROKEN
+    got = capsys.readouterr()
+    both = got.out + got.err
+    assert "seal failed for event" in got.err and named("SealError", both)
+    assert not any(s in both for s in ("8135550199", "dana.whitfield", "Dana", "Whitfield"))

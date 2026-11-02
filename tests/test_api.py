@@ -64,17 +64,17 @@ def _grant(sha, contact="+12125550101"):
 
 def test_bad_signature_is_401(server, disclosure):
     status, body, _ = _post(server, _grant(disclosure), secret="wrong")
-    assert status == 401 and body["error"] == "bad_signature"
+    assert status == 401 and body["error"] == "unauthenticated"
 
 
 def test_unsigned_is_401(server, disclosure):
     status, body, _ = _call(server + "/v1/events", "POST", b"{}", {"Content-Type": "application/json"})
-    assert status == 401 and body["error"] == "unsigned"
+    assert status == 401 and body["error"] == "unauthenticated"
 
 
 def test_stale_timestamp_is_refused(server, disclosure):
     status, body, _ = _post(server, _grant(disclosure), ts=int(time.time()) - 301)
-    assert status == 401 and body["error"] == "stale_timestamp"
+    assert status == 401 and body["error"] == "unauthenticated"
 
 
 def test_replay_is_refused(server, disclosure):
@@ -85,7 +85,7 @@ def test_replay_is_refused(server, disclosure):
     first = _call(server + "/v1/events", "POST", body, h)
     second = _call(server + "/v1/events", "POST", body, h)
     assert first[0] == 201
-    assert second[0] == 409 and second[1]["error"] == "replay"
+    assert second[0] == 401 and second[1]["error"] == "unauthenticated"
 
 
 def test_valid_post_records_an_event(server, disclosure, conn):

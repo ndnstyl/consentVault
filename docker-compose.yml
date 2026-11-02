@@ -6,7 +6,8 @@ services:
       POSTGRES_USER: consentvault_admin
       POSTGRES_PASSWORD: ${CONSENTVAULT_ADMIN_PASSWORD:?set CONSENTVAULT_ADMIN_PASSWORD}
       POSTGRES_DB: consentvault
-      CONSENTVAULT_OWNER_PASSWORD: ${CONSENTVAULT_OWNER_PASSWORD:?set CONSENTVAULT_OWNER_PASSWORD}
+      CONSENTVAULT_MIGRATOR_PASSWORD: ${CONSENTVAULT_MIGRATOR_PASSWORD:?set CONSENTVAULT_MIGRATOR_PASSWORD}
+      CONSENTVAULT_OPERATOR_PASSWORD: ${CONSENTVAULT_OPERATOR_PASSWORD:?set CONSENTVAULT_OPERATOR_PASSWORD}
       CONSENTVAULT_APP_PASSWORD: ${CONSENTVAULT_APP_PASSWORD:?set CONSENTVAULT_APP_PASSWORD}
     volumes:
       - consentvault-data:/var/lib/postgresql/data
@@ -17,7 +18,7 @@ services:
       timeout: 3s
       retries: 10
 
-  # Runs as the schema owner and is the only service that holds the owner password:
+  # Runs as the migrator login (its default role is the NOLOGIN schema owner); the only service that holds its password:
   #   docker compose run --rm migrate
   migrate:
     build: .
@@ -26,7 +27,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      CONSENTVAULT_OWNER_DSN: postgresql://consentvault_owner:${CONSENTVAULT_OWNER_PASSWORD}@db:5432/consentvault
+      CONSENTVAULT_OWNER_DSN: postgresql://consentvault_migrator:${CONSENTVAULT_MIGRATOR_PASSWORD}@db:5432/consentvault
     command: ["consentvault", "migrate"]
 
   # Runs as the restricted runtime role: SELECT and INSERT only, owns nothing.

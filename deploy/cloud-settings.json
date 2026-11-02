@@ -1,0 +1,1398 @@
+{
+  "about": "Every setting, secret and file path the ConsentVault product reads, per service and scheduled job. tests/test_cloud_settings.py fails when the product reads a name this list lacks, or this list names one the product never reads; the KMS plugin's names are checked by its own tests. A secret_file is injected as the environment value injected_as and written to path by docker/cloud-entrypoint.sh (mode 600), which then removes the value from the environment.",
+  "kinds": {
+    "setting": "a plain value",
+    "secret_value": "a secret read straight from the environment",
+    "secret_file": "a file holding a secret",
+    "file": "a file path",
+    "directory": "a folder path",
+    "platform": "set by the platform, never by hand"
+  },
+  "used_by": {
+    "vault": "consentvault serve-cloud (cloud) or serve (self-host)",
+    "sync": "python -m consentvault.sync",
+    "migrate": "consentvault migrate",
+    "job:<name>": "python -m consentvault.jobs <name>",
+    "job:*": "every scheduled job"
+  },
+  "settings": [
+    {
+      "name": "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+      "kind": "platform",
+      "required": "one of the credential URIs, set by Fargate",
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+      "kind": "platform",
+      "required": "one of the credential URIs, set by Fargate",
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+      "kind": "platform",
+      "required": "one of the credential URIs, set by Fargate",
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+      "kind": "platform",
+      "required": "one of the credential URIs, set by Fargate",
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "AWS_REGION",
+      "kind": "platform",
+      "required": true,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "set by the task definition"
+    },
+    {
+      "name": "CONSENTVAULT_ACCESS_KEY_FILE",
+      "kind": "secret_file",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "path": "/tmp/cv/access-key.hex",
+      "injected_as": "CV_ACCESS_KEY_HEX",
+      "note": "hex Ed25519 seed that signs access tokens"
+    },
+    {
+      "name": "CONSENTVAULT_ALERTS_LOG",
+      "kind": "directory",
+      "required": true,
+      "used_by": [
+        "job:alarm-relay"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ],
+      "note": "file one JSON line per alarm is appended to; refused by the cloud"
+    },
+    {
+      "name": "CONSENTVAULT_ALERTS_TOPIC_ARN",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault",
+        "job:alarm-relay",
+        "job:twenty-workflow-reminders"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "SNS topic the platform alerts channel listens on: the alarm relay publishes operator alarms, the vault publishes its product email alarms (consentvault.notify.cloud); each task role may sns:Publish to this topic only"
+    },
+    {
+      "name": "CONSENTVAULT_ANCHOR_SINK",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "job:anchor"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_API_HOSTS",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_API_SECRET",
+      "kind": "secret_value",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_API_TOKEN",
+      "kind": "secret_value",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_API_VERIFIED_SECRET",
+      "kind": "secret_value",
+      "required": false,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_ARCHIVE_BUCKET",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "S3 bucket with Object Lock (COMPLIANCE) for the offboarding archive; the vault task role writes it"
+    },
+    {
+      "name": "CONSENTVAULT_ARCHIVE_DIR",
+      "kind": "directory",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ],
+      "note": "refused in the cloud; the self-host lifecycle ledger lives under <dir>/lifecycle"
+    },
+    {
+      "name": "CONSENTVAULT_BACKUP_RETENTION_DAYS",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_CONFIG",
+      "kind": "file",
+      "required": false,
+      "used_by": [
+        "vault",
+        "sync",
+        "migrate",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "note": "path to consentvault.toml; environment wins over it"
+    },
+    {
+      "name": "CONSENTVAULT_CURSOR_KEY_FILE",
+      "kind": "secret_file",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "path": "/tmp/cv/cursor-key.hex",
+      "injected_as": "CV_CURSOR_KEY_HEX",
+      "note": "hex, 32+ bytes"
+    },
+    {
+      "name": "CONSENTVAULT_DB_AUTH",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "iam in the cloud; default password"
+    },
+    {
+      "name": "CONSENTVAULT_DB_CA_BUNDLE",
+      "kind": "file",
+      "required": false,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "default /etc/consentvault/rds-global-bundle.pem, shipped in the image"
+    },
+    {
+      "name": "CONSENTVAULT_DB_HOST",
+      "kind": "setting",
+      "required": "when db_auth = iam (or CV_DB_HOST)",
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_DB_NAME",
+      "kind": "setting",
+      "required": "when db_auth = iam (or CV_DB_NAME)",
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_DB_PORT",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "default 5432"
+    },
+    {
+      "name": "CONSENTVAULT_DB_REGION",
+      "kind": "setting",
+      "required": "when db_auth = iam (or AWS_REGION)",
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_DB_USER",
+      "kind": "setting",
+      "required": "when db_auth = iam (or CV_DB_USER)",
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_DEFAULT_REGION",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault",
+        "sync",
+        "migrate",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_DSN",
+      "kind": "setting",
+      "required": "unless db_auth = iam",
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_EDGE_ASSERTION_KEYS",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "JSON {key id: public key PEM}; public keys, not secret"
+    },
+    {
+      "name": "CONSENTVAULT_EGRESS_SECRET_FILE",
+      "kind": "secret_file",
+      "required": true,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:twenty-reconcile"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "path": "/tmp/cv/egress-secret",
+      "injected_as": "CV_EGRESS_SECRET"
+    },
+    {
+      "name": "CONSENTVAULT_EGRESS_URL",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:twenty-reconcile"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_EVIDENCE_BUCKET",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault",
+        "job:records-exports",
+        "job:records-backfill",
+        "job:restore-drill"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "S3 bucket with Object Lock (COMPLIANCE) for evidence objects and export packages; the vault task role writes it"
+    },
+    {
+      "name": "CONSENTVAULT_EVIDENCE_DIR",
+      "kind": "directory",
+      "required": true,
+      "used_by": [
+        "vault",
+        "job:records-exports",
+        "job:records-backfill",
+        "job:restore-drill"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ],
+      "note": "refused in the cloud (a local folder is lost when a task stops)"
+    },
+    {
+      "name": "CONSENTVAULT_EVIDENCE_SIGNER",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "module:Class with from_environment; consentvault_kms:KmsEvidenceSigner in the cloud"
+    },
+    {
+      "name": "CONSENTVAULT_KEY_PROVIDER",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:erasure-resume",
+        "job:records-exports",
+        "job:records-backfill",
+        "job:key-lifecycle",
+        "job:restore-drill",
+        "job:twenty-reconcile"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "note": "consentvault_kms:KmsKeyProvider in the cloud, openbao in the self-host"
+    },
+    {
+      "name": "CONSENTVAULT_KEY_ROTATION_DAYS",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "job:key-lifecycle"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "note": "the rotation age of an organisation key in days, 1 to 3650; default 365"
+    },
+    {
+      "name": "CONSENTVAULT_KMS_EVIDENCE_KEY_ARN",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "kms-plugin",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "the evidence signing key's full KMS key ARN (tofu/data output kms_evidence_key_arn; never an alias)"
+    },
+    {
+      "name": "CONSENTVAULT_KMS_EVIDENCE_KEY_VERSION",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "kms-plugin",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "the version number signatures carry: 1 for the first evidence key, the next for each new yearly key"
+    },
+    {
+      "name": "CONSENTVAULT_KMS_EVIDENCE_ROLE_ARN",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "kms-plugin",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "the evidence pipeline role the vault assumes to sign (the only role the evidence key lets sign)"
+    },
+    {
+      "name": "CONSENTVAULT_KMS_LIFECYCLE_ROLE_ARN",
+      "kind": "setting",
+      "required": "key-lifecycle and erasure",
+      "used_by": [
+        "job:key-lifecycle",
+        "job:erasure-resume"
+      ],
+      "read_by": "kms-plugin",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_KMS_ONBOARDING_ROLE_ARN",
+      "kind": "setting",
+      "required": "vault and key-lifecycle",
+      "used_by": [
+        "vault",
+        "job:key-lifecycle"
+      ],
+      "read_by": "kms-plugin",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_KMS_ORG_KEY_POLICY_FILE",
+      "kind": "secret_file",
+      "required": "vault and key-lifecycle",
+      "used_by": [
+        "vault",
+        "job:key-lifecycle"
+      ],
+      "read_by": "kms-plugin",
+      "deployments": [
+        "cloud"
+      ],
+      "path": "/tmp/cv/org-key-policy.json",
+      "injected_as": "CV_ORG_KEY_POLICY_JSON",
+      "note": "the tofu/data output org_key_policy_template; not secret, written the same way"
+    },
+    {
+      "name": "CONSENTVAULT_KMS_ORG_SESSION_ROLE_ARN",
+      "kind": "setting",
+      "required": "sync and key-lifecycle",
+      "used_by": [
+        "sync",
+        "job:key-lifecycle",
+        "job:twenty-reconcile"
+      ],
+      "read_by": "kms-plugin",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_KMS_REGION",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:erasure-resume",
+        "job:key-lifecycle",
+        "job:restore-drill",
+        "job:twenty-reconcile"
+      ],
+      "read_by": "kms-plugin",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "default AWS_REGION"
+    },
+    {
+      "name": "CONSENTVAULT_LIFECYCLE_LEDGER_BUCKET",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault",
+        "job:erasure-resume",
+        "job:erasure-commit-sweep",
+        "job:key-lifecycle",
+        "job:restore-drill"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "S3 bucket with Object Lock; written in COMPLIANCE mode on the vault's and the erasure job's task roles; one bucket for both, the one lifecycle ledger"
+    },
+    {
+      "name": "CONSENTVAULT_LIFECYCLE_LEDGER_DIR",
+      "kind": "directory",
+      "required": true,
+      "used_by": [
+        "job:erasure-resume",
+        "job:erasure-commit-sweep",
+        "job:key-lifecycle",
+        "job:restore-drill"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ],
+      "note": "refused by the cloud API"
+    },
+    {
+      "name": "CONSENTVAULT_LIFECYCLE_LEDGER_REGION",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "job:erasure-resume",
+        "job:erasure-commit-sweep"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "default AWS_REGION"
+    },
+    {
+      "name": "CONSENTVAULT_LINK_SECRET_FILE",
+      "kind": "secret_file",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "path": "/tmp/cv/link-secret.hex",
+      "injected_as": "CV_LINK_SECRET_HEX",
+      "note": "hex, 32+ bytes"
+    },
+    {
+      "name": "CONSENTVAULT_LOG_FIELD_KEY",
+      "kind": "secret_value",
+      "required": false,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_MAILER",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "module:Class with from_environment; consentvault.notify.cloud:SesMailer in the cloud"
+    },
+    {
+      "name": "CONSENTVAULT_MAIL_FROM",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault",
+        "job:twenty-workflow-reminders"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "the From address of product email (SES SendEmail), a bare address on the SES-verified domain; the vault task role may send only from it"
+    },
+    {
+      "name": "CONSENTVAULT_MIGRATIONS",
+      "kind": "directory",
+      "required": false,
+      "used_by": [
+        "vault",
+        "sync",
+        "migrate",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "note": "/app/migrations in the image"
+    },
+    {
+      "name": "CONSENTVAULT_NOTIFIER",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault",
+        "job:twenty-workflow-reminders"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "module:Class with from_environment; consentvault.notify.cloud:SesNotifier in the cloud"
+    },
+    {
+      "name": "CONSENTVAULT_OIDC_AUDIENCE",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_OIDC_AUDIENCE_CLAIM",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "client_id for WorkOS"
+    },
+    {
+      "name": "CONSENTVAULT_OIDC_ISSUER",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_OIDC_JWKS_URL",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_OPENBAO_ADDR",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:erasure-resume",
+        "job:twenty-reconcile"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_OPENBAO_LEDGER",
+      "kind": "file",
+      "required": true,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:erasure-resume",
+        "job:twenty-reconcile"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_OPENBAO_MOUNT",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:erasure-resume",
+        "job:twenty-reconcile"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_OPENBAO_NAMESPACE",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:erasure-resume",
+        "job:twenty-reconcile"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_OPENBAO_PROVABLE_DESTRUCTION",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:erasure-resume",
+        "job:twenty-reconcile"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_OPENBAO_TOKEN_FILE",
+      "kind": "secret_file",
+      "required": true,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:erasure-resume",
+        "job:twenty-reconcile"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_OPENSSL",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "job:seal",
+        "job:verify-seals"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "note": "path to openssl"
+    },
+    {
+      "name": "CONSENTVAULT_OPERATOR_DSN",
+      "kind": "setting",
+      "required": "unless db_auth = iam",
+      "used_by": [
+        "vault",
+        "job:erasure-resume",
+        "job:erasure-commit-sweep",
+        "job:key-lifecycle",
+        "job:restore-drill",
+        "job:twenty-reconcile"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_OWNER_DSN",
+      "kind": "secret_value",
+      "required": true,
+      "used_by": [
+        "migrate"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "note": "the migrator login; only the migration task"
+    },
+    {
+      "name": "CONSENTVAULT_PORTAL_URL",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault",
+        "job:twenty-workflow-reminders"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "the dashboard's https origin; invitation links are <origin>/invite?token=..."
+    },
+    {
+      "name": "CONSENTVAULT_PURPOSES",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_RECEIPT_KEY_FILE",
+      "kind": "secret_file",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "path": "/tmp/cv/receipt-key.hex",
+      "injected_as": "CV_RECEIPT_KEY_HEX",
+      "note": "hex Ed25519 seed that signs receipts"
+    },
+    {
+      "name": "CONSENTVAULT_RECORDS_EXPORT_MAX_ROWS",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_RELEASE_REQUIRE_NO_CONTACT_SINCE_STOP",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_RESTORE_DRILL_ADMIN_DSN",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "job:restore-drill"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ],
+      "note": "a superuser on the server the scratch database is made on (never the vault's own database)"
+    },
+    {
+      "name": "CONSENTVAULT_RESTORE_DRILL_BACKUP_DIR",
+      "kind": "directory",
+      "required": true,
+      "used_by": [
+        "job:restore-drill"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ],
+      "note": "pg_dump --format=custom archives named consentvault-<YYYYMMDDTHHMMSSZ>.dump"
+    },
+    {
+      "name": "CONSENTVAULT_RESTORE_DRILL_INSTANCE_CLASS",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "job:restore-drill"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_RESTORE_DRILL_PARAMETER_GROUP",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "job:restore-drill"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "the vault database's parameter group (pgaudit preloaded)"
+    },
+    {
+      "name": "CONSENTVAULT_RESTORE_DRILL_PG_RESTORE",
+      "kind": "file",
+      "required": false,
+      "used_by": [
+        "job:restore-drill"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "self-host"
+      ],
+      "note": "default: pg_restore on PATH"
+    },
+    {
+      "name": "CONSENTVAULT_RESTORE_DRILL_SECURITY_GROUP",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "job:restore-drill"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "the database security group the scratch instance gets"
+    },
+    {
+      "name": "CONSENTVAULT_RESTORE_DRILL_SOURCE_DB",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "job:restore-drill"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "the vault database instance whose newest snapshot is restored"
+    },
+    {
+      "name": "CONSENTVAULT_RESTORE_DRILL_SUBNET_GROUP",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "job:restore-drill"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "the database subnet group the scratch instance is placed in"
+    },
+    {
+      "name": "CONSENTVAULT_RESTORE_DRILL_TARGET_SECONDS",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "job:restore-drill"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "note": "the stated recovery time target, 60 to 604800 seconds; default 14400"
+    },
+    {
+      "name": "CONSENTVAULT_SEAL_MAX_DELAY_SECONDS",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "job:seal",
+        "job:verify-seals"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_SES_CONFIGURATION_SET",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "the SES configuration set product email is sent through; its bounce and complaint events reach the alarm relay (tofu/data output ses_configuration_set)"
+    },
+    {
+      "name": "CONSENTVAULT_SES_EVENTS_QUEUE_URL",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "job:alarm-relay"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "the private SQS queue SES bounce and complaint events arrive on; the alarm relay records each and raises its alarm (tofu/data output mail_events_queue_url)"
+    },
+    {
+      "name": "CONSENTVAULT_STRIPE_SECRET_KEY_FILE",
+      "kind": "secret_file",
+      "required": true,
+      "used_by": [
+        "vault",
+        "job:usage-daily",
+        "job:usage-retry",
+        "job:usage-acknowledge"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "path": "/tmp/cv/stripe-secret-key",
+      "injected_as": "CV_STRIPE_SECRET_KEY"
+    },
+    {
+      "name": "CONSENTVAULT_STRIPE_WEBHOOK_SECRET_FILE",
+      "kind": "secret_file",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "path": "/tmp/cv/stripe-webhook-secret",
+      "injected_as": "CV_STRIPE_WEBHOOK_SECRET"
+    },
+    {
+      "name": "CONSENTVAULT_TEST_SEAMS",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_TOKEN_ENDPOINT_URL",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_TOKEN_KEY_FILE",
+      "kind": "secret_file",
+      "required": true,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:erasure-resume",
+        "job:erasure-commit-sweep",
+        "job:key-lifecycle",
+        "job:restore-drill",
+        "job:twenty-reconcile"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "path": "/tmp/cv/tenant-token-key.hex",
+      "injected_as": "CV_TENANT_TOKEN_KEY_HEX",
+      "note": "hex"
+    },
+    {
+      "name": "CONSENTVAULT_TOKEN_KEY_ID",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:erasure-resume",
+        "job:erasure-commit-sweep",
+        "job:key-lifecycle",
+        "job:restore-drill",
+        "job:twenty-reconcile"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "note": "^[a-z0-9_-]{1,32}$"
+    },
+    {
+      "name": "CONSENTVAULT_TSA_CAFILE",
+      "kind": "file",
+      "required": false,
+      "used_by": [
+        "job:seal",
+        "job:verify-seals"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_TSA_URL",
+      "kind": "setting",
+      "required": true,
+      "used_by": [
+        "job:seal",
+        "job:verify-seals"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_UNSEALED_GRACE_SECONDS",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "job:seal",
+        "job:verify-seals"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    },
+    {
+      "name": "CV_DB_AUTH",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ],
+      "note": "the cloud task's name for CONSENTVAULT_DB_AUTH"
+    },
+    {
+      "name": "CV_DB_HOST",
+      "kind": "setting",
+      "required": "when db_auth = iam (or CONSENTVAULT_DB_HOST)",
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CV_DB_NAME",
+      "kind": "setting",
+      "required": "when db_auth = iam (or CONSENTVAULT_DB_NAME)",
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CV_DB_USER",
+      "kind": "setting",
+      "required": "when db_auth = iam (or CONSENTVAULT_DB_USER)",
+      "used_by": [
+        "vault",
+        "sync",
+        "job:*"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_CAPTURE_DB_USER",
+      "kind": "setting",
+      "required": "no (default consentvault_runtime)",
+      "used_by": [
+        "job:twenty-reconcile"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    }
+  ]
+}

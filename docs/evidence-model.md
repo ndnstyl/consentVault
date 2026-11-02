@@ -43,7 +43,7 @@ lawyer in your own jurisdiction.
 3. **Anchors.** A chain whose last rows were deleted still verifies, so `consentvault anchor` writes the head
    (`seq`, `row_hash`, time) to the `chain_head` table and to a sink outside the database. `verify-chain`
    fails when any row up to an anchor is missing or different. An anchor taken from before the deletion is what
-   proves the deletion happened; keep the sink somewhere the database host cannot rewrite.
+   records that the deletion happened; keep the sink somewhere the database host cannot rewrite.
 4. **RFC 3161 timestamps.** The digest of each event is sent to an RFC 3161 timestamp authority; the signed
    token is stored in the `seal` table. This is what stops the owner of the database from rewriting the whole
    chain: the authority's signature fixes the digest at a time. Only 32 bytes leave your host. Verification
@@ -62,7 +62,7 @@ The seal digest is the sha256 of the canonical JSON (sorted keys, no spaces, ASC
 the seal's hash version names. The exported `verify.py` recomputes that one digest with a copy of the same
 canonicalization function and accepts no other form, so a seal that digests anything else reads as failed.
 
-## What the exported bundle proves, and how a reviewer runs it
+## What the exported bundle shows, and how a reviewer runs it
 
 `python3 verify.py --cafile <root.pem> --anchor <seq>:<row_hash>` (repeat `--anchor`, or give `--anchors <file>`).
 The verifier needs two things from outside the bundle, and fails without either:
@@ -99,10 +99,10 @@ The verifier:
   like, and fails any anchor the bundle itself carries that is not on the path with a matching hash. The bundle's
   own anchors prove nothing alone: whoever builds the bundle can leave them out.
 
-What the verifier proves: every link of the chain path recomputes, so a link's commitments cannot be altered; any
+What the verifier checks: every link of the chain path recomputes, so a link's commitments cannot be altered; any
 link that carries the subject's salted commitments is flagged as theirs and has its full event in the bundle, so a
 stop cannot be dropped from the bundle (or its link unflagged) without a failed check; and every event has a valid
-RFC 3161 timestamp. With the anchors you supply, it also proves the path runs from the first event of the ledger to
+RFC 3161 timestamp. With the anchors you supply, it also shows the path runs from the first event of the ledger to
 at least the latest anchor you hold. What it cannot prove: events after your newest anchor (anchor often; anything
 later than the newest anchor you hold can still be cut), and that the bundle holds every contact point of the
 subject: a contact the vault never linked to the subject's contacts or subject key has a different salt and
@@ -144,6 +144,21 @@ are part of the row hash.
 Purposes are lower-cased and must be on the configured list, so a stop written `Marketing` stops `marketing`.
 A stop for the purpose `*` stops every purpose on its channels, including purposes never granted; only a
 release naming a specific purpose lifts it, for that purpose.
+
+## Erasure and key destruction (multi-tenant vaults)
+
+In a multi-tenant vault every contact point, salt and evidence field is stored only as ciphertext under that
+contact's own data key, wrapped by the organisation's key. Erasing one person deletes their one `contact_key` row;
+destroying an organisation's key makes every contact key it wrapped unreadable. The chain still verifies after
+either: each row keeps its links and the digests they are built from, while its personal content can no longer be
+read or recomputed.
+
+What survives is the keyed fingerprint (`contact_fp`), on purpose: it lets the gate match a returning number to its
+old stop, so an opt-out keeps being honoured. The consequence is stated plainly: **until the organisation's
+fingerprint key is itself destroyed, anyone holding that key can test a guessed contact point against the stored
+fingerprints and confirm whether that person appears in the organisation's records.** Erasing a person's data key
+does not remove that ability, and destroying the organisation's wrap key does not either unless the fingerprint key
+is destroyed with it. Full offboarding destroys both.
 
 ## What this does not prove
 

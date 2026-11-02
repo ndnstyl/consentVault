@@ -1,0 +1,14 @@
+# Secret scanning config. Extends the default rules; the allowlist names only published example values used in tests.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "AWS's own documented example credentials (Signature V4 test vectors) and obvious test strings"
+regexes = [
+  '''AKIAIOSFODNN7EXAMPLE''',
+  '''wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY''',
+  '''sk_live_123456''',
+  '''sk_test_secretvalue''',  # fake key in tests/billing/test_stripe_client.py proving a key never reaches an error message
+  '''whsec_mock_''',  # fake webhook secret returned by the dashboard's mock API (portal/app/mock/server.ts)
+  '''BEGIN PRIVATE KEY-----\\nabc\\n-----END''',  # fake PEM the dashboard's browser test pastes to prove a private key is refused
+]

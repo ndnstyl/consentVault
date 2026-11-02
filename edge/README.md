@@ -53,3 +53,18 @@ every failure and never reports success unless the worker answered `recorded: tr
 ```
 npm test        # node --test; Node 24 runs the TypeScript directly
 ```
+
+## Portal Worker (sign-in and the dashboard's door)
+
+`src/portal.ts` is the dashboard's one public door: `/auth/*` is sign-in (`src/auth.ts`), `/v1/*` is the gateway with
+session cookies (`src/gateway.ts`, `src/session.ts`), and every other path is the dashboard's static export. The browser
+holds one opaque `__Host-` cookie (HttpOnly, Secure, SameSite=Lax); the identity token, refresh token, chosen organization
+and the vault's short tenant token stay in the Worker's key-value store. The flow is written down in
+the cloud session contract. Configuration: `wrangler.portal.toml.example`.
+`npm test` runs the unit tests, including auth, the cookie gateway and the portal router. The dashboard against the real
+API (stub sign-in issuer, no WorkOS) is described in `portal/app/README.md`.
+
+## Logging
+
+The edge Workers log nothing. An evidence download link is a single-use credential in the query string, so any proxy
+or load balancer placed in front of the vault must log the path only, with the query string removed.

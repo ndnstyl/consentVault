@@ -6,6 +6,7 @@ from typing import Iterable
 
 import psycopg
 
+from .safelog import describe
 from .errors import EmptyConsentError, UncheckedConsentError
 from .ledger import Event, record_event
 
@@ -60,7 +61,7 @@ def capture_and_release(conn: psycopg.Connection, **kwargs) -> tuple[Event, dict
     try:
         res = release_after_grant(conn, ev.event_id)
     except ConsentVaultError as exc:
-        return ev, None, f"{type(exc).__name__}: {exc}"
+        return ev, None, f"{describe(exc)}"
     return ev, {"released_channels": list(res.released_channels),
                 "refusals": {c: list(v) for c, v in res.refusals.items()}}, None
 
@@ -96,3 +97,59 @@ def capture_verified(
     kwargs.setdefault("method", "keyword" if verification == "inbound_keyword" else "checkbox")
     kwargs.setdefault("checked", True)
     return capture_and_release(conn, contact_verification=verification, **kwargs)
+
+
+def tenant_capture(
+    conn: psycopg.Connection,
+    crypto,
+    *,
+    contact: str,
+    event_type: str,
+    channels: Iterable[str],
+    purposes: Iterable[str],
+    method: str = "checkbox",
+    origin: str = "consumer",
+    checked: bool | None = None,
+    contact_verification: str = "none",
+    inbound_message: str | None = None,
+    disclosure_sha256: str | None = None,
+    payload: bytes | None = None,
+    **fields,
+) -> Event:
+    """Record one event in the entered organisation's chain (hash version 2), with the core's capture rules.
+
+    A grant needs the consent box checked, at least one channel and purpose, and wording; a verified grant needs the
+    one-time code confirmed by the integrator (``otp``) or an inbound START keyword (``inbound_keyword``, the message
+    is classified here). Stops carry no wording. The caller has entered the tenant (``tenancy.tokens.org_transaction``).
+    """
+    from .errors import InvalidEventError
+    from .ledger import record_tenant_event
+    from .stopwords import START, classify
+
+    if event_type == "grant":
+        if checked is not True:
+            raise UncheckedConsentError("the consent box was not checked; no grant recorded")
+        chans = [channels] if isinstance(channels, str) else [c for c in channels if c]
+        purps = [purposes] if isinstance(purposes, str) else [p for p in purposes if p]
+        if not chans or not purps:
+            raise EmptyConsentError("a grant must name at least one channel and one purpose")
+        if not disclosure_sha256:
+            raise EmptyConsentError("a grant must carry the hash of the disclosure the person saw")
+        channels, purposes = chans, purps
+    elif checked is not None:
+        raise InvalidEventError("'checked' belongs only to a grant")
+    if contact_verification == "inbound_keyword":
+        if not inbound_message:
+            raise InvalidEventError("an inbound_keyword grant needs the inbound message (inbound_message)")
+        verdict = classify(inbound_message)
+        if verdict.verdict != START:
+            raise InvalidEventError(
+                f"the inbound message is not a START keyword (read as {verdict.verdict}: {verdict.reason})")
+        if method == "checkbox":
+            method = "keyword"
+    elif inbound_message is not None:
+        raise InvalidEventError("inbound_message belongs only to an inbound_keyword grant")
+    return record_tenant_event(
+        conn, crypto, contact=contact, event_type=event_type, channels=channels, purposes=purposes, method=method,
+        origin=origin, disclosure_sha256=disclosure_sha256 or None, contact_verification=contact_verification,
+        payload=payload, **fields)

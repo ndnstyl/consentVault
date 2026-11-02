@@ -18,13 +18,11 @@ WORDING = "I agree to receive texts about my account. Reply STOP to end."
 
 @pytest.fixture
 def cli_dsns(raw_dsn, pg_server):
-    """(owner DSN for migrate, restricted runtime DSN for everything else) on a fresh, unmigrated database."""
+    """(migrator DSN for migrate, restricted runtime DSN for everything else) on a fresh, unmigrated database."""
     import psycopg
     role = "cli_" + uuid.uuid4().hex[:10]
-    with psycopg.connect(raw_dsn, autocommit=True) as c:
-        c.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_app') "
-                  "THEN CREATE ROLE consentvault_app NOLOGIN; END IF; END $$")
-        c.execute(f'CREATE ROLE "{role}" LOGIN IN ROLE consentvault_app')
+    with psycopg.connect(f"postgresql://postgres@127.0.0.1:{pg_server['port']}/postgres", autocommit=True) as c:
+        c.execute(f'CREATE ROLE "{role}" LOGIN IN ROLE consentvault_app')  # the group roles exist (raw_dsn)
     return raw_dsn, f"postgresql://{role}@127.0.0.1:{pg_server['port']}/{raw_dsn.rsplit('/', 1)[1]}"
 
 

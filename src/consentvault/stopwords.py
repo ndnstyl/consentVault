@@ -11,8 +11,9 @@ Order of evaluation:
 3. a stop phrase ("don't text me", "remove me") is ``stop``;
 4. a message that is only keywords and filler ("STOP", "please stop now") is ``stop``;
 5. a keyword inside a longer message is ``needs_review``;
-6. a message that is only a start word (START, UNSTOP, YES) and filler is ``start``: the sender controls the contact
-   point and asks to be contacted again. It is checked after every stop signal, so "yes stop" is never a start;
+6. a message that is exactly one start word (START, UNSTOP, YES), nothing else, is ``start``: the sender controls the contact
+   point and asks to be contacted again. A start word with any other text, punctuation or a repeat ("yes please", "Start.",
+   "START START") is ``needs_review``. It is checked after every stop signal, so "yes stop" is never a start;
 7. anything else is ``not_stop``.
 """
 
@@ -25,6 +26,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources
 
+from .safelog import describe
 from .errors import ConfigError
 
 STOP = "stop"
@@ -53,6 +55,7 @@ class _Lists:
     confusables: dict[int, str]
     keyword_sequence: re.Pattern
     start_sequence: re.Pattern
+    start_words: frozenset[str]
     sentence_re: re.Pattern
 
 
@@ -78,10 +81,11 @@ def _load() -> _Lists:
             confusables={ord(k): v for k, v in raw["confusables"].items()},
             keyword_sequence=re.compile(rf"(?:{_alt(keywords)})(?: (?:{_alt(keywords)}))*"),
             sentence_re=re.compile(rf"\b(?:{_alt(sentence)})\b"),
+            start_words=frozenset(raw['start_keywords']),
             start_sequence=re.compile(rf"(?:{_alt(raw['start_keywords'])})(?: (?:{_alt(raw['start_keywords'])}))*"),
         )
     except (OSError, KeyError, ValueError, re.error) as exc:
-        raise ConfigError(f"stopwords.json is missing or malformed: {exc}") from exc
+        raise ConfigError(f"stopwords.json is missing or malformed: {describe(exc)}") from exc
 
 
 def fold(text: str) -> str:
@@ -95,6 +99,16 @@ def fold(text: str) -> str:
     text = re.sub(r"['’ʼ`]", "", text)
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return text.strip()
+
+
+def is_whole_start_word(message: str) -> bool:
+    """A re-subscribe counts only when the whole message, trimmed and folded for look-alike letters, zero-width characters and
+    case (not for punctuation or filler), is exactly one of the start words (confirmations.md section 10, core change S1)."""
+    lists = _load()
+    t = unicodedata.normalize("NFKC", message)
+    t = "".join(ch for ch in t if unicodedata.category(ch) != "Cf").casefold().translate(lists.confusables)
+    t = "".join(ch for ch in unicodedata.normalize("NFD", t) if unicodedata.category(ch) != "Mn")
+    return t.strip() in lists.start_words
 
 
 def _join_spaced_letters(folded: str) -> str:
@@ -151,5 +165,7 @@ def classify(message: str) -> Classification:
             return Classification(NEEDS_REVIEW, "near_miss_with_contact_words", near_hits[0])
         return Classification(NOT_STOP, "near_miss", near_hits[0])
     if tokens and len(tokens) <= MAX_WRAPPED_TOKENS and core and lists.start_sequence.fullmatch(" ".join(core)):
-        return Classification(START, "start_keyword", " ".join(core))
+        if is_whole_start_word(message):
+            return Classification(START, "start_keyword", " ".join(core))
+        return Classification(NEEDS_REVIEW, "start_word_in_longer_message", " ".join(core))
     return Classification(NOT_STOP, "no_stop_signal")

@@ -2,7 +2,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/banner-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset=".github/assets/banner-light.svg">
-    <img alt="ConsentVault.AI: the outside consent register for lead gen, demand gen and AI agents" src=".github/assets/banner-light.svg" width="100%">
+    <img alt="ConsentVault.AI: an independent consent evidence custodian for lead gen, demand gen and AI agents" src=".github/assets/banner-light.svg" width="100%">
   </picture>
 </p>
 
@@ -13,16 +13,21 @@
   <img alt="tests: 354 passing" src="https://img.shields.io/badge/tests-354%20passing-C6B25D?labelColor=2A3845">
 </p>
 
-<p align="center"><b>An open-source consent vault: a tamper-evident record of who agreed to be contacted, how, under which exact wording, and who later said stop.</b><br>
+<p align="center"><b>An open-source consent evidence vault: a tamper-evident record of who agreed to be contacted, how, under which exact wording, and who later said stop.</b><br>
 <a href="https://www.consentvault.ai">consentvault.ai</a></p>
 
-It exists to answer one question under scrutiny: **"Prove this person agreed to this contact, and that they had not withdrawn it."**
+It exists to preserve the evidence behind one question: **"What was recorded about this person's consent to this contact, and about any withdrawal of it?"**
+
+> **Scope.** ConsentVault is an independent evidence custodian and compliance-support infrastructure. It is not a
+> legal authority and it gives no legal advice. It provides defensible documentation, not guaranteed compliance.
+> Whether a consent is legally valid, whether a disclosure satisfies a law, and whether a communication is permitted
+> are determinations for you and the counsel you choose to involve. Read [docs/scope.md](docs/scope.md).
 
 ## Why ConsentVault
 
 Consent records usually live as a flag in a CRM. A flag says "yes" and nothing else: not what the person
-saw, not when, not from where, not whether anyone edited it afterwards. ConsentVault keeps the evidence instead
-of the flag.
+saw, not when, not from where, not whether anyone edited it afterwards. ConsentVault preserves the evidence instead
+of the flag, and keeps it apart from the systems that act on it.
 
 <table>
 <tr>
@@ -36,30 +41,31 @@ of the flag.
 <td valign="top"><b>Stops count as much as grants</b><br>Events are ordered by arrival, never by a time the caller claims. A stop outranks a grant until the person's own later, verified grant is released under the release rule. A stop for <code>*</code> stops every purpose.</td>
 </tr>
 <tr>
-<td valign="top"><b>Fail closed, with a reason</b><br>If the vault cannot answer, the answer is "no", with a named reason.</td>
+<td valign="top"><b>Fail closed, with a reason</b><br>If the vault cannot answer, the answer is "no", with a named reason. The answer reports what the record shows, not a legal conclusion.</td>
 <td valign="top"><b>Capture edge included</b><br>A dependency-free edge worker and an embeddable checkbox widget that hashes the wording on screen at submit time.</td>
-<td valign="top"><b>Self-verifying evidence</b><br>Export a bundle a reviewer can check with only Python and openssl, without trusting you or this project.</td>
+<td valign="top"><b>Self-verifying evidence</b><br>Export a bundle a reviewer can check with only Python and openssl, using trust roots and anchors taken from outside the bundle.</td>
 </tr>
 </table>
 
 ## How it works
 
 <p align="center">
-  <img alt="Architecture: capture widget, edge worker, signed API, append-only ledger, seals and anchors, then gate, proof and evidence bundle" src=".github/assets/architecture.svg" width="860">
+  <img alt="Architecture: capture widget, edge worker, signed API, append-only ledger, seals and anchors, then gate, timeline and evidence bundle" src=".github/assets/architecture.svg" width="860">
 </p>
 
 The widget sends only the hash of the wording it showed. The edge worker adds what only a server knows (receipt
 time, IP address, user agent, bot-check result) and signs the forward. The vault stamps its own receipt time,
 chains the event, and refuses a grant whose wording it does not hold. Seals and anchors live outside your
-company's control. The gate, the proof timeline and the evidence bundle all read the same ledger. See
+company's control. The gate, the consent timeline and the evidence bundle all read the same ledger. See
 [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
 
 ## Quickstart
 
 ```
 git clone https://github.com/ndnstyl/consentVault.git && cd consentVault
-export CONSENTVAULT_ADMIN_PASSWORD=$(openssl rand -hex 16)   # bootstrap role, used once to create the two below
-export CONSENTVAULT_OWNER_PASSWORD=$(openssl rand -hex 16)   # owns the schema; only `migrate` uses it
+export CONSENTVAULT_ADMIN_PASSWORD=$(openssl rand -hex 16)   # bootstrap superuser, used once to create the roles below
+export CONSENTVAULT_MIGRATOR_PASSWORD=$(openssl rand -hex 16) # migrator login; only `migrate` uses it (the owner cannot log in)
+export CONSENTVAULT_OPERATOR_PASSWORD=$(openssl rand -hex 16) # operator console login; owns nothing
 export CONSENTVAULT_APP_PASSWORD=$(openssl rand -hex 16)     # runtime role: SELECT and INSERT only
 export CONSENTVAULT_API_SECRET=$(openssl rand -hex 32)       # signs capture-edge requests
 export CONSENTVAULT_API_TOKEN=$(openssl rand -hex 32)        # bearer token for read endpoints
@@ -90,7 +96,7 @@ docker compose run --rm vault consentvault verify-chain
 ### Without Docker
 
 `uv sync` (or `pip install -e .[dev]`), point `CONSENTVAULT_DSN` at a PostgreSQL 15+ database,
-run `consentvault migrate` with `CONSENTVAULT_OWNER_DSN` set (the owner role), then use the restricted `CONSENTVAULT_DSN` for
+run `consentvault migrate` with `CONSENTVAULT_OWNER_DSN` set (the migrator login), then use the restricted `CONSENTVAULT_DSN` for
 everything else. See [deployment](docs/deployment.md).
 
 ### Command line tour
@@ -103,9 +109,9 @@ everything else. See [deployment](docs/deployment.md).
 | `consentvault revoke` | record that a person withdrew consent (`--purpose '*'` withdraws every purpose) |
 | `consentvault verify-chain` | recompute the hash chain, check every anchor, report any break |
 | `consentvault anchor` | write the current chain head to `chain_head` and the external sink |
-| `consentvault may-contact` | ask whether a contact point may be contacted on a channel for a purpose |
+| `consentvault may-contact` | ask what the record shows for a contact point, channel and purpose (exit 1 = the record does not support contact); a statement of the evidence, not a legal determination |
 | `consentvault seal` / `consentvault verify-seals` | timestamp events with the authority; re-verify every stored seal |
-| `consentvault proof` | full timeline for a contact: grants, stops, current permission, seal status |
+| `consentvault proof` | full timeline for a contact: grants, stops, current recorded status, seal status |
 | `consentvault export` | write a self-verifying evidence bundle (verify it with `verify.py --cafile <root> --anchors <sink file>`) |
 | `consentvault classify` | classify an inbound message as stop, not stop, or needs review |
 | `consentvault serve` | run the HTTP API |
@@ -113,15 +119,16 @@ everything else. See [deployment](docs/deployment.md).
 Run `consentvault --help` for the commands installed in your version.
 
 
-## Evidence you can hand to anyone
+## Evidence exports
 
-ConsentVault.AI stores facts that are hard to dispute: what was shown (by hash), what was submitted, when the server
-received it, from which address and user agent, what the bot check said, and a hash chain plus an
-independent timestamp over all of it.
+ConsentVault.AI preserves facts: what was shown (by hash), what was submitted, when the server received it, from
+which address and user agent, what the bot check said, and a hash chain plus an independent timestamp over all of
+it. These records are evidence your counsel may use in an investigation or dispute. Storing them does not establish
+that a consent is valid.
 
 `consentvault export` writes a self-verifying bundle for one person: every event, the DER timestamp tokens, the
-disclosure wordings and a `verify.py`. A reviewer needs only Python and openssl. The trust root and the anchors
-come from outside the bundle, so the bundle cannot vouch for itself:
+disclosure wordings and a `verify.py`. A reviewer needs only Python and openssl to check that the records are unchanged since they were sealed. The trust
+root and the anchors come from outside the bundle, so the bundle cannot vouch for itself:
 
 ```
 python verify.py --cafile <timestamp-authority-root.pem> --anchors <anchor-sink-file>
@@ -132,14 +139,14 @@ a link that does not recompute, or has an event with no seal. Read [docs/evidenc
 
 ## Security model and limits
 
-- **This is not legal advice.** ConsentVault.AI records evidence; it does not decide what the law requires of you.
-  Which wording to use, which channels need which kind of consent, how long to keep records, and what a
-  court or regulator will accept are questions for your own lawyer in your own jurisdiction. Get your own
-  legal review before relying on it.
-- A timestamp proves a digest existed at a time. It does not prove who ticked the box.
+- **This is not legal advice, and not a guarantee of compliance.** ConsentVault.AI preserves evidence; it does not
+  decide what the law requires of you. Which wording to use, which channels need which kind of consent, how long to
+  keep records, and what a court or regulator will accept are your decisions. Involving qualified counsel in your
+  own jurisdiction is recommended as best practice and is your choice.
+- A timestamp shows that a digest existed at a time. It does not show who ticked the box.
 - A web-form grant never lifts a stop: only a grant the integrator marks as verified (a one-time code the
   integrator checked, or an inbound START message) does. The vault records the claim; the code check is yours.
-- An evidence bundle proves the chain only against anchors the verifier takes from the anchor sink itself;
+- An evidence bundle can be checked for an unbroken chain only against anchors the verifier takes from the anchor sink itself;
   events after the newest anchor you hold are not covered.
 - If the capture surface is compromised before the vault sees the data, the vault records what it was told.
 - A deployment that skips the RFC 3161 timestamp seals still has a chain, but the chain alone cannot show
@@ -162,7 +169,8 @@ Report a vulnerability as described in [SECURITY.md](SECURITY.md).
 | Guide | What is in it |
 |---|---|
 | [Architecture](ARCHITECTURE.md) | principles, data model, modules |
-| [Evidence model](docs/evidence-model.md) | what is recorded, what a seal covers, what it does not prove |
+| [Scope and responsibilities](docs/scope.md) | what ConsentVault provides, what you and your counsel decide |
+| [Evidence model](docs/evidence-model.md) | what is recorded, what a seal covers, what it does not show |
 | [HTTP API](docs/api.md) | signed event intake, permission and proof endpoints |
 | [Adapters](docs/adapters.md) | CRM and messaging interfaces |
 | [Deployment](docs/deployment.md) | requirements, database roles, configuration |

@@ -2,7 +2,7 @@
 
 ConsentVault.AI is a consent vault: a tamper-evident record of who agreed to be contacted, how, on which channels,
 under which exact wording, and who later said stop. It is built to answer one question under scrutiny:
-*"Prove this person agreed to this contact, and that they had not withdrawn it."*
+*"Show what was recorded about this person's consent to this contact, and whether it was withdrawn, in a form anyone can check for tampering."* ConsentVault keeps evidence; whether that evidence is enough for a given purpose is a legal question for the record holder and its own advisers.
 
 This document describes the design.
 
@@ -66,7 +66,7 @@ INSERT on the ledger tables other than `contact_salt`, and EXECUTE on `consentva
 
 | Module | Job |
 |---|---|
-| `consentvault.config` | load `consentvault.toml` / env (`CONSENTVAULT_DSN`, `CONSENTVAULT_OWNER_DSN`, `CONSENTVAULT_PURPOSES`, `CONSENTVAULT_ANCHOR_SINK`, `CONSENTVAULT_TSA_URL`, ...). No defaults that name anyone. |
+| `consentvault.config` | load `consentvault.toml` / env (`CONSENTVAULT_DSN`, `CONSENTVAULT_OWNER_DSN` (migrator), `CONSENTVAULT_OPERATOR_DSN`, `CONSENTVAULT_PURPOSES`, `CONSENTVAULT_ANCHOR_SINK`, `CONSENTVAULT_TSA_URL`, ...). No defaults that name anyone. |
 | `consentvault.normalize` | phone to E.164 (default region from config), email normalisation, subject key. |
 | `consentvault.db` | connection helper, migrate runner (`consentvault migrate`, owner role), refuses altered or missing applied migrations and pending files numbered at or below the highest applied (sha256 ledger). |
 | `consentvault.ledger` | `record_event(...)` the only writer (lower-cases and validates purposes, refuses a grant beyond its disclosure and a `captured_at` past `received_at` + 5 min); canonical serialisation; hash versions; `verify_chain()` (recompute, then check every anchor). |
@@ -80,7 +80,7 @@ INSERT on the ledger tables other than `contact_salt`, and EXECUTE on `consentva
 | `consentvault.evidence` | export a self-verifying evidence bundle (JSON with every event row for the subject in full + DER tokens + disclosure bodies + `verify.py` that needs only Python and the system timestamp tool), byte-identical to what `proof` shows. `verify.py` requires `--cafile` from outside the bundle (no trust root is bundled) and at least one `--anchor seq:row_hash` (or `--anchors FILE`) taken from the anchor sink, requires the chain path to start at seq 1 with the genesis previous hash and to reach every supplied anchor with the same hash, fails any bundled anchor not on the path, recomputes every chain-path link from its own commitments, recomputes which links carry the subject's salted commitments and fails a flag that differs or a belonging link whose event is missing (other people's links carry only commitments no guessed contact point can be tested against), fails an event with no seal, and prints each seal's signing time beside `captured_at` and `received_at`. It embeds the source of `ledger.canonical_dumps` and the seal column lists, and accepts exactly the digest `seal.digest` computes; a test pins the two together. |
 | `consentvault.adapters` | `CrmAdapter`, `MessagingAdapter` protocols + `webhook` example and `null` adapter. |
 | `consentvault.api` | optional stdlib HTTP server: `POST /v1/events` (HMAC-signed; hashes only, never wording; a grant claiming a verified contact point must be signed with the separate verified-grant secret), `GET /v1/permission`, `GET /v1/proof`. |
-| `consentvault.cli` | `consentvault migrate | disclosure register | capture | revoke | may-contact | seal | verify-seals | verify-chain | proof | export | anchor | classify | serve`. |
+| `consentvault.cli` | `consentvault migrate | disclosure register | capture | revoke | may-contact | seal | verify-seals | verify-chain | proof | export | anchor | classify | erasure-resume | serve`. |
 
 ## Capture edge (`edge/`)
 

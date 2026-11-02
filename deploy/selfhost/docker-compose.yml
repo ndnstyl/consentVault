@@ -1,0 +1,257 @@
+# ConsentVault self-host reference stack. No cloud account is needed for any part of it.
+# Run from the repository root, see README.md next to this file. Every image is pinned by exact tag and digest.
+name: consentvault-selfhost
+
+services:
+  db:
+    image: postgres:17.11@sha256:31ba9c94a03ada9988f2bb493a22a75eef3a185884533e5cdbcd498ea835b08f
+    environment:
+      POSTGRES_USER: consentvault_admin
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD}
+      POSTGRES_DB: consentvault
+      CONSENTVAULT_MIGRATOR_PASSWORD: ${CONSENTVAULT_MIGRATOR_PASSWORD:?set CONSENTVAULT_MIGRATOR_PASSWORD}
+      CONSENTVAULT_OPERATOR_PASSWORD: ${CONSENTVAULT_OPERATOR_PASSWORD:?set CONSENTVAULT_OPERATOR_PASSWORD}
+      CONSENTVAULT_APP_PASSWORD: ${CONSENTVAULT_APP_PASSWORD:?set CONSENTVAULT_APP_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ../../docker/initdb:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U consentvault_admin -d consentvault"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Test-only. The product suites build their own roles and databases and expect a superuser they can reach without a
+  # password, so they get a throwaway instance of the SAME pinned Postgres image, loopback only, on its own volume (removed by `down -v`).
+  # Never started by a plain `up` (profile). The stack's own db keeps password logins.
+  db-suites:
+    profiles: ["suites"]
+    image: postgres:17.11@sha256:31ba9c94a03ada9988f2bb493a22a75eef3a185884533e5cdbcd498ea835b08f
+    command: ["postgres", "-c", "fsync=off", "-c", "max_connections=300"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - suites-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${SUITES_DB_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Test-only runner for the product suites (see Dockerfile.suites for why it lives in the database's network and clock).
+  suites:
+    profiles: ["suites"]
+    build:
+      context: .
+      dockerfile: Dockerfile.suites
+    depends_on:
+      db-suites:
+        condition: service_healthy
+    network_mode: "service:db-suites"
+    environment:
+      SUITES_DB_PORT: "5432"
+    volumes:
+      - ../..:/repo:ro
+
+  # Write-once evidence store. RustFS (Apache-2.0, S3 API) replaces MinIO, whose container images are no longer
+  # published (the pinned tag does not resolve). It was chosen because it answers Object Lock in COMPLIANCE mode
+  # the way the evidence provider needs: a second write to a taken key is refused (412), and a version delete or
+  # a shortened retention is refused (403) even with the governance-bypass header. tests/selfhost proves each.
+  rustfs:
+    image: rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
+    command: ["/data"]
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+    volumes:
+      - evidence-data:/data
+    ports:
+      - "127.0.0.1:${S3_PORT:-9000}:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # The bucket must be created with Object Lock on; a default COMPLIANCE retention then covers any writer that
+  # forgets to ask for one.
+  s3-init:
+    image: amazon/aws-cli:2.39.2@sha256:ed0f6b551cd77b6f34e240488739e4cb90b7534409d404a0c9a2be05c4690ca1
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: "true"
+      BUCKET: ${S3_EVIDENCE_BUCKET:-evidence}
+      RETENTION_DAYS: ${S3_DEFAULT_RETENTION_DAYS:-1}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        E="--endpoint-url http://rustfs:9000"
+        aws $$E s3api head-bucket --bucket "$$BUCKET" 2>/dev/null || aws $$E s3api create-bucket --bucket "$$BUCKET" --object-lock-enabled-for-bucket
+        aws $$E s3api put-object-lock-configuration --bucket "$$BUCKET" --object-lock-configuration "{\"ObjectLockEnabled\":\"Enabled\",\"Rule\":{\"DefaultRetention\":{\"Mode\":\"COMPLIANCE\",\"Days\":$$RETENTION_DAYS}}}"
+        aws $$E s3api get-object-lock-configuration --bucket "$$BUCKET"
+    restart: "no"
+
+  # Durable OpenBao: raft storage on a named volume, config in openbao/config.hcl. It starts sealed and
+  # uninitialised; bin/openbao-bootstrap.sh initialises it once and unseals it (bin/openbao-unseal.sh after every restart).
+  openbao:
+    image: quay.io/openbao/openbao:2.4.1@sha256:597f62847dd382382056a1d6704d50465908c2040038c4611832a23269a67112
+    command: ["server", "-config=/openbao/config/config.hcl"]
+    volumes:
+      - ./openbao/config.hcl:/openbao/config/config.hcl:ro
+      - openbao-data:/openbao/file
+    ports:
+      - "127.0.0.1:${OPENBAO_PORT:-8200}:8200"
+    healthcheck:
+      # Reachable counts as healthy even when sealed or uninitialised; the bootstrap script owns those states.
+      test: ["CMD-SHELL", "wget -q -O /dev/null 'http://127.0.0.1:8200/v1/sys/health?uninitcode=200&sealedcode=200&standbyok=true'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Keycloak gets its own database and role, so the identity store never shares a login with the consent ledger.
+  # Idempotent: safe on every up, and on a volume that already exists.
+  keycloak-db-init:
+    image: postgres:17.11@sha256:31ba9c94a03ada9988f2bb493a22a75eef3a185884533e5cdbcd498ea835b08f
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: consentvault_admin
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      PGDATABASE: consentvault
+      KC_PW: ${KEYCLOAK_DB_PASSWORD:?set KEYCLOAK_DB_PASSWORD}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        psql -v ON_ERROR_STOP=1 -v kc_pw="$$KC_PW" <<'SQL'
+        SELECT NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'keycloak') AS mk_role \gset
+        \if :mk_role
+        CREATE ROLE keycloak LOGIN PASSWORD :'kc_pw';
+        \endif
+        SELECT NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'keycloak') AS mk_db \gset
+        \if :mk_db
+        CREATE DATABASE keycloak OWNER keycloak;
+        \endif
+        SQL
+    restart: "no"
+
+  # Production mode (start, not start-dev): its own Postgres database, an imported realm, no built-in dev defaults.
+  # Plain HTTP is for loopback or a TLS-terminating proxy in front; KEYCLOAK_PUBLIC_URL is the issuer.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.3.3@sha256:6a7217a100bd3e5de4063a27a538ef999a3c5a88c4b4ec0ffc0a642aee7b2597
+    command: ["start", "--import-realm"]
+    depends_on:
+      keycloak-db-init:
+        condition: service_completed_successfully
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:?set KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      KC_HOSTNAME: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8081}
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+    ports:
+      - "127.0.0.1:${KEYCLOAK_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  # Order of every schema change: roles and trigger guard (done by the db image's init scripts on first start), the
+  # migrator is given LOGIN, `consentvault migrate` runs as the migrator (acting as the NOLOGIN owner), a superuser pins
+  # the guards and takes the migrator's LOGIN away again, and only then does the vault start as the runtime login.
+  # The vault refuses to serve while a migrator login can log in.
+  migrator-open:
+    image: postgres:17.11@sha256:31ba9c94a03ada9988f2bb493a22a75eef3a185884533e5cdbcd498ea835b08f
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: consentvault_admin
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      PGDATABASE: consentvault
+    entrypoint: ["psql", "-v", "ON_ERROR_STOP=1", "-c", "ALTER ROLE consentvault_migrator LOGIN"]
+    restart: "no"
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    depends_on:
+      migrator-open:
+        condition: service_completed_successfully
+    environment:
+      CONSENTVAULT_OWNER_DSN: postgresql://consentvault_migrator:${CONSENTVAULT_MIGRATOR_PASSWORD}@db:5432/consentvault
+      CONSENTVAULT_PURPOSES: ${CONSENTVAULT_PURPOSES:?set CONSENTVAULT_PURPOSES}
+    command: ["consentvault", "migrate"]
+    restart: "no"
+
+  pin:
+    image: postgres:17.11@sha256:31ba9c94a03ada9988f2bb493a22a75eef3a185884533e5cdbcd498ea835b08f
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: db
+      PGUSER: consentvault_admin
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      PGDATABASE: consentvault
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        psql -v ON_ERROR_STOP=1 -c "SELECT consentvault_guard.pin_guards()" -c "ALTER ROLE consentvault_migrator NOLOGIN"
+        bad=$$(psql -v ON_ERROR_STOP=1 -tA -c "SELECT count(*) FROM consentvault_guard.pin_violations()")
+        [ "$$bad" = "0" ] || { echo "guard pin violations after pinning: $$bad" >&2; exit 1; }
+    restart: "no"
+
+  vault:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    depends_on:
+      pin:
+        condition: service_completed_successfully
+      s3-init:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+    environment:
+      CONSENTVAULT_DSN: postgresql://consentvault_runtime:${CONSENTVAULT_APP_PASSWORD}@db:5432/consentvault
+      CONSENTVAULT_PURPOSES: ${CONSENTVAULT_PURPOSES:?set CONSENTVAULT_PURPOSES}
+      CONSENTVAULT_TSA_URL: ${CONSENTVAULT_TSA_URL:?set CONSENTVAULT_TSA_URL}
+      CONSENTVAULT_ANCHOR_SINK: ${CONSENTVAULT_ANCHOR_SINK:?set CONSENTVAULT_ANCHOR_SINK}
+      CONSENTVAULT_API_SECRET: ${CONSENTVAULT_API_SECRET:?set CONSENTVAULT_API_SECRET}
+      CONSENTVAULT_API_TOKEN: ${CONSENTVAULT_API_TOKEN:?set CONSENTVAULT_API_TOKEN}
+      CONSENTVAULT_API_HOSTS: localhost,127.0.0.1,vault
+    ports:
+      - "127.0.0.1:${VAULT_PORT:-8080}:8080"
+
+volumes:
+  db-data:
+  suites-data:
+  evidence-data:
+  openbao-data:

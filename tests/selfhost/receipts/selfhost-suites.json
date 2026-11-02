@@ -1,0 +1,40 @@
+{
+ "exit_code": 1,
+ "finished_at": "2026-11-02T14:21:09.457289Z",
+ "format": "consentvault-selfhost-receipt/2",
+ "manifest_sha256": "0a84e58290b7a3e19df2838c4e883aebc87980e92ed5a5c597fc666c29adaa2d",
+ "product_sha256": "95283f7f8762da76909517fb258961e412a2e7e48371b786bfaf106a9b15d7c6",
+ "sections": {
+  "integrity: ledger, seal, proof, evidence": "passed",
+  "isolation": "failed",
+  "live providers: OpenBao keys, S3 Object Lock evidence, Keycloak OIDC, vault service": "failed",
+  "suppression sync": "failed"
+ },
+ "tests": {
+  "tests/selfhost/test_keycloak_oidc.py::test_a_password_only_login_is_refused_where_mfa_is_required": "failed",
+  "tests/selfhost/test_keycloak_oidc.py::test_a_real_keycloak_token_verifies": "failed",
+  "tests/selfhost/test_keycloak_oidc.py::test_a_tampered_token_is_refused": "failed",
+  "tests/selfhost/test_keycloak_oidc.py::test_issuer_is_the_configured_public_url_not_the_address_it_was_fetched_from": "failed",
+  "tests/selfhost/test_keycloak_oidc.py::test_the_imported_realm_is_in_force": "failed",
+  "tests/selfhost/test_keycloak_oidc.py::test_wrong_audience_and_wrong_issuer_are_refused": "failed",
+  "tests/selfhost/test_openbao_keys.py::test_no_provable_destruction_unless_declared": "passed",
+  "tests/selfhost/test_openbao_keys.py::test_openbao_is_durable_not_dev_mode": "passed",
+  "tests/selfhost/test_openbao_keys.py::test_vault_token_cannot_administer_anything_else": "passed",
+  "tests/selfhost/test_openbao_keys.py::test_wrap_unwrap_and_destruction_lifecycle": "failed",
+  "tests/selfhost/test_vault_service.py::test_migrations_applied_by_the_owner": "passed",
+  "tests/selfhost/test_vault_service.py::test_operator_console_login_owns_nothing_and_cannot_alter_the_schema": "passed",
+  "tests/selfhost/test_vault_service.py::test_owner_and_migrator_cannot_log_in_and_the_schema_is_owned_by_the_owner": "passed",
+  "tests/selfhost/test_vault_service.py::test_runtime_role_cannot_update_delete_or_alter_the_ledger": "passed",
+  "tests/selfhost/test_vault_service.py::test_server_is_postgresql_17": "passed",
+  "tests/selfhost/test_vault_service.py::test_the_vault_container_answers": "passed",
+  "tests/selfhost/test_write_once_store.py::test_a_plain_delete_never_removes_the_locked_version": "failed",
+  "tests/selfhost/test_write_once_store.py::test_bucket_default_is_compliance": "passed",
+  "tests/selfhost/test_write_once_store.py::test_delete_of_the_locked_version_is_refused_even_with_the_governance_bypass": "failed",
+  "tests/selfhost/test_write_once_store.py::test_deleting_the_bucket_with_locked_objects_is_refused": "failed",
+  "tests/selfhost/test_write_once_store.py::test_missing_and_short_retention_cases": "failed",
+  "tests/selfhost/test_write_once_store.py::test_put_get_verify_roundtrip": "failed",
+  "tests/selfhost/test_write_once_store.py::test_raw_overwrite_with_if_none_match_is_412": "failed",
+  "tests/selfhost/test_write_once_store.py::test_second_write_to_a_taken_key_is_refused_and_original_survives": "failed",
+  "tests/selfhost/test_write_once_store.py::test_shortening_or_clearing_the_retention_is_refused": "failed"
+ }
+}

@@ -2,7 +2,15 @@
 
 
 class ConsentVaultError(Exception):
-    """Base class for every error consentvault raises on purpose."""
+    """Base class for every error consentvault raises on purpose.
+
+    ``code`` is an optional stable code chosen where the error is raised (``no_anchor_sink``, ``http_503``): lowercase letters,
+    digits and underscores. It is what a log, a terminal or an alarm shows beside the class (safelog.describe), never the message."""
+
+    def __init__(self, *args, code: str | None = None) -> None:
+        super().__init__(*args)
+        if code is not None:
+            self.code = code
 
 
 class ConfigError(ConsentVaultError):
@@ -11,6 +19,22 @@ class ConfigError(ConsentVaultError):
 
 class DatabaseError(ConsentVaultError):
     """The database could not be reached or refused an operation."""
+
+
+class DatabaseCredentialsError(DatabaseError):
+    """The credentials that sign a database login token are missing, unreachable or unusable."""
+
+
+class DatabaseSigningError(DatabaseError):
+    """A database login token could not be signed."""
+
+
+class DatabaseTlsError(DatabaseError):
+    """The database's TLS certificate could not be verified, or the CA bundle to verify it is missing."""
+
+
+class DatabaseAuthError(DatabaseError):
+    """The database refused the login token."""
 
 
 class MigrationError(ConsentVaultError):

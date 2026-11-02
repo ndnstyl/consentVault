@@ -67,9 +67,18 @@ def test_result_carries_reason():
     assert r.reason == "stop_phrase" and r.matched
 
 
-@pytest.mark.parametrize("text", ["START", "start", "Unstop", "YES", "yes please", "Please START now", "ＳＴＡＲＴ", "start.", "yes yes"])
+# confirmations.md section 7 (lines 283-288) and section 10, core change S1 (lines 465-471): a START counts only when the whole
+# message, trimmed and folded for look-alike letters and case, is exactly START, UNSTOP or YES. Before S1 this list also held
+# "yes please", "Please START now", "start." and "yes yes"; the contract now says those go to a person (needs_review).
+@pytest.mark.parametrize("text", ["START", " start ", "Unstop", "YES", "ＳＴＡＲＴ", "yes"])
 def test_start(text):
     assert classify(text).verdict == START, classify(text)
+
+
+@pytest.mark.parametrize("text", ["yes please", "Please START now", "start.", "yes yes", "START START", "START now please"])
+def test_a_start_word_with_anything_else_goes_to_a_person(text):
+    r = classify(text)
+    assert (r.verdict, r.reason) == (NEEDS_REVIEW, "start_word_in_longer_message"), r
 
 
 @pytest.mark.parametrize("text", ["yes stop", "stop start", "do not start", "start texting me again tomorrow",

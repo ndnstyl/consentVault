@@ -18,11 +18,9 @@ def _disclosure_args(p: argparse.ArgumentParser) -> None:
 def _register_args(p: argparse.ArgumentParser) -> None:
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--body", help="the exact wording shown to the person")
-    src.add_argument("--body-file", help="read the exact wording from a file")
+    src.add_argument("--body-file", help="read the exact wording from a file (its exact bytes, trailing newline "
+                                         "included; the widget hashes exactly the text it shows)")
     p.add_argument("--label", required=True)
-    p.add_argument("--keep-whitespace", action="store_true",
-                   help="store the wording with its leading and trailing whitespace (refused by default; "
-                        "the capture widget hashes the trimmed text)")
     p.add_argument("--locale", default="en")
     p.add_argument("--channel", action="append", default=[], dest="channels")
     p.add_argument("--purpose", action="append", default=[], dest="purposes")
@@ -36,7 +34,7 @@ def _run_disclosure(args, cfg) -> int:
     body = args.body if args.body is not None else Path(args.body_file).read_text(encoding="utf-8")
     with _connect(cfg) as conn:
         sha = disclosure.register(conn, body, args.label, args.locale, args.channels, args.purposes,
-                                  allowed_purposes=cfg.require_purposes(), strip=not args.keep_whitespace)
+                                  allowed_purposes=cfg.require_purposes())
     print(json.dumps({"sha256": sha}))
     return EXIT_OK
 

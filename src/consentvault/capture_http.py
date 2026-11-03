@@ -57,9 +57,19 @@ def is_capture_path(path: str, prefixes: tuple[str, ...]) -> bool:
     return any(path == p or path.startswith(p.rstrip("/") + "/") for p in prefixes)
 
 
+# The edge gateway's own service credentials for the hop to the vault: they are the gateway's, not the sender's, and a
+# credential never goes into the evidence. Their presence is recorded as a fact.
+TRANSPORT_CREDENTIAL_HEADERS = ("cf-access-client-id", "cf-access-client-secret")
+
+
 def request_headers(handler) -> tuple[tuple[str, str], ...]:
-    """Every header name and value as the server presented them, in order, repeats kept."""
-    return tuple((k, v) for k, v in handler.headers.items())
+    """Every header name and value as the server presented them, in order, repeats kept, except the gateway's own
+    service credentials for the hop to the vault (``TRANSPORT_CREDENTIAL_HEADERS``)."""
+    return tuple((k, v) for k, v in handler.headers.items() if k.lower() not in TRANSPORT_CREDENTIAL_HEADERS)
+
+
+def transport_credentials_removed(handler) -> bool:
+    return any(handler.headers.get(h) is not None for h in TRANSPORT_CREDENTIAL_HEADERS)
 
 
 def is_preflight(handler) -> bool:

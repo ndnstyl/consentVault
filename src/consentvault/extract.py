@@ -220,6 +220,9 @@ class FieldMap:
     contact_paths: tuple[tuple[str, str], ...] = ()
     map_version: int = 0
     label: str = "map"
+    # whether a missing box is something an operator should hear about. A form's own map says yes; the events API map says no,
+    # because a stop carries no box (the reading still records "not sent", and the transitional event records why it was not a grant).
+    box_expected: bool = True
 
     def paths(self, name: str) -> tuple[str, ...]:
         if name == "consent":
@@ -238,7 +241,7 @@ WIDGET_MAP = FieldMap(body_format="json", consent_paths=("/checked",), decision_
                       contact_paths=(("/contact", "detect"),), label="built_in:widget")
 EVENTS_API_MAP = FieldMap(body_format="json", consent_paths=("/checked",), decision_time_path="/captured_at",
                           wording_path=None, wording_hash_path="/disclosure_sha256",
-                          contact_paths=(("/contact", "detect"),), label="built_in:events_api")
+                          contact_paths=(("/contact", "detect"),), label="built_in:events_api", box_expected=False)
 BUILT_IN_BY_INTAKE = {"edge_site_key": WIDGET_MAP, "edge_single": WIDGET_MAP, "gateway": WIDGET_MAP,
                       "api": EVENTS_API_MAP, "api_single": EVENTS_API_MAP}
 

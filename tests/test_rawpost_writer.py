@@ -185,3 +185,27 @@ def test_a_changed_receipt_or_the_wrong_key_does_not_verify(tenancy, writer):
     assert not rawpost.verify_post_receipt(r, ReceiptSigner.generate(key_id="rk1").public_key, "rk1")
     assert not rawpost.verify_post_receipt(r, SIGNER.public_key, "other")
     assert not rawpost.verify_post_receipt({k: v for k, v in r.items() if k != "seq"}, SIGNER.public_key, "rk1")
+
+
+def test_a_slow_upload_of_a_large_body_holds_no_lock_so_other_posts_of_the_organisation_still_commit(tenancy, evidence):
+    import threading
+
+    gate, started = threading.Event(), threading.Event()
+    real_put = evidence.put
+
+    def slow_put(*a, **k):
+        started.set()
+        assert gate.wait(30)
+        return real_put(*a, **k)
+    evidence.put = slow_put
+    writer = rawpost.RawPostWriter(crypto=tenancy.crypto, store=evidence, receipts=SIGNER)
+    big = threading.Thread(target=lambda: post(tenancy, writer, os.urandom(rawpost.INLINE_LIMIT_BYTES + 1)))
+    big.start()
+    try:
+        assert started.wait(30)
+        small = post(tenancy, writer, b"{}")  # commits while the large body is still travelling
+        assert small.seq == 1
+    finally:
+        gate.set()
+        big.join(30)
+    assert [r["seq"] for r in __import__("isolation.cloud_harness", fromlist=["raw_posts"]).raw_posts(tenancy, tenancy.a.org_id)] == [1, 2]

@@ -12,3 +12,19 @@ ALLOWED_ORIGINS = "https://www.example.com"
 VAULT_URL = "https://vault.example.com"
 # Free-text id of this capture surface, stored on every event.
 SOURCE_ID = "site-form"
+
+# Optional durable store, so a request is never lost while the vault is down: with both bindings the edge keeps the body in
+# the bucket and one small message in the queue, answers 202 with the body's fingerprint, and delivers in arrival order.
+# Without them a request that arrives while the vault is down is answered 503 store_unavailable ("nothing was stored").
+# [[r2_buckets]]
+# binding = "BODY_STORE"
+# bucket_name = "consentvault-edge-bodies"
+#
+# [[queues.producers]]
+# binding = "CAPTURE_QUEUE"
+# queue = "consentvault-edge-capture"
+#
+# [[queues.consumers]]
+# queue = "consentvault-edge-capture"
+# max_batch_size = 10
+# max_retries = 100

@@ -117,5 +117,7 @@ def test_wording_text_and_an_unregistered_hash_are_stored_and_make_no_grant(live
     assert conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"] == 0
     assert conn.execute("SELECT count(*) AS n FROM consentvault.disclosure").fetchone()["n"] == 0
     wording = json.loads(bytes(conn.execute("SELECT values_ct FROM consentvault.raw_post_field WHERE field = 'wording'"
-                                            ).fetchone()["values_ct"]))
+                                            " AND state = 'sent'").fetchone()["values_ct"]))
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.raw_post_field WHERE field = 'wording' AND state = 'not_sent'"
+                        ).fetchone()["n"] == 1  # the hash-only post reads not sent
     assert json.loads(wording[0]) == TEXT  # the wording as sent, byte for byte, in its own labelled field

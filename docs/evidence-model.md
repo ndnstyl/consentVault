@@ -22,7 +22,7 @@ lawyer in your own jurisdiction.
 | `channels`, `purposes` | exactly what was agreed to or withdrawn |
 | `disclosure_sha256` | the hash of the wording the person saw; the wording itself is stored once, by hash |
 | `method`, `origin` | how it was given (checkbox, verbal, keyword...) and by whom (consumer, staff, import...) |
-| `captured_at`, `received_at`, `edge_received_at` | when the capture surface says it happened (evidence only, never used to order events, and refused if later than `received_at` plus five minutes); when the vault received it, read from the vault server's own clock (a database trigger refuses any other value); and when the capture edge says it received it (evidence only) |
+| `captured_at`, `received_at`, `edge_received_at` | when the capture surface says it happened (evidence only, never used to order events; a post that names a time later than `received_at` plus five minutes is still stored whole, but no grant event is derived from it and the reason is kept beside the post); when the vault received it, read from the vault server's own clock (a database trigger refuses any other value); and when the capture edge says it received it (evidence only) |
 | `page_url`, `session_ref` | where the person was, and a per-visit reference |
 | `client_ip`, `user_agent` | what the server observed about the connection |
 | `bot_check` | the result of any bot check the capture surface ran |
@@ -113,8 +113,10 @@ still requires the anchors but skips the chain checks, because there is no salt 
 
 An operator registers each wording in the vault (`consentvault disclosure register`), together with the channels and
 purposes it covers. The capture surface hashes the text that is on the visitor's screen at submit time and
-sends only that hash; wording itself is never accepted from a client. The vault refuses a grant whose
-disclosure hash it does not hold, and a grant that names a channel or purpose its wording does not cover.
+sends that hash, and the exact text it showed beside it. The post is stored with both exactly as sent. A grant event is
+derived only from a hash the vault holds and only for channels and purposes that wording covers; a post that does not fit
+is still stored whole, with the reason kept beside it. The registered wording is a reference shown beside the text a post
+carried, never put in its place.
 This avoids the classic gap where the record points to whatever the "current" copy of the wording is today,
 which may differ from what the person saw, and it stops a grant being stretched to a channel the person was
 never asked about. A registered wording and its scope never change.

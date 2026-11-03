@@ -237,3 +237,82 @@ test("the capture Workers hold no code that refuses a capture", () => {
     assert.equal(/validateInput/.test(text), false, `${f} validates the input`);
   }
 });
+
+// ---- the Cloudflare bindings and the queue consumer ----------------------------------------------------------------------
+import { deliverBatch, durableFrom, type QueueMessage } from "../src/envelope.ts";
+
+class FakeR2 {
+  objects = new Map<string, Uint8Array>();
+  async put(key: string, value: Uint8Array) { this.objects.set(key, value); }
+  async get(key: string) {
+    const v = this.objects.get(key);
+    return v ? { arrayBuffer: async () => v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength) as ArrayBuffer } : null;
+  }
+}
+const target = { VAULT_URL: ENV.VAULT_URL, SIGNING_SECRET: ENV.SIGNING_SECRET, ACCESS_CLIENT_ID: "cid", ACCESS_CLIENT_SECRET: "csec" };
+
+function queued(r2: FakeR2, sent: string[]) {
+  return durableFrom({ BODY_STORE: r2, CAPTURE_QUEUE: { send: async (m) => { sent.push(m); } } })!;
+}
+function msg(body: string) {
+  const log: string[] = [];
+  const m: QueueMessage & { log: string[] } = { body, log, ack: () => log.push("ack"), retry: () => log.push("retry") };
+  return m;
+}
+
+test("the durable store is built only when both bindings exist", () => {
+  assert.equal(durableFrom({}), undefined);
+  assert.equal(durableFrom({ BODY_STORE: new FakeR2() }), undefined);
+  assert.ok(durableFrom({ BODY_STORE: new FakeR2(), CAPTURE_QUEUE: { send: async () => {} } }));
+});
+
+test("a request that waits in the bindings is delivered in arrival order and acknowledged", async () => {
+  const r2 = new FakeR2();
+  const sent: string[] = [];
+  const first = mk({ vaultThrow: true, durable: queued(r2, sent) });
+  await handleCapture(req(JSON.stringify(good({ session: "one" }))), ENV, first.d);
+  await handleCapture(req(JSON.stringify(good({ session: "two" }))), ENV, first.d);
+  assert.equal(sent.length, 2);
+  assert.ok(sent.every((m) => JSON.parse(m).queue_id));
+  const later = mk();
+  const batch = sent.map(msg);
+  await deliverBatch(batch, { BODY_STORE: r2, ...target }, later.d);
+  assert.deepEqual(batch.map((m) => m.log), [["ack"], ["ack"]]);
+  const order = vaultCalls(later.calls).map((c) => JSON.parse(bodyOf(c).toString()).session);
+  assert.deepEqual(order, ["one", "two"]);
+});
+
+test("the first request the vault does not take stops the batch so a later one never lands before it", async () => {
+  const r2 = new FakeR2();
+  const sent: string[] = [];
+  const first = mk({ vaultThrow: true, durable: queued(r2, sent) });
+  for (const s of ["one", "two", "three"]) await handleCapture(req(JSON.stringify(good({ session: s }))), ENV, first.d);
+  const down = mk({ vaultThrow: true });
+  const batch = sent.map(msg);
+  await deliverBatch(batch, { BODY_STORE: r2, ...target }, down.d);
+  assert.deepEqual(batch.map((m) => m.log), [["retry"], ["retry"], ["retry"]]);
+  assert.equal(vaultCalls(down.calls).length, 1, "only the first was tried");
+});
+
+test("a request still undelivered an hour after it was accepted raises the past-deadline alarm", async () => {
+  const r2 = new FakeR2();
+  const sent: string[] = [];
+  const first = mk({ vaultThrow: true, durable: queued(r2, sent) });
+  await handleCapture(req(JSON.stringify(good())), ENV, first.d);
+  const alarms: string[] = [];
+  const late = mk({ vaultThrow: true, alarms });
+  await deliverBatch(sent.map(msg), { BODY_STORE: r2, ...target }, { ...late.d, now: () => new Date(NOW.getTime() + 61 * 60 * 1000) });
+  assert.deepEqual(alarms, ["capture.queue_past_deadline"]);
+});
+
+test("a queued body that is missing from the store or a message that cannot be read is kept and retried loudly", async () => {
+  const alarms: string[] = [];
+  const d = mk({ alarms });
+  const missing = msg(JSON.stringify({ body_key: "bodies/none", envelope: { edge_facts: {} }, queued_at: NOW.toISOString() }));
+  await deliverBatch([missing], { BODY_STORE: new FakeR2(), ...target }, d.d);
+  assert.deepEqual(missing.log, ["retry"]);
+  const garbage = msg("not json");
+  await deliverBatch([garbage], { BODY_STORE: new FakeR2(), ...target }, d.d);
+  assert.deepEqual(garbage.log, ["retry"]);
+  assert.deepEqual(alarms, ["capture.queue_unreadable"]);
+});

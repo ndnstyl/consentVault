@@ -125,9 +125,10 @@ def seal_every_org(conn: psycopg.Connection, tsa_url: str, limit: int, *, backof
     """{org id: event ids sealed in this run}. ``oldest_unsealed`` (when given) receives {org id: seconds the oldest
     event still unsealed has waited}, read after the organisation's seals."""
     from .seal import seal_pending
+    from .seal_raw import seal_pending_raw
 
     def one(c, org):
-        done = seal_pending(c, tsa_url, limit, backoff=backoff)
+        done = seal_pending(c, tsa_url, limit, backoff=backoff) + seal_pending_raw(c, tsa_url, limit, backoff=backoff)
         if oldest_unsealed is not None:
             oldest_unsealed[str(org)] = c.execute(OLDEST_UNSEALED_SQL).fetchone()["age"]
         return done
@@ -143,10 +144,14 @@ def verify_seals_every_org(conn: psycopg.Connection, max_delay: timedelta | None
     ug = unsealed_grace if unsealed_grace is not None else seal.DEFAULT_UNSEALED_GRACE
 
     def one(c, org):
+        from .seal_raw import verify_all_raw
+
         checked, failures = seal.verify_all(c, md, ug)
+        raw_checked, raw_failures = verify_all_raw(c, md, ug)
+        checked, failures = checked + raw_checked, failures + raw_failures
         if failures:
             raise _OrgFailure(f"{len(failures)} seal failure(s): "
-                              + "; ".join(f"event {f.event_id}: {f.reason}" for f in failures[:20]))
+                              + "; ".join(f"{f.event_id}: {f.reason}" for f in failures[:20]))
         return checked
     return _each_org(conn, JOB_VERIFY_SEALS, one)
 
@@ -199,7 +204,8 @@ def anchor_every_org(conn: psycopg.Connection, sink: str) -> dict:
 
     def one(c, org):
         head = c.execute("SELECT seq FROM consentvault.ledger_head()").fetchone()
-        if head is None or head["seq"] is None:
+        raw_head = c.execute("SELECT seq FROM consentvault.raw_post_head()").fetchone()
+        if (head is None or head["seq"] is None) and raw_head is None:
             skipped.append(str(org))
             return None
         return anchor(c, sink)

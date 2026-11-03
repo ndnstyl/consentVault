@@ -298,3 +298,44 @@ def test_an_organisation_closed_after_listing_fails_the_run_by_id(two_orgs, monk
         integrity.verify_chain_every_org(c)
     assert [f[0] for f in e.value.failures] == [str(two_orgs.b.org_id)]
     assert str(two_orgs.a.org_id) in e.value.results
+
+
+def test_the_integrity_jobs_seal_verify_and_anchor_the_raw_post_chain_too(two_orgs, tsa, tmp_path):
+    from consentvault import rawpost
+    from consentvault.providers.evidence import LocalAppendOnlyEvidenceStore
+    from consentvault.tenancy.pipeline import ReceiptSigner
+
+    writer = rawpost.RawPostWriter(crypto=two_orgs.crypto, store=LocalAppendOnlyEvidenceStore(str(tmp_path / "ev")),
+                                   receipts=ReceiptSigner.generate(key_id="k"))
+    req = rawpost.RawRequest(intake="api", method="POST", path="/v1/events", query="", headers=(), body=b'{"checked": false}')
+    for org in (two_orgs.a, two_orgs.b):
+        with two_orgs.app() as app:
+            writer.write(app, lambda c, o=org: org_transaction(c, two_orgs.token(o)), req)
+    with db.connect(two_orgs.integrity_dsn) as c:
+        sealed = integrity.seal_every_org(c, tsa.url, 100)
+    assert len(sealed[str(two_orgs.a.org_id)]) == 3 and len(sealed[str(two_orgs.b.org_id)]) == 3  # two events and the raw post
+    with db.connect(two_orgs.integrity_dsn) as c:
+        checked = integrity.verify_seals_every_org(c)
+    assert checked[str(two_orgs.a.org_id)] == 3 and checked[str(two_orgs.b.org_id)] == 3
+    with two_orgs.superuser() as su:
+        assert su.execute("SELECT count(*) AS n FROM consentvault.raw_post_seal").fetchone()["n"] == 2
+        su.execute("ALTER TABLE consentvault.raw_post DISABLE TRIGGER raw_post_append_only")
+        su.execute("UPDATE consentvault.raw_post SET body_bytes = body_bytes + 1 WHERE org_id = %s", (two_orgs.b.org_id,))
+        su.execute("ALTER TABLE consentvault.raw_post ENABLE TRIGGER raw_post_append_only")
+    with db.connect(two_orgs.integrity_dsn) as c, pytest.raises(integrity.IntegrityRunError) as e:
+        integrity.verify_seals_every_org(c)
+    assert [f[0] for f in e.value.failures] == [str(two_orgs.b.org_id)] and "digest mismatch" in str(e.value)
+
+
+def test_an_organisation_with_posts_and_no_events_is_anchored_by_the_job_not_skipped_as_empty(two_orgs, tmp_path):
+    from consentvault import rawpost
+    from consentvault.providers.evidence import LocalAppendOnlyEvidenceStore
+
+    writer = rawpost.RawPostWriter(crypto=two_orgs.crypto, store=LocalAppendOnlyEvidenceStore(str(tmp_path / "ev")))
+    req = rawpost.RawRequest(intake="edge_site_key", method="POST", path="/capture", query="", headers=(), body=b"{}")
+    with two_orgs.app() as app:  # the home organisation has no events and now one post
+        writer.write(app, lambda c: org_transaction(c, two_orgs.token_for_home(("capture",))), req)
+    with db.connect(two_orgs.integrity_dsn) as c:
+        out = integrity.anchor_every_org(c, str(tmp_path / "anchors.jsonl"))
+    assert str(two_orgs.home) in out["anchored"] and str(two_orgs.home) not in out["skipped_empty"]
+    assert out["anchored"][str(two_orgs.home)]["raw_post"]["seq"] == 1

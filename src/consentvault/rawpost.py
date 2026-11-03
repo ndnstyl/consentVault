@@ -6,10 +6,10 @@ name and value in the order presented, and every byte of the body, with the SHA-
 Nothing about the request is checked, trimmed, sorted, re-serialised or judged. The only failure the writer has is
 ``StoreUnavailable``: the vault could not write, and nothing partial was written.
 
-1. Inside the entered organisation (one transaction): take the organisation's raw-post lock, read the chain head, and
-   when the body is above the inline limit write it whole, encrypted under the post's own data key, to the write-once
-   evidence store and check the store's copy against its digest before the row commits.
-2. Append one ``raw_post`` row, the wrapped post key and the arrival facts in that same transaction.
+1. Encrypt the body under the post's own data key and, when it is above the inline limit, write it whole to the write-once
+   evidence store and check the store's copy against its digest, before any lock is taken.
+2. Inside the entered organisation (one short transaction): take the organisation's raw-post lock, read the chain head and
+   append one ``raw_post`` row, the wrapped post key and the arrival facts together.
 3. Sign the receipt ``{org_id, post_id, seq, row_hash, received_at, body_sha256}`` with the platform receipt key.
 
 Extraction, matching and alarms run after the commit and can neither change the answer nor remove the row.
@@ -225,7 +225,12 @@ class RawPostWriter:
     # ---- the write ----------------------------------------------------------------------------------------------------
     def write(self, conn: psycopg.Connection, enter: Callable, req: RawRequest) -> StoredPost:
         """Store ``req``. ``enter(conn)`` opens a transaction inside the caller's tenant (``org_transaction`` bound to a
-        token; ``None`` stands for the single-company vault, where the transaction is the connection's own)."""
+        token; ``None`` stands for the single-company vault, where the transaction is the connection's own).
+
+        Two short transactions with the heavy work between them: the first reads the organisation, the home organisation and
+        the database's clock; the body is then encrypted and, when it is above the inline limit, written whole to the
+        evidence store (no transaction, no lock held while bytes travel); the second takes the organisation's raw-post lock,
+        reads the head and appends the row, the key and the facts together."""
         if not isinstance(req.body, (bytes, bytearray)):
             raise ConsentVaultError("a raw post body is bytes")
         body = bytes(req.body)
@@ -236,34 +241,36 @@ class RawPostWriter:
         try:
             ctx = enter(conn) if enter is not None else conn.transaction()
             with ctx:
-                who = conn.execute("SELECT consentvault.current_org() AS org, consentvault.home_org() AS home").fetchone()
-                org, home = who["org"], who["home"]
-                if org is None:
-                    raise StoreUnavailable("no organisation is entered for the write (the home organisation was not reachable)")
+                who = conn.execute("SELECT consentvault.current_org() AS org, consentvault.home_org() AS home,"
+                                   " clock_timestamp() AS now").fetchone()
+            org, home = who["org"], who["home"]
+            if org is None:
+                raise StoreUnavailable("no organisation is entered for the write (the home organisation was not reachable)")
+            key, wrapped = None, None
+            if self.crypto is not None:
+                try:
+                    wrapped_key = self.crypto.new_contact_key(org)
+                    key, wrapped = wrapped_key.data_key, wrapped_key.wrapped
+                except KeyProviderError:
+                    if org != home:
+                        raise
+                    # the platform intake (the home organisation of a cloud vault) may have no key of its own: the
+                    # post is stored as sent and the row says so, never dropped for want of a key
+            enc = ENC_WRAPPED if key is not None else ENC_NONE
+            blob = self._seal(key, org, post_id, COL_BODY, body)
+            body_ct = blob
+            if object_id is not None:
+                retain = who["now"] + timedelta(days=366 * self.retain_years)
+                record = self.store.put(str(org), f"raw-posts/{object_id}", blob, retain_until=retain)
+                if record.sha256 != hashlib.sha256(blob).hexdigest():
+                    raise StoreUnavailable("the evidence store's copy of the body does not match what was sent to it")
+                body_ct = None
+            query_ct = self._seal(key, org, post_id, COL_QUERY, _as_bytes(req.query))
+            headers_ct = self._seal(key, org, post_id, COL_HEADERS, headers_json(req.headers))
+            ctx = enter(conn) if enter is not None else conn.transaction()
+            with ctx:
                 conn.execute(_LOCK_SQL)
                 received = conn.execute("SELECT clock_timestamp() AS now").fetchone()["now"]
-                key, wrapped = None, None
-                if self.crypto is not None:
-                    try:
-                        wrapped_key = self.crypto.new_contact_key(org)
-                        key, wrapped = wrapped_key.data_key, wrapped_key.wrapped
-                    except KeyProviderError:
-                        if org != home:
-                            raise
-                        # the platform intake (the home organisation of a cloud vault) may have no key of its own: the
-                        # post is stored as sent and the row says so, never dropped for want of a key
-                enc = ENC_WRAPPED if key is not None else ENC_NONE
-                body_ct = None
-                if object_id is None:
-                    body_ct = self._seal(key, org, post_id, COL_BODY, body)
-                else:
-                    blob = self._seal(key, org, post_id, COL_BODY, body)
-                    retain = received + timedelta(days=366 * self.retain_years)
-                    record = self.store.put(str(org), f"raw-posts/{object_id}", blob, retain_until=retain)
-                    if record.sha256 != hashlib.sha256(blob).hexdigest():
-                        raise StoreUnavailable("the evidence store's copy of the body does not match what was sent to it")
-                query_ct = self._seal(key, org, post_id, COL_QUERY, _as_bytes(req.query))
-                headers_ct = self._seal(key, org, post_id, COL_HEADERS, headers_json(req.headers))
                 head = conn.execute("SELECT * FROM consentvault.raw_post_head()").fetchone()
                 row = {
                     "org_id": org, "post_id": post_id, "seq": head["seq"] + 1 if head else 1,

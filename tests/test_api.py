@@ -152,13 +152,15 @@ def test_an_unchecked_box_is_stored_as_sent_and_is_not_made_a_grant(server, disc
     assert _events(conn) == 0 and _facts(conn, post["post_id"])["event_not_derived"] == "UncheckedConsentError"
 
 
-def test_a_missing_box_is_stored_as_not_sent_and_raises_the_alarm(server, disclosure, conn):
+def test_a_missing_box_is_stored_as_not_sent_and_the_event_records_why_it_is_not_a_grant(server, disclosure, conn):
     payload = _grant(disclosure)
     del payload["checked"]
     status, body, _ = _post(server, payload)
     _stored(status, body)
     assert conn.execute("SELECT state FROM consentvault.raw_post_field WHERE field = 'consent'").fetchone()["state"] == "not_sent"
-    assert [r["name"] for r in conn.execute("SELECT name FROM consentvault.operator_alarm").fetchall()] == ["capture.consent_not_sent"]
+    assert _facts(conn, _posts(conn)[0]["post_id"])["event_not_derived"] == "UncheckedConsentError"
+    # a stop carries no box, so the events API map does not raise the missing-box alarm (a form's own map does)
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.operator_alarm").fetchone()["n"] == 0
 
 
 def test_stop_event_is_recorded(server, disclosure):
@@ -458,3 +460,13 @@ def test_bad_edge_timestamp_and_payload_hash_are_stored_and_the_event_is_made_wi
     p = _grant(disclosure)
     p["payload_sha256"] = "nothex"
     assert _post(server, p)[0] == 201 and _events(conn) == 1
+
+
+def test_the_gateways_service_credentials_for_the_hop_are_not_stored_and_a_fact_says_so(server, conn):
+    _call(server + "/v1/events", "POST", b"{}", {"cf-access-client-id": "id-1", "cf-access-client-secret": "secret-1",
+                                                  "X-Other": "kept", "Content-Type": "application/json"})
+    server.settle()
+    post, = _posts(conn)
+    names = [n.lower() for n, _ in json.loads(bytes(post["headers_ct"]))]
+    assert "x-other" in names and "cf-access-client-secret" not in names and "cf-access-client-id" not in names
+    assert b"secret-1" not in bytes(post["headers_ct"]) and _facts(conn, post["post_id"])["gateway_service_credentials_not_stored"] is True

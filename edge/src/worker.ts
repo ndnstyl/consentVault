@@ -2,7 +2,10 @@
 // path, any method, any body, any origin, is forwarded whole to the vault in one signed envelope (envelope.ts) and answered
 // with the vault's receipt. The origin list and the bot check are facts in the envelope; neither is a reason to refuse.
 
-import { sha256Hex, hmacSha256Hex, storeAndAnswer, type CaptureDeps as EnvelopeDeps, type Durable } from "./envelope.ts";
+import {
+  deliverBatch, durableFrom, hmacSha256Hex, sha256Hex, storeAndAnswer, type CaptureDeps as EnvelopeDeps, type Durable, type QueueLike,
+  type QueueMessage, type R2Like,
+} from "./envelope.ts";
 
 export { sha256Hex, hmacSha256Hex };
 
@@ -12,6 +15,8 @@ export interface Env {
   SIGNING_SECRET: string;
   SOURCE_ID?: string;
   TURNSTILE_SECRET?: string;
+  BODY_STORE?: R2Like; // optional: where a request waits while the vault is down (with CAPTURE_QUEUE)
+  CAPTURE_QUEUE?: QueueLike;
 }
 
 export interface Deps {
@@ -77,6 +82,9 @@ export async function handleConsent(request: Request, env: Env, deps: Deps): Pro
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    return handleConsent(request, env, { fetch: (...a) => fetch(...a), now: () => new Date() });
+    return handleConsent(request, env, { fetch: (...a) => fetch(...a), now: () => new Date(), durable: durableFrom(env) });
+  },
+  async queue(batch: { messages: QueueMessage[] }, env: Env): Promise<void> {
+    await deliverBatch(batch.messages, env, { fetch: (...a) => fetch(...a), now: () => new Date() });
   },
 };

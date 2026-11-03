@@ -96,7 +96,8 @@ def read_after_commit(writer: RawPostWriter, conn: psycopg.Connection, enter: Ca
         _alarm(conn, enter, ALARM_FIELD_MAP_MISSING, stored.post_id, "NoFieldMap", request_id, out)
     if any(r.state == extract.UNREADABLE for r in out.readings):
         _alarm(conn, enter, ALARM_BODY_UNREADABLE, stored.post_id, "BodyUnreadable", request_id, out)
-    if fmap is not None and by_field.get("consent") and by_field["consent"].state == extract.NOT_SENT and req.kind == "post":
+    if fmap is not None and fmap.box_expected and by_field.get("consent") and by_field["consent"].state == extract.NOT_SENT \
+            and req.kind == "post":
         _alarm(conn, enter, ALARM_CONSENT_NOT_SENT, stored.post_id, "ConsentNotSent", request_id, out)
     if fmap is not None and fmap.wording_path and by_field.get("wording") and by_field["wording"].state == extract.NOT_SENT \
             and req.kind == "post":

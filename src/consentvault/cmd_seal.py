@@ -38,7 +38,9 @@ def _run_seal(args, cfg) -> int:
             metrics.emit("UnsealedOldestAgeSeconds", max(ages.values(), default=0.0))
             print(json.dumps({"ok": True, "sealed": {o: len(v) for o, v in done_orgs.items()}}))
             return EXIT_OK
-        done = seal_pending(conn, url, args.limit)
+        from .seal_raw import seal_pending_raw
+
+        done = seal_pending(conn, url, args.limit) + seal_pending_raw(conn, url, args.limit)
         left = conn.execute("SELECT count(*) AS n FROM consentvault.unsealed_events").fetchone()["n"]
         metrics.emit("UnsealedOldestAgeSeconds", conn.execute(
             "SELECT coalesce(extract(epoch FROM now() - min(received_at)), 0)::float8 AS age"
@@ -68,8 +70,12 @@ def _run_verify_seals(args, cfg) -> int:
             metrics.emit("VerifySealsFailures", 0)
             print(json.dumps({"ok": True, "checked": checked_orgs}))
             return EXIT_OK
-        checked, failures = verify_all(conn, timedelta(seconds=cfg.seal_max_delay_seconds),
-                                   timedelta(seconds=cfg.unsealed_grace_seconds))
+        from .seal_raw import verify_all_raw
+
+        window = (timedelta(seconds=cfg.seal_max_delay_seconds), timedelta(seconds=cfg.unsealed_grace_seconds))
+        checked, failures = verify_all(conn, *window)
+        raw_checked, raw_failures = verify_all_raw(conn, *window)
+        checked, failures = checked + raw_checked, failures + raw_failures
     metrics.emit("VerifySealsFailures", 1 if failures else 0)
     for f in failures:
         print(f"consentvault: seal failed for event {f.event_id}: {f.reason}", file=sys.stderr)

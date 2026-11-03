@@ -4,7 +4,7 @@
 // or drop the request. A request that arrives while the vault is down waits in the edge's durable store and is told so.
 
 import {
-  storeAndAnswer, type CaptureDeps as EnvelopeDeps, type Durable,
+  deliverBatch, durableFrom, storeAndAnswer, type CaptureDeps as EnvelopeDeps, type Durable, type QueueLike, type QueueMessage, type R2Like,
 } from "./envelope.ts";
 
 export interface SiteKeyRecord {
@@ -22,6 +22,8 @@ export interface CaptureEnv {
   ACCESS_CLIENT_ID: string;
   ACCESS_CLIENT_SECRET: string;
   DEFAULT_RATE_LIMIT_PER_MINUTE?: string;
+  BODY_STORE?: R2Like; // optional: where a request waits while the vault is down (with CAPTURE_QUEUE)
+  CAPTURE_QUEUE?: QueueLike;
 }
 
 export interface RateLimiter {
@@ -132,7 +134,11 @@ export async function handleCapture(request: Request, env: CaptureEnv, deps: Cap
 const limiter = new MemoryRateLimiter();
 export default {
   async fetch(request: Request, env: CaptureEnv): Promise<Response> {
-    return handleCapture(request, env, { fetch: (...a) => fetch(...a), now: () => new Date(), rateLimiter: limiter });
+    return handleCapture(request, env, { fetch: (...a) => fetch(...a), now: () => new Date(), rateLimiter: limiter, durable: durableFrom(env) });
+  },
+  // The queue consumer: delivers waiting requests to the vault in arrival order.
+  async queue(batch: { messages: QueueMessage[] }, env: CaptureEnv): Promise<void> {
+    await deliverBatch(batch.messages, env, { fetch: (...a) => fetch(...a), now: () => new Date() });
   },
 };
 

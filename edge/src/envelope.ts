@@ -218,3 +218,67 @@ export async function deliverQueued(message: QueuedMessage, body: Uint8Array, ta
   const res = await post(target, deps, envelope);
   if (res.status !== 201) throw new Error(`the vault answered ${res.status}`);
 }
+
+// Cloudflare bindings: the durable store is an R2 bucket (``BODY_STORE``) for the body and a Queue (``CAPTURE_QUEUE``) for the
+// one small message that names it. Neither is a dependency of the vault; without both the edge has no durable store and says so.
+export interface R2Like {
+  put(key: string, value: Uint8Array): Promise<unknown>;
+  get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
+}
+export interface QueueLike {
+  send(message: string): Promise<void>;
+}
+
+export function durableFrom(env: { BODY_STORE?: R2Like; CAPTURE_QUEUE?: QueueLike }): Durable | undefined {
+  const { BODY_STORE, CAPTURE_QUEUE } = env;
+  if (!BODY_STORE || !CAPTURE_QUEUE) return undefined;
+  return {
+    putBody: async (key, body) => { await BODY_STORE.put(key, body); },
+    enqueue: async (message) => {
+      const queueId = crypto.randomUUID();
+      await CAPTURE_QUEUE.send(JSON.stringify({ ...(JSON.parse(message) as QueuedMessage), queue_id: queueId }));
+      return queueId;
+    },
+  };
+}
+
+export interface QueueMessage {
+  body: string;
+  ack(): void;
+  retry(): void;
+}
+export const QUEUE_DEADLINE_MS = 60 * 60 * 1000;
+
+/**
+ * Deliver a batch of queued requests in arrival order. The first one the vault does not take stops the batch: it and every
+ * one after it are retried, so a later request never lands before an earlier one. A request still undelivered an hour after
+ * the edge accepted it raises the past-deadline alarm every time it is retried.
+ */
+export async function deliverBatch(messages: QueueMessage[], env: { BODY_STORE?: R2Like } & Partial<VaultTarget>, deps: CaptureDeps): Promise<void> {
+  let failed = false;
+  for (const m of messages) {
+    if (failed) { m.retry(); continue; }
+    let message: QueuedMessage;
+    try {
+      message = JSON.parse(m.body) as QueuedMessage;
+    } catch {
+      alarm(deps, "capture.queue_unreadable", "a queued message could not be read; it is kept and retried");
+      failed = true;
+      m.retry();
+      continue;
+    }
+    try {
+      if (!env.BODY_STORE || !env.VAULT_URL || !env.SIGNING_SECRET) throw new Error("the edge's store or vault settings are missing");
+      const object = await env.BODY_STORE.get(message.body_key);
+      if (!object) throw new Error("the queued body is missing from the store");
+      await deliverQueued(message, new Uint8Array(await object.arrayBuffer()), env as VaultTarget, deps);
+      m.ack();
+    } catch (e) {
+      failed = true;
+      m.retry();
+      if (deps.now().getTime() - Date.parse(message.queued_at) > QUEUE_DEADLINE_MS) {
+        alarm(deps, "capture.queue_past_deadline", `a queued request is still undelivered an hour after it was accepted (${(e as Error).name})`);
+      }
+    }
+  }
+}

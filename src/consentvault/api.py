@@ -31,7 +31,7 @@ from . import config as config_mod
 from . import edge_envelope
 from .capture import capture_and_release, capture_verified
 from .capture_http import (Downstream, cors_headers, is_capture_path, is_preflight, read_any_body, request_headers,
-                           unavailable_answer)
+                           transport_credentials_removed, unavailable_answer)
 from . import dbclock
 from .db import connect
 from .errors import ConfigError, ConsentVaultError, NormalizationError
@@ -262,6 +262,8 @@ class _Handler(BaseHTTPRequestHandler):
         facts += [Fact("vault", "host_on_list", self._host_ok()), Fact("vault", "origin_header", self.headers.get("Origin")),
                   Fact("vault", "request_signature", reason or "valid"), Fact("vault", "replay", replay or "fresh"),
                   Fact("vault", "peer_address", self.client_address[0])]
+        if transport_credentials_removed(self):
+            facts.append(Fact("vault", "gateway_service_credentials_not_stored", True))
         envelope = None
         if reason is None and not by_verified_key and edge_envelope.looks_like_envelope(body):
             try:
@@ -987,6 +989,8 @@ class _CloudHandler(BaseHTTPRequestHandler):
         preflight = is_preflight(self)
         facts += [Fact("vault", "host_on_list", self._host_ok()), Fact("vault", "origin_header", self.headers.get("Origin")),
                   Fact("vault", "peer_address", self.client_address[0])]
+        if transport_credentials_removed(self):
+            facts.append(Fact("vault", "gateway_service_credentials_not_stored", True))
         identity = self._capture_identity(body, headers, url, facts)
         if identity["envelope"]:  # the edge answers the browser's permission check itself; to the edge the vault answers with a receipt
             preflight_inner = (identity["method"] or "").upper() == "OPTIONS" and any(

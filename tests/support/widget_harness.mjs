@@ -1,5 +1,5 @@
 // Runs the real checkbox widget under node with a minimal stand-in for the browser objects it touches.
-// stdin: {"widget": <path>, "attributes": {<name>: <value>}}
+// stdin: {"widget": <path>, "attributes": {<name>: <value>}, "box": <checkbox state at submit, default true>}
 // stdout: {"posted": <the JSON body the widget sends to its endpoint>, "shown": <the text on screen>}
 import { readFileSync } from "node:fs";
 
@@ -35,6 +35,6 @@ globalThis.fetch = async (_url, init) => {
 const el = new defined();
 el.attrs = { "data-endpoint": "https://edge.example.com/consent", ...input.attributes };
 el.connectedCallback();
-el._box.checked = true;
+el._box.checked = input.box === undefined ? true : input.box;
 await el.submit("+15555550100");
 process.stdout.write(JSON.stringify({ posted, shown: el._span.textContent }));

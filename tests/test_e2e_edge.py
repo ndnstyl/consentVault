@@ -61,8 +61,10 @@ def test_checked_box_becomes_a_grant_and_unchecked_never_does(live, conn):
                               {"body": unchecked_raw, "ip": "203.0.113.9"}])
 
     assert ok["status"] == 200 and ok["body"]["recorded"] is True
-    assert no["status"] == 422 and no["body"]["error"] == "unchecked"
-    assert no["forwarded"] is None  # the worker never even called the vault
+    # the worker forwards the box exactly as sent and never judges it; the vault does not record it as consent.
+    # Storing the unchecked post itself waits for the raw post store (core-record work).
+    assert no["forwarded"]["body"]["checked"] is False
+    assert no["status"] == 502 and no["body"]["error"] == "vault_refused"
 
     rows = conn.execute("SELECT * FROM consentvault.event ORDER BY seq").fetchall()
     assert len(rows) == 1

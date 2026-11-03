@@ -79,14 +79,24 @@ test("payload hash covers the exact body received", async () => {
   assert.equal(ev.payload_sha256, createHash("sha256").update(raw).digest("hex"));
 });
 
-test("an unchecked box is refused and never forwarded", async () => {
-  for (const checked of [false, "true", 1, undefined]) {
+test("the box value is forwarded exactly as sent, never set by the Worker", async () => {
+  for (const checked of [true, false, "true", 1, null]) {
     const { d, calls } = deps();
     const res = await handleConsent(req(good({ checked })), ENV, d);
-    assert.equal(res.status, 422);
-    assert.equal((await res.json()).error, "unchecked");
-    assert.equal(calls.length, 0);
+    assert.equal(res.status, 200);
+    const ev = JSON.parse(calls[0].init.body as string);
+    assert.deepEqual(ev.checked, checked);
+    assert.equal((calls[0].init.headers as Record<string, string>)["x-consentvault-flags"], undefined);
   }
+});
+
+test("a post with no box field is forwarded without one and flagged, never defaulted to true", async () => {
+  const { d, calls } = deps();
+  const res = await handleConsent(req(good({ checked: undefined })), ENV, d);
+  assert.equal(res.status, 200);
+  const ev = JSON.parse(calls[0].init.body as string);
+  assert.equal("checked" in ev, false);
+  assert.equal((calls[0].init.headers as Record<string, string>)["x-consentvault-flags"], "box_missing");
 });
 
 test("wording sent on the wire is refused and never forwarded", async () => {

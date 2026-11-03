@@ -75,7 +75,6 @@ const refusals: [string, () => Promise<Response>, number, string][] = [
   ["turnstile hostname mismatch", async () => handleCapture(req(good()), ENV, mk({ turnstile: { success: true, hostname: "evil.com" } }).d), 403, "bot_check_hostname_mismatch"],
   ["turnstile hostname absent", async () => handleCapture(req(good()), ENV, mk({ turnstile: { success: true } }).d), 403, "bot_check_hostname_missing"],
   ["turnstile down", async () => handleCapture(req(good()), ENV, mk({ turnstileStatus: 500 }).d), 502, "bot_check_unreachable"],
-  ["unchecked", async () => handleCapture(req(good({ checked: false })), ENV, mk().d), 422, "unchecked"],
   ["vault refuses", async () => handleCapture(req(good()), ENV, mk({ vaultStatus: 403 }).d), 502, "vault_refused"],
   ["vault unreachable", async () => handleCapture(req(good()), ENV, mk({ vaultThrow: true }).d), 502, "vault_unreachable"],
   ["oversize", async () => handleCapture(req(good({ pad: "x".repeat(20000) })), ENV, mk().d), 413, "too_large"],
@@ -91,6 +90,26 @@ for (const [name, run, status, code] of refusals) {
     assert.equal(b.recorded, false);
   });
 }
+
+test("the box value is forwarded exactly as sent, never set by the Worker", async () => {
+  for (const checked of [true, false, "true", 1, null]) {
+    const { d, calls } = mk();
+    const res = await handleCapture(req(good({ checked })), ENV, d);
+    assert.equal(res.status, 200);
+    const v = calls.find((c) => c.url.endsWith("/v1/events"))!;
+    assert.deepEqual(JSON.parse(v.init.body as string).checked, checked);
+    assert.equal((v.init.headers as Record<string, string>)["x-consentvault-flags"], undefined);
+  }
+});
+
+test("a post with no box field is forwarded without one and flagged, never defaulted to true", async () => {
+  const { d, calls } = mk();
+  const res = await handleCapture(req(good({ checked: undefined })), ENV, d);
+  assert.equal(res.status, 200);
+  const v = calls.find((c) => c.url.endsWith("/v1/events"))!;
+  assert.equal("checked" in JSON.parse(v.init.body as string), false);
+  assert.equal((v.init.headers as Record<string, string>)["x-consentvault-flags"], "box_missing");
+});
 
 test("refused requests never reach the vault", async () => {
   const { d, calls } = mk({ turnstile: { success: false } });

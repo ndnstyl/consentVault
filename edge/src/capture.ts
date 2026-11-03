@@ -176,7 +176,6 @@ export async function handleCapture(request: Request, env: CaptureEnv, deps: Cap
     const event: Record<string, unknown> = {
       contact: input.contact,
       event_type: "grant",
-      checked: true,
       method: "checkbox",
       origin: "consumer",
       contact_verification: "none",
@@ -194,6 +193,8 @@ export async function handleCapture(request: Request, env: CaptureEnv, deps: Cap
       source_id: rec.source_id,
       source: "site_key",
     };
+    const boxSent = Object.prototype.hasOwnProperty.call(input, "checked");
+    if (boxSent) event.checked = input.checked;
     const body = JSON.stringify(event);
     const timestamp = String(Math.floor(deps.now().getTime() / 1000));
     const signature = await hmacSha256Hex(env.SIGNING_SECRET, `${timestamp}.${body}`);
@@ -206,6 +207,7 @@ export async function handleCapture(request: Request, env: CaptureEnv, deps: Cap
           "content-type": "application/json",
           "x-consentvault-timestamp": timestamp,
           "x-consentvault-signature": signature,
+          ...(boxSent ? {} : { "x-consentvault-flags": "box_missing" }),
           "cf-access-client-id": env.ACCESS_CLIENT_ID,
           "cf-access-client-secret": env.ACCESS_CLIENT_SECRET,
         },

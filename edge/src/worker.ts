@@ -76,7 +76,7 @@ function json(status: number, body: unknown, extra: Record<string, string> = {})
 
 export interface ConsentInput {
   contact: string;
-  checked: boolean;
+  checked?: unknown; // exactly as sent; absent when the post carried no box field
   disclosure_sha256: string;
   channels: string[];
   purposes: string[];
@@ -104,9 +104,6 @@ export function validateInput(raw: unknown): ConsentInput {
     }
     return Array.from(new Set((v as string[]).map((x) => x.trim()))).sort();
   };
-  if (r.checked !== true) {
-    throw new Refusal(422, "unchecked", "the consent box was not checked; no grant is recorded");
-  }
   if (r.disclosure_text !== undefined) {
     throw new Refusal(
       400,
@@ -125,13 +122,13 @@ export function validateInput(raw: unknown): ConsentInput {
   }
   const out: ConsentInput = {
     contact: str("contact", 320),
-    checked: true,
     disclosure_sha256,
     channels,
     purposes: list("purposes"),
     page_url: str("page_url"),
     session: str("session", 128),
   };
+  if (Object.prototype.hasOwnProperty.call(r, "checked")) out.checked = r.checked;
   if (r.turnstile_token !== undefined) {
     if (typeof r.turnstile_token !== "string") throw new Refusal(400, "bad_shape", "field 'turnstile_token' must be a string");
     out.turnstile_token = r.turnstile_token;
@@ -188,7 +185,6 @@ export async function handleConsent(request: Request, env: Env, deps: Deps): Pro
     const event: Record<string, unknown> = {
       contact: input.contact,
       event_type: "grant",
-      checked: true,
       method: "checkbox",
       origin: "consumer",
       contact_verification: "none",
@@ -205,6 +201,8 @@ export async function handleConsent(request: Request, env: Env, deps: Deps): Pro
       source: env.SOURCE_ID || "edge",
     };
 
+    const boxSent = Object.prototype.hasOwnProperty.call(input, "checked");
+    if (boxSent) event.checked = input.checked;
     const body = JSON.stringify(event);
     const timestamp = String(Math.floor(deps.now().getTime() / 1000));
     const signature = await hmacSha256Hex(env.SIGNING_SECRET, `${timestamp}.${body}`);
@@ -217,6 +215,7 @@ export async function handleConsent(request: Request, env: Env, deps: Deps): Pro
           "content-type": "application/json",
           "x-consentvault-timestamp": timestamp,
           "x-consentvault-signature": signature,
+          ...(boxSent ? {} : { "x-consentvault-flags": "box_missing" }),
         },
         body,
       });

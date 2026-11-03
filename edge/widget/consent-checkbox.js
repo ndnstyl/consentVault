@@ -82,16 +82,13 @@
       var self = this;
       var endpoint = this.getAttribute("data-endpoint");
       if (!endpoint) return Promise.reject(new Error("consentvault-consent: data-endpoint is not set"));
-      if (!this.checked) {
-        this._say("Consent was not given, so nothing was recorded.", "error");
-        return Promise.reject(new Error("consentvault-consent: box not checked"));
-      }
+      var boxState = this.checked; // read at submit, sent exactly as it is
       // Hash exactly the text on screen right now, at submit time.
       var shown = this._span.textContent;
       return sha256Hex(shown).then(function (hash) {
         var body = {
           contact: contact,
-          checked: true,
+          checked: boxState,
           disclosure_sha256: hash,
           channels: list(self.getAttribute("data-channels")),
           purposes: list(self.getAttribute("data-purposes")),

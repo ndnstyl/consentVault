@@ -157,7 +157,7 @@ def test_a_release_failure_after_a_recorded_grant_writes_an_operator_alarm(cloud
         su.execute("RESET ROLE")
 
 
-def test_an_alarm_that_cannot_be_written_fails_the_request_by_name(cloud, monkeypatch):
+def test_an_alarm_that_cannot_be_written_is_a_critical_log_and_never_changes_the_answer(cloud, monkeypatch, caplog):
     import consentvault.alarms as alarms_mod
     import consentvault.release as release_mod
 
@@ -168,8 +168,11 @@ def test_an_alarm_that_cannot_be_written_fails_the_request_by_name(cloud, monkey
         raise alarms_mod.AlarmWriteError("simulated: the alarm table refused")
     monkeypatch.setattr(release_mod, "release_after_tenant_grant", broken)
     monkeypatch.setattr(alarms_mod, "raise_operator_alarm", no_alarm)
-    s, r = cloud.grant(cloud.a, X)
-    assert (s, r["error"]) == (503, "alarm_unavailable"), r
+    with caplog.at_level("CRITICAL"):
+        s, r = cloud.grant(cloud.a, X)
+    assert s == 201 and r["stored"] is True, r  # the post was stored and answered before the release decision was tried
+    assert "operator alarm NOT written" in caplog.text and "neither its release decision nor its alarm was written" in caplog.text
+    assert r["event_id"]  # the event itself is recorded
 
 
 def test_a_runtime_role_raises_an_alarm_only_for_its_own_organisation(tenancy):

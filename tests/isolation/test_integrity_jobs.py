@@ -250,11 +250,15 @@ def test_a_worker_scoped_token_reads_no_evidence_for_a_login_outside_the_integri
 
 
 INTEGRITY_TABLE_PRIVILEGES = {("chain_head", "INSERT"), ("chain_head", "SELECT"), ("event", "SELECT"),
-                              ("seal", "INSERT"), ("seal", "SELECT"), ("unsealed_events", "SELECT")}
+                              ("seal", "INSERT"), ("seal", "SELECT"), ("unsealed_events", "SELECT"),
+                              # the raw post chain is anchored and sealed the same way (migration 0067)
+                              ("raw_post", "SELECT"), ("raw_post_chain_head", "INSERT"), ("raw_post_chain_head", "SELECT"),
+                              ("raw_post_seal", "INSERT"), ("raw_post_seal", "SELECT")}
 INTEGRITY_FUNCTIONS = {"consentvault.current_org()", "consentvault.current_token_scopes()",
                        "consentvault.dispatch_org_ids(text)", "consentvault.dispatch_org_token(text,uuid)",
                        "consentvault.enter_org(text)", "consentvault.home_org()", "consentvault.ledger_head()",
-                       "consentvault.mark_seal_verified(uuid)", "consentvault.may_read_evidence()"}
+                       "consentvault.mark_seal_verified(uuid)", "consentvault.may_read_evidence()",
+                       "consentvault.mark_raw_post_seal_verified(uuid)", "consentvault.raw_post_head()"}
 
 
 def test_the_integrity_group_holds_exactly_its_privileges(two_orgs):

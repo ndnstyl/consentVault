@@ -18,6 +18,17 @@
     return (value || "").split(",").map(function (s) { return s.trim(); }).filter(Boolean);
   }
 
+  /** The browser's clock with its UTC offset, read at the moment of the click (for example 2026-11-03T10:04:05.120-05:00). */
+  function decidedAt() {
+    var d = new Date();
+    var off = -d.getTimezoneOffset();
+    var sign = off < 0 ? "-" : "+";
+    var abs = Math.abs(off);
+    function p(n, w) { return String(n).padStart(w || 2, "0"); }
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + "T" + p(d.getHours()) + ":" + p(d.getMinutes()) +
+      ":" + p(d.getSeconds()) + "." + p(d.getMilliseconds(), 3) + sign + p(Math.floor(abs / 60)) + ":" + p(abs % 60);
+  }
+
   function randomId() {
     var a = new Uint8Array(16);
     crypto.getRandomValues(a);
@@ -83,12 +94,15 @@
       var endpoint = this.getAttribute("data-endpoint");
       if (!endpoint) return Promise.reject(new Error("consentvault-consent: data-endpoint is not set"));
       var boxState = this.checked; // read at submit, sent exactly as it is
-      // Hash exactly the text on screen right now, at submit time.
+      var decided = decidedAt(); // the moment of the decision, on the browser's clock, with its offset
+      // Hash exactly the text on screen right now, at submit time, and send that text beside its hash.
       var shown = this._span.textContent;
       return sha256Hex(shown).then(function (hash) {
         var body = {
           contact: contact,
           checked: boxState,
+          decided_at: decided,
+          disclosure_text: shown,
           disclosure_sha256: hash,
           channels: list(self.getAttribute("data-channels")),
           purposes: list(self.getAttribute("data-purposes")),
@@ -103,16 +117,21 @@
         });
       }).then(function (res) {
         return res.json().catch(function () { return {}; }).then(function (data) {
-          if (!res.ok || data.recorded !== true) {
-            self._say("Your consent could not be recorded. Please try again.", "error");
+          if (data.queued === true) {
+            self._say("Not yet stored, queued. Your choice will be recorded as soon as the record store answers.", "ok");
+            self.dispatchEvent(new CustomEvent("consentvault-queued", { detail: data, bubbles: true }));
+            return data;
+          }
+          if (!res.ok || data.stored !== true) {
+            self._say("Your choice could not be recorded. Please try again.", "error");
             throw new Error("consentvault-consent: " + (data.error || "http " + res.status));
           }
-          self._say("Recorded.", "ok");
+          self._say("Your choice was recorded.", "ok");
           self.dispatchEvent(new CustomEvent("consentvault-recorded", { detail: data, bubbles: true }));
           return data;
         });
       }, function (err) {
-        self._say("Your consent could not be recorded. Please try again.", "error");
+        self._say("Your choice could not be recorded. Please try again.", "error");
         throw err;
       });
     }

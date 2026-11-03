@@ -162,8 +162,13 @@ test("an Authorization header still wins and the cookie is never forwarded (mach
   assert.equal(bearer(m.calls[0]), "Bearer aaa.bbb.ccc");
   assert.equal(m.calls[0].headers.get("cookie"), null);
   const none = mk(); await none.ready;
-  const res = await handleGateway(r("/v1/events", { method: "POST", body: "{}", cookie: false }), none.env, none.deps);
+  const res = await handleGateway(r("/v1/permission", { method: "POST", body: "{}", cookie: false }), none.env, none.deps);
   assert.equal(((await res.json()) as { error: string }).error, "bearer_missing");
+  // a capture route has no bearer to miss: the post is forwarded whole and stored by the vault
+  const cap = mk(); await cap.ready;
+  const stored = await handleGateway(r("/v1/events", { method: "POST", body: "{}", cookie: false }), cap.env, cap.deps);
+  assert.equal(stored.status, 200);
+  assert.equal(cap.calls.length, 1);
 });
 
 test("a one-time export download link is its own credential: it passes with no session at all", async () => {

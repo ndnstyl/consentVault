@@ -1,6 +1,7 @@
 // Runs the real checkbox widget under node with a minimal stand-in for the browser objects it touches.
 // stdin: {"widget": <path>, "attributes": {<name>: <value>}, "box": <checkbox state at submit, default true>}
-// stdout: {"posted": <the JSON body the widget sends to its endpoint>, "shown": <the text on screen>}
+// stdin may also carry "answer": {"status", "body"}, what the edge answers.
+// stdout: {"posted": <the JSON body the widget sends to its endpoint>, "shown": <the text on screen>, "status": <the status line>}
 import { readFileSync } from "node:fs";
 
 const input = JSON.parse(await new Promise((resolve, reject) => {
@@ -22,13 +23,15 @@ globalThis.HTMLElement = class extends Node_ {
   dispatchEvent() { return true; }
 };
 globalThis.document = { createElement: () => new Node_(), getElementById: () => null };
+globalThis.CustomEvent = class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } };
 globalThis.location = { href: "https://www.example.com/signup" };
 let defined = null;
 globalThis.customElements = { get: () => undefined, define: (_name, cls) => { defined = cls; } };
 let posted = null;
 globalThis.fetch = async (_url, init) => {
   posted = JSON.parse(init.body);
-  return { ok: true, status: 200, json: async () => ({ recorded: true }) };
+  const answer = input.answer || { status: 201, body: { stored: true } };
+  return { ok: answer.status >= 200 && answer.status < 300, status: answer.status, json: async () => answer.body };
 };
 
 (0, eval)(readFileSync(input.widget, "utf8"));
@@ -36,5 +39,10 @@ const el = new defined();
 el.attrs = { "data-endpoint": "https://edge.example.com/consent", ...input.attributes };
 el.connectedCallback();
 el._box.checked = input.box === undefined ? true : input.box;
-await el.submit("+15555550100");
-process.stdout.write(JSON.stringify({ posted, shown: el._span.textContent }));
+let failed = null;
+try {
+  await el.submit("+15555550100");
+} catch (e) {
+  failed = String(e.message);
+}
+process.stdout.write(JSON.stringify({ posted, shown: el._span.textContent, status: el._status.textContent, failed }));

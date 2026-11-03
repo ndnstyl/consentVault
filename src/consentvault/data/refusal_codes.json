@@ -236,6 +236,24 @@
    "defined_in": "0002_tenancy.sql"
   },
   {
+   "code": "db_check_raw_post_chain_vjnkxw",
+   "function": "consentvault.check_raw_post_chain",
+   "signature": "",
+   "line": 12,
+   "template": "consentvault raw post chain: the first post must have seq 1 and the genesis prev_hash",
+   "meaning": "consentvault raw post chain: the first post must have seq 1 and the genesis prev_hash",
+   "defined_in": "0067_raw_post.sql"
+  },
+  {
+   "code": "db_check_raw_post_chain_zvhzsh",
+   "function": "consentvault.check_raw_post_chain",
+   "signature": "",
+   "line": 17,
+   "template": "consentvault raw post chain: the post does not extend the current head (expected seq %)",
+   "meaning": "consentvault raw post chain: the post does not extend the current head (expected seq %)",
+   "defined_in": "0067_raw_post.sql"
+  },
+  {
    "code": "db_check_received_at_tmstqg",
    "function": "consentvault.check_received_at",
    "signature": "",
@@ -585,6 +603,15 @@
    "template": "consentvault erase: an admin or restore token is required",
    "meaning": "consentvault erase: an admin or restore token is required",
    "defined_in": "0054_export_keys.sql"
+  },
+  {
+   "code": "db_erase_raw_post_key_nxtsjr",
+   "function": "consentvault.erase_raw_post_key",
+   "signature": "uuid",
+   "line": 7,
+   "template": "consentvault erase_raw_post_key: no tenant entered",
+   "meaning": "consentvault erase_raw_post_key: no tenant entered",
+   "defined_in": "0067_raw_post.sql"
   },
   {
    "code": "db_erasure_request_cover_rqrjxv",
@@ -1242,6 +1269,33 @@
    "template": "consentvault.policy is a record: DELETE refused",
    "meaning": "consentvault.policy is a record: DELETE refused",
    "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_raw_post_key_delete_guard_gkhrnq",
+   "function": "consentvault.raw_post_key_delete_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.raw_post_key: a key row is deleted only by consentvault.erase_raw_post_key",
+   "meaning": "consentvault.raw_post_key: a key row is deleted only by consentvault.erase_raw_post_key",
+   "defined_in": "0067_raw_post.sql"
+  },
+  {
+   "code": "db_raw_post_seal_guard_hvyswj",
+   "function": "consentvault.raw_post_seal_guard",
+   "signature": "",
+   "line": 8,
+   "template": "consentvault.raw_post_seal is append-only: only verified_at may change",
+   "meaning": "consentvault.raw_post_seal is append-only: only verified_at may change",
+   "defined_in": "0067_raw_post.sql"
+  },
+  {
+   "code": "db_raw_post_seal_guard_jqjqqs",
+   "function": "consentvault.raw_post_seal_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.raw_post_seal is append-only: DELETE refused",
+   "meaning": "consentvault.raw_post_seal is append-only: DELETE refused",
+   "defined_in": "0067_raw_post.sql"
   },
   {
    "code": "db_record_call_take_qygpvn",

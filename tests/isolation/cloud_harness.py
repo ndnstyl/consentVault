@@ -144,9 +144,16 @@ class Cloud:
         req = urllib.request.Request(self.base + path, data=data, method="POST", headers=h)
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
-                return r.status, json.loads(r.read())
+                out = r.status, json.loads(r.read())
         except urllib.error.HTTPError as e:  # loud-failure-exempt: a non-2xx answer is returned to the test to assert on
-            return e.code, json.loads(e.read())
+            out = e.code, json.loads(e.read())
+        self.server.drain(30)  # the work that follows an answer (reading the post, alarms, the transitional event) is done
+        if path == "/v1/events" and out[0] == 201 and out[1].get("stored"):
+            with self.t.superuser() as su:  # the event this post was derived into, when it was (the link table is the record)
+                ev = su.execute("SELECT event_id FROM consentvault.event_source_post WHERE post_id = %s", (out[1]["post_id"],)).fetchone()
+            if ev is not None:
+                out[1]["event_id"] = str(ev["event_id"])
+        return out
 
     def assertion(self, client: Client, **kw) -> str:
         return make_client_assertion(client.key, alg=client.alg, client_id=client.credential_id, audience=TOKEN_URL,
@@ -182,3 +189,40 @@ class Cloud:
 
 def without(answer: dict, *keys: str) -> dict:
     return {k: v for k, v in answer.items() if k not in keys}
+
+
+def raw_posts(t: Tenancy, org_id) -> list:
+    """The raw posts of one organisation, oldest first (an out-of-band read)."""
+    with t.superuser() as su:
+        return su.execute("SELECT * FROM consentvault.raw_post WHERE org_id = %s ORDER BY seq", (org_id,)).fetchall()
+
+
+def _post_key(t: Tenancy, org_id, post_id):
+    from consentvault.tenancy.keys_protocol import WrappedKey
+
+    with t.superuser() as su:
+        k = su.execute("SELECT post_key_wrapped, key_version FROM consentvault.raw_post_key WHERE org_id = %s AND post_id = %s",
+                       (org_id, post_id)).fetchone()
+    return None if k is None else t.crypto.open_contact_key(org_id, WrappedKey(bytes(k["post_key_wrapped"]), k["key_version"]))
+
+
+def post_body(t: Tenancy, row) -> bytes:
+    """The decrypted body of an inline raw post row."""
+    from consentvault.tenancy import crypto as tc
+
+    key = _post_key(t, row["org_id"], row["post_id"])
+    blob = bytes(row["body_ct"])
+    return blob if key is None else tc.decrypt_field(key, row["org_id"], str(row["post_id"]), "raw_post.body", blob)
+
+
+def facts_of(t: Tenancy, row) -> dict:
+    """Every fact stored beside a raw post, name to value (a name stored twice keeps the last)."""
+    from consentvault.tenancy import crypto as tc
+
+    key = _post_key(t, row["org_id"], row["post_id"])
+    with t.superuser() as su:
+        found = su.execute("SELECT name, value_ct FROM consentvault.raw_post_fact WHERE org_id = %s AND post_id = %s"
+                           " ORDER BY recorded_at", (row["org_id"], row["post_id"])).fetchall()
+    return {f["name"]: json.loads(bytes(f["value_ct"]) if key is None else
+                                  tc.decrypt_field(key, row["org_id"], str(row["post_id"]), "raw_post_fact.value", bytes(f["value_ct"])))
+            for f in found}

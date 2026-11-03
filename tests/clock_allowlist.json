@@ -50,6 +50,7 @@
     "cmd_sync.py::build_worker::datetime.datetime.now": ["local", "the Twenty delivery's clock, used only for the drain deadline this process sets and checks on the same clock"],
     "cmd_twenty.py::_run::datetime.datetime.now": ["local", "the reconcile's clock; every reconcile time and due test is the database's, this one is unused for decisions"],
     "cmd_twenty.py::run_reminders::datetime.datetime.now": ["records", "the time written into the reminder email; the database decides which reminders are due"],
+    "capture_http.py::Downstream.drain::time.monotonic": ["local", "the deadline of a wait for in-flight after-the-answer work, a duration measured and judged on this process's own monotonic clock"],
     "confirm/config.py::ConfigMixin._sample::_dt(arg)": ["records", "the time shown in a sample message and stamped on the sample record; nothing is decided on it"],
     "confirm/config.py::ConfigMixin.check_account::_dt(arg)": ["records", "the time of an account check is written as data and clears an alarm; nothing is decided on it"],
     "confirm/config.py::ConfigMixin.connect_account::_dt(arg)": ["records", "the time an account was connected, written as data on the admin app's clock"],

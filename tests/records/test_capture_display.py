@@ -102,17 +102,24 @@ def test_a_capture_with_display_stores_no_name_in_the_event_the_evidence_or_the_
     assert b"Dana" not in flat and b"Cruz" not in flat
 
 
-def test_a_capture_with_a_bad_display_is_refused_and_records_nothing(cloud):
-    """capture.md amendment (any other key in display is validation_failed with fields.display; nothing written)."""
+def test_a_capture_with_a_bad_display_is_stored_whole_and_makes_no_event(cloud):
+    """A display that is not {name, company} is a reason the transitional event is not made (a fact), never a refusal:
+    the post, with the display exactly as sent, is stored."""
     def tally():
         with cloud.t.superuser() as su:
             return su.execute("SELECT (SELECT count(*) FROM consentvault.event WHERE org_id = %s) AS e,"
-                              " (SELECT count(*) FROM consentvault.evidence_object WHERE org_id = %s) AS o",
-                              (cloud.a.org.org_id, cloud.a.org.org_id)).fetchone()
+                              " (SELECT count(*) FROM consentvault.evidence_object WHERE org_id = %s) AS o,"
+                              " (SELECT count(*) FROM consentvault.raw_post WHERE org_id = %s) AS p",
+                              (cloud.a.org.org_id,) * 3).fetchone()
+    from isolation.cloud_harness import facts_of, post_body, raw_posts
     before = tally()
     s, r = cloud.grant(cloud.a, X, display={"name": "Dana", "age": 40})
-    assert (s, r["error"]) == (422, "validation_failed") and "display" in r["fields"] and "display.age" not in str(r.get("detail", "")) or "display" in r["fields"]
-    assert tally() == before  # no event, no evidence object
+    assert s == 201 and r["stored"] is True
+    after = tally()
+    assert (after["e"], after["o"], after["p"]) == (before["e"], before["o"], before["p"] + 1)  # a post, no event, no evidence object
+    post = raw_posts(cloud.t, cloud.a.org.org_id)[-1]
+    assert json.loads(post_body(cloud.t, post))["display"] == {"name": "Dana", "age": 40}
+    assert facts_of(cloud.t, post)["event_not_derived"] == "validation_failed"
     s2, r2 = cloud.grant(cloud.a, X, display={"name": "Dana"})
     assert s2 == 201 and tally()["e"] == before["e"] + 1
 
@@ -151,17 +158,19 @@ def test_every_event_updates_the_records_tables_in_the_same_transaction(cloud):
     assert (after["r"] - before["r"], after["i"] - before["i"]) == (1, 1)
 
 
-def test_a_records_failure_refuses_the_capture_as_service_unavailable(cloud):
-    """capture.md amendment (a failure there refuses the event as a whole: service_unavailable, nothing written)."""
+def test_a_records_failure_leaves_the_post_stored_and_no_event(cloud):
+    """A failure writing the records list refuses the transitional event as a whole (nothing of the event written); the
+    post itself is already stored and the sender was told so."""
     with cloud.t.superuser() as su:
         su.execute("CREATE FUNCTION public.cvt_fail2() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'records down (test)'; END $$")
         su.execute("CREATE TRIGGER cvt_fail2 BEFORE INSERT ON consentvault.record FOR EACH ROW EXECUTE FUNCTION public.cvt_fail2()")
     try:
         s, r = cloud.grant(cloud.a, X)
-        assert (s, r["error"]) == (503, "service_unavailable")
+        assert s == 201 and r["stored"] is True
         with cloud.t.superuser() as su:
             assert su.execute("SELECT count(*) AS n FROM consentvault.event WHERE org_id = %s AND session_ref = 's-1'",
                               (cloud.a.org.org_id,)).fetchone()["n"] == 0
+            assert su.execute("SELECT count(*) AS n FROM consentvault.raw_post WHERE org_id = %s", (cloud.a.org.org_id,)).fetchone()["n"] == 1
     finally:
         with cloud.t.superuser() as su:
             su.execute("DROP TRIGGER cvt_fail2 ON consentvault.record")

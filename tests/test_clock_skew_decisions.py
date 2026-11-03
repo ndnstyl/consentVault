@@ -25,12 +25,16 @@ def test_a_signed_request_is_fresh_by_the_database_clock_whatever_the_host_clock
 
 
 @pytest.mark.parametrize("by", SKEWS, ids=["ahead", "behind"])
-def test_a_stale_request_is_still_stale_whatever_the_host_clock(server, disclosure, monkeypatch, by):
+def test_a_stale_request_is_still_stale_whatever_the_host_clock(server, disclosure, conn, monkeypatch, by):
+    from test_api import _facts, _posts
+
     real = time.time
     stale = int(real()) - 301
     monkeypatch.setattr(time, "time", lambda: real() + by)
     status, body, _ = _post(server, _grant(disclosure), ts=stale)
-    assert status == 401 and body["error"] == "unauthenticated"
+    assert status == 201 and body["stored"] is True  # stored, with the verdict of the database's clock as a fact
+    assert _facts(conn, _posts(conn)[0]["post_id"])["request_signature"] == "stale_timestamp"
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"] == 0
 
 
 @pytest.mark.parametrize("by", SKEWS, ids=["ahead", "behind"])

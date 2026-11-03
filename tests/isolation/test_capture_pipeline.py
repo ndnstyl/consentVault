@@ -51,12 +51,14 @@ def test_a_capture_writes_its_encrypted_evidence_object_before_the_ledger_row(cl
     assert ev["fields"]["contact"] == X and ev["org_id"] == str(cloud.a.org.org_id)
 
 
-def test_a_store_failure_records_nothing_and_reconciliation_marks_the_object_uncommitted(cloud, monkeypatch):
+def test_a_store_failure_stores_the_post_and_derives_no_event_and_leaves_the_object_pending(cloud, monkeypatch):
     def refuse(*a, **k):
         raise EvidenceStoreError("store down")
     monkeypatch.setattr(cloud.store, "put", refuse)
     s, r = cloud.grant(cloud.a, X)
-    assert (s, r["error"]) == (503, "evidence_store_unavailable")
+    assert s == 201 and r["stored"] is True and "event_id" not in r
+    from .cloud_harness import facts_of, raw_posts
+    assert facts_of(cloud.t, raw_posts(cloud.t, cloud.a.org.org_id)[-1])["event_not_derived"] == "EvidenceStoreUnavailable"
     with cloud.t.superuser() as su:
         assert su.execute("SELECT count(*) AS n FROM consentvault.event WHERE org_id = %s AND contact_fp IN"
                           " (SELECT contact_fp FROM consentvault.evidence_object)",
@@ -71,7 +73,9 @@ def test_a_failed_commit_leaves_the_object_pending_until_reconciled_by_the_worke
         raise psycopg.errors.QueryCanceled("simulated commit failure")
     monkeypatch.setattr(capture_mod, "tenant_capture", broken)
     s, r = cloud.grant(cloud.a, X)
-    assert (s, r["error"]) == (503, "service_unavailable")
+    assert s == 201 and r["stored"] is True  # the post is stored before the event is tried; the event failing cannot remove it
+    from .cloud_harness import facts_of, raw_posts
+    assert facts_of(cloud.t, raw_posts(cloud.t, cloud.a.org.org_id)[-1])["event_not_derived"].startswith("unavailable:")
     objs = _objects(cloud, cloud.a.org.org_id)
     assert [o["status"] for o in objs] == ["committed", "pending"]
     assert cloud.store.get(str(cloud.a.org.org_id), objs[1]["object_key"])  # the object itself is kept

@@ -32,11 +32,17 @@ export interface GatewayEnv {
 export interface GatewayDeps {
   fetch: typeof fetch;
   now?: () => number; // milliseconds
-  // WAF hook: return a Refusal-shaped object to block; undefined to allow.
+  // WAF hook: returns its verdict. On a capture route the verdict is a fact beside the post, never a block; on every other
+  // route a verdict blocks. Undefined allows.
   waf?: (request: Request) => Promise<{ status: number; code: string; message: string } | undefined>;
+  alarm?: (name: string, detail: string) => void;
 }
 
 const DEFAULT_MAX_BODY = 256 * 1024;
+// A capture route: every request, any method, any body, is forwarded whole and stored by the vault (contracts/capture-api.md).
+const CAPTURE_PREFIXES = ["/v1/events", "/v1/capture"];
+export const GATEWAY_FACTS_HEADER = "x-consentvault-gateway-facts";
+const isCapturePath = (p: string) => CAPTURE_PREFIXES.some((x) => p === x || p.startsWith(x + "/"));
 const BEARER_RE = /^Bearer [A-Za-z0-9._~+\/-]+=*$/;
 const DROP_REQUEST_HEADERS = ["cf-access-client-id", "cf-access-client-secret", "cf-access-jwt-assertion", "host", "connection", "x-forwarded-for", "cookie"];
 const ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
@@ -124,12 +130,60 @@ function scrub(h: Headers): Headers {
   return out;
 }
 
+// A capture through the gateway: everything is forwarded unchanged, whatever the method, bearer, size or origin; what the
+// gateway noticed (the bearer's shape, the declared size, the WAF's verdict, the origin) travels as one fact header and is
+// stored with the post. Only a vault that cannot be reached is answered, and then it says nothing was stored.
+async function forwardCapture(request: Request, env: GatewayEnv, deps: GatewayDeps): Promise<Response> {
+  const url = new URL(request.url);
+  const auth = request.headers.get("authorization");
+  let verdict: { status: number; code: string; message: string } | undefined;
+  try {
+    verdict = deps.waf ? await deps.waf(request) : undefined;
+  } catch (e) {
+    verdict = { status: 0, code: "waf_failed", message: (e as Error).name };
+  }
+  const facts = {
+    bearer: !auth ? "absent" : !BEARER_RE.test(auth) ? "malformed" : auth.slice(7).startsWith("cv_site_") ? "site_key" : "well_formed",
+    declared_length: request.headers.get("content-length"),
+    waf: verdict ?? null,
+    origin_header: request.headers.get("origin"),
+    path_prefix_ok: url.pathname.startsWith("/v1/"),
+    method: request.method,
+    cookie_removed: request.headers.has("cookie"), // the one header not forwarded: the gateway's own portal session cookie
+  };
+  let body: ArrayBuffer | undefined;
+  if (request.method !== "GET" && request.method !== "HEAD") body = await request.arrayBuffer();
+  const headers = new Headers(request.headers);
+  for (const h of ["cf-access-client-id", "cf-access-client-secret", "cf-access-jwt-assertion", "host", "connection", "cookie"]) headers.delete(h);
+  headers.set("cf-access-client-id", env.ACCESS_CLIENT_ID);
+  headers.set("cf-access-client-secret", env.ACCESS_CLIENT_SECRET);
+  headers.set(GATEWAY_FACTS_HEADER, JSON.stringify(facts));
+  try {
+    const res = await deps.fetch(clean(env.ORIGIN_URL) + url.pathname + url.search, { method: request.method, headers, body });
+    return new Response(res.body, { status: res.status, headers: scrub(res.headers) });
+  } catch (e) {
+    (deps.alarm ?? ((n, d) => console.error(`consentvault gateway alarm ${n}: ${d}`)))("capture.store_unavailable", `the vault did not answer a capture (${(e as Error).name}); nothing was stored`);
+    return new Response(JSON.stringify({ stored: false, error: "store_unavailable", detail: "the record store could not be written; nothing was stored; send again" }), {
+      status: 503, headers: { "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": request.headers.get("origin") || "*", vary: "origin" },
+    });
+  }
+}
+
 export async function handleGateway(request: Request, env: GatewayEnv, deps: GatewayDeps): Promise<Response> {
   try {
+    const url = new URL(request.url);
+    if (isCapturePath(url.pathname)) {
+      if (!env.ORIGIN_URL || !env.ACCESS_CLIENT_ID || !env.ACCESS_CLIENT_SECRET) {
+        (deps.alarm ?? ((n, d) => console.error(`consentvault gateway alarm ${n}: ${d}`)))("capture.store_unavailable", "the gateway has no origin address or Access token; nothing was stored");
+        return new Response(JSON.stringify({ stored: false, error: "store_unavailable", detail: "the record store could not be written; nothing was stored; send again" }), {
+          status: 503, headers: { "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": request.headers.get("origin") || "*", vary: "origin" },
+        });
+      }
+      return await forwardCapture(request, env, deps);
+    }
     for (const k of ["ORIGIN_URL", "ACCESS_CLIENT_ID", "ACCESS_CLIENT_SECRET"] as const) {
       if (!env[k]) throw new Refusal(500, "misconfigured", `gateway setting ${k} is not set`);
     }
-    const url = new URL(request.url);
     if (!url.pathname.startsWith("/v1/")) throw new Refusal(404, "not_found", "no such route");
     if (!ALLOWED_METHODS.includes(request.method)) throw new Refusal(405, "method_not_allowed", "method not allowed");
 

@@ -306,13 +306,31 @@ $$;
 REVOKE ALL ON FUNCTION consentvault.mark_raw_post_seal_verified(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION consentvault.mark_raw_post_seal_verified(uuid) TO consentvault_app, consentvault_integrity;
 
+-- 6a. event_source_post: which post a derived event came from ------------------------------------------------------------
+-- Append-only (org, event, post, role): ``trigger`` is the request that caused the event, ``reference`` an earlier record the
+-- derived feature relied on. A separate table, so no column is added to the sealed event table.
+CREATE TABLE consentvault.event_source_post (
+    org_id      uuid NOT NULL DEFAULT consentvault.current_org() REFERENCES consentvault.organization (org_id),
+    event_id    uuid NOT NULL,
+    post_id     uuid NOT NULL,
+    role        text NOT NULL CHECK (role IN ('trigger', 'reference')),
+    recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (org_id, event_id, post_id, role),
+    FOREIGN KEY (org_id, event_id) REFERENCES consentvault.event (org_id, event_id),
+    FOREIGN KEY (org_id, post_id) REFERENCES consentvault.raw_post (org_id, post_id)
+);
+CREATE TRIGGER event_source_post_append_only BEFORE UPDATE OR DELETE ON consentvault.event_source_post
+    FOR EACH ROW EXECUTE FUNCTION consentvault.refuse_change();
+CREATE TRIGGER event_source_post_no_truncate BEFORE TRUNCATE ON consentvault.event_source_post
+    FOR EACH STATEMENT EXECUTE FUNCTION consentvault.refuse_change();
+
 -- Row-level security -----------------------------------------------------------------------------------------------------
 DO $$
 DECLARE
     t text;
 BEGIN
     FOREACH t IN ARRAY ARRAY['raw_post', 'raw_post_key', 'raw_post_chain_head', 'raw_post_fact', 'form_field_map',
-                             'raw_post_field', 'raw_post_match', 'raw_post_seal'] LOOP
+                             'raw_post_field', 'raw_post_match', 'raw_post_seal', 'event_source_post'] LOOP
         EXECUTE format('ALTER TABLE consentvault.%I ENABLE ROW LEVEL SECURITY', t);
         EXECUTE format('ALTER TABLE consentvault.%I FORCE ROW LEVEL SECURITY', t);
         EXECUTE format('CREATE POLICY %I ON consentvault.%I USING (org_id = (SELECT consentvault.current_org()))'
@@ -320,7 +338,7 @@ BEGIN
     END LOOP;
     -- A capture token writes but cannot read back; a form field map is configuration and is not behind the read scope.
     FOREACH t IN ARRAY ARRAY['raw_post', 'raw_post_key', 'raw_post_chain_head', 'raw_post_fact', 'raw_post_field',
-                             'raw_post_match', 'raw_post_seal'] LOOP
+                             'raw_post_match', 'raw_post_seal', 'event_source_post'] LOOP
         EXECUTE format('CREATE POLICY %I ON consentvault.%I AS RESTRICTIVE FOR SELECT'
                        ' USING ((SELECT consentvault.may_read_evidence()))', t || '_read_scope', t);
     END LOOP;
@@ -330,10 +348,11 @@ $$;
 -- Grants -----------------------------------------------------------------------------------------------------------------
 -- The runtime role appends and reads (reads still pass the evidence read scope); nothing here is ever updated.
 GRANT SELECT, INSERT ON consentvault.raw_post, consentvault.raw_post_key, consentvault.raw_post_fact,
-    consentvault.raw_post_field, consentvault.raw_post_match, consentvault.raw_post_chain_head TO consentvault_app;
+    consentvault.raw_post_field, consentvault.raw_post_match, consentvault.raw_post_chain_head,
+    consentvault.event_source_post TO consentvault_app;
 GRANT SELECT ON consentvault.form_field_map, consentvault.raw_post_seal TO consentvault_app;
 GRANT SELECT, INSERT ON consentvault.form_field_map TO consentvault_console;
 GRANT SELECT ON consentvault.raw_post, consentvault.raw_post_fact, consentvault.raw_post_field, consentvault.raw_post_match,
-    consentvault.raw_post_key TO consentvault_console;
+    consentvault.raw_post_key, consentvault.event_source_post TO consentvault_console;
 GRANT SELECT ON consentvault.raw_post, consentvault.raw_post_seal, consentvault.raw_post_chain_head TO consentvault_integrity;
 GRANT INSERT ON consentvault.raw_post_seal, consentvault.raw_post_chain_head TO consentvault_integrity;

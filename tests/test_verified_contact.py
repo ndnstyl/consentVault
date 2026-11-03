@@ -48,7 +48,7 @@ def test_a_refused_release_opens_exactly_one_pending_review(conn, disclosure):
 def test_a_verified_grant_lifts_the_stop(conn, disclosure, how, message):
     _stop(conn)
     _, release, err = capture_verified(
-        conn, verification=how, inbound_message=message, contact=P, disclosure_sha256=disclosure,
+        conn, verification=how, inbound_message=message, contact=P, disclosure_sha256=disclosure, checked=True,
         channels=["sms"], purposes=["marketing"], session_ref="s1")
     assert err is None and release["released_channels"] == ["sms"]
     assert may_contact(conn, P, "sms", "marketing").allowed
@@ -120,7 +120,7 @@ def test_the_table_refuses_a_verification_on_anything_but_a_grant(conn):
 
 
 def test_an_inbound_keyword_grant_needs_a_start_message(conn, disclosure):
-    base = dict(contact=P, disclosure_sha256=disclosure, channels=["sms"], purposes=["marketing"], session_ref="s")
+    base = dict(contact=P, disclosure_sha256=disclosure, channels=["sms"], purposes=["marketing"], session_ref="s", checked=True)
     for message in (None, "", "what is this", "STOP", "yes stop"):
         with pytest.raises(InvalidEventError):
             capture_verified(conn, verification="inbound_keyword", inbound_message=message, **base)
@@ -168,3 +168,11 @@ def test_concurrent_first_events_for_one_contact_share_one_salt(app_dsn):
         row = c.execute("SELECT count(DISTINCT contact_salt) AS salts, count(*) AS n FROM consentvault.event").fetchone()
         assert (row["salts"], row["n"]) == (1, 8)
         assert verify_chain(c) == []
+
+
+def test_a_verified_grant_without_the_box_value_raises_and_never_records_true(conn, disclosure):
+    base = dict(contact=P, disclosure_sha256=disclosure, channels=["sms"], purposes=["marketing"], session_ref="s")
+    for how, message in (("otp", None), ("inbound_keyword", "START")):
+        with pytest.raises(InvalidEventError, match="never defaulted"):
+            capture_verified(conn, verification=how, inbound_message=message, **base)
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"] == 0

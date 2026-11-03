@@ -52,26 +52,37 @@ def _site_key(w, co, *, retire=False, revoke=False) -> str:
 
 
 def _edge_body(co, key, **extra) -> dict:
-    return {"contact": X, "event_type": "grant", "checked": True, "method": "checkbox", "origin": "consumer",
-            "contact_verification": "none", "channels": ["sms"], "purposes": ["marketing"],
-            "disclosure_sha256": co.wording, "page_url": "https://example.test/signup", "session_ref": "s-1",
-            "edge_received_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "client_ip": "203.0.113.9", "user_agent": "ua", "bot_check": "turnstile:pass",
-            "payload_sha256": "0" * 64, "site_key": key, "source_id": str(co.org.source_id), "source": "site_key",
-            **extra}
+    """What a browser's widget posts to the edge (the browser's own JSON; ``extra`` adds or overrides a field as sent)."""
+    return {"contact": X, "checked": True, "disclosure_sha256": co.wording, "channels": ["sms"], "purposes": ["marketing"],
+            "page_url": "https://example.test/signup", "session": "s-1", **extra}
 
 
-def _edge_post(w, body: dict, *, secret=EDGE_SECRET, ts=None, sig=None, raw=None):
-    data = raw if raw is not None else json.dumps(body).encode()
+def _envelope(key, browser, *, raw_body: bytes | None = None, origin="https://example.test", facts=None, extra_headers=()) -> bytes:
+    """The one signed envelope the capture edge forwards: the browser's request, exact bytes and headers, with the edge's facts."""
+    import base64
+
+    raw = raw_body if raw_body is not None else json.dumps(browser).encode()
+    headers = [["content-type", "application/json"], ["origin", origin], ["user-agent", "ua"],
+               ["x-consentvault-site-key", key], *[list(h) for h in extra_headers]]
+    edge_facts = {"client_ip": "203.0.113.9", "edge_received_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                  "bot_check_answer": {"success": True, "hostname": "example.test"}, **(facts or {})}
+    return json.dumps({"method": "POST", "path": "/capture", "query": "", "headers": headers,
+                       "body_b64": base64.b64encode(raw).decode(), "body_sha256": hashlib.sha256(raw).hexdigest(),
+                       "body_bytes": len(raw), "edge_facts": edge_facts}).encode()
+
+
+def _edge_post(w, data: bytes, *, secret=EDGE_SECRET, ts=None, sig=None):
     stamp = str(int(time.time())) if ts is None else str(ts)
     signature = sig or hmac.new(secret, stamp.encode() + b"." + data, hashlib.sha256).hexdigest()
     req = urllib.request.Request(w.base + "/v1/events", data=data, method="POST", headers={
         "Content-Type": "application/json", "X-ConsentVault-Timestamp": stamp, "X-ConsentVault-Signature": signature})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
-            return r.status, json.loads(r.read())
+            out = r.status, json.loads(r.read())
     except urllib.error.HTTPError as e:  # loud-failure-exempt: a non-2xx answer is returned to the test to assert on
-        return e.code, json.loads(e.read())
+        out = e.code, json.loads(e.read())
+    w.server.drain(30)
+    return out
 
 
 def _events_of(w, org):
@@ -80,85 +91,141 @@ def _events_of(w, org):
                           " AND channels = ARRAY['sms']::text[] ORDER BY seq DESC", (org.org_id, org.source_id)).fetchall()
 
 
+def _posts_of(w, org):
+    from .cloud_harness import raw_posts
+    return raw_posts(w.t, org.org_id)
+
+
+def _facts(w, row):
+    from .cloud_harness import facts_of
+    return facts_of(w.t, row)
+
+
 # ---- (e) site key to organisation ----------------------------------------------------------------------------------
 def test_an_edge_capture_lands_in_the_organisation_its_site_key_belongs_to(hw):
     a, b = hw.cloud.a, hw.cloud.b
     key = _site_key(hw, a)
     before_a, before_b = len(_events_of(hw, a.org)), len(_events_of(hw, b.org))
-    status, body = _edge_post(hw, _edge_body(a, key, brand_ids=None) | {"brand_ids": [str(a.org.brand_id)]})
-    assert status == 201, body
+    posts_a, posts_b = len(_posts_of(hw, a.org)), len(_posts_of(hw, b.org))
+    status, body = _edge_post(hw, _envelope(key, _edge_body(a, key)))
+    assert status == 201 and body["stored"] is True, body
     assert len(_events_of(hw, a.org)) == before_a + 1 and len(_events_of(hw, b.org)) == before_b
+    assert len(_posts_of(hw, a.org)) == posts_a + 1 and len(_posts_of(hw, b.org)) == posts_b
     assert body["receipt"]["org_id"] == str(a.org.org_id)
+    post = _posts_of(hw, a.org)[-1]
+    assert (post["intake"], post["headers_presented_by"]) == ("edge_site_key", "edge-worker")
+    facts = _facts(hw, post)
+    assert facts["site_key_state"] == "active" and facts["edge_envelope_signature"] == "verified"
+    assert facts["client_ip"] == "203.0.113.9" and facts["origin_on_list"] in (True, False)
 
 
 def test_the_brands_come_from_the_source_when_the_browser_sends_none(hw):
     a = hw.cloud.a
     key = _site_key(hw, a)
-    body = _edge_body(a, key)
-    status, answer = _edge_post(hw, body)
-    assert status == 201, answer
+    status, answer = _edge_post(hw, _envelope(key, _edge_body(a, key)))
+    assert status == 201 and _facts(hw, _posts_of(hw, a.org)[-1])["event_derived"]
+    with hw.t.superuser() as su:
+        ev = su.execute("SELECT brand_ids FROM consentvault.event WHERE org_id = %s ORDER BY seq DESC LIMIT 1",
+                        (a.org.org_id,)).fetchone()
+    assert [str(x) for x in ev["brand_ids"]] == [str(a.org.brand_id)]
 
 
 def test_a_site_key_never_reaches_another_organisations_source_or_brand(hw):
     a, b = hw.cloud.a, hw.cloud.b
     key = _site_key(hw, a)
-    status, body = _edge_post(hw, _edge_body(a, key, source_id=str(b.org.source_id)))
-    assert (status, body["error"]) == (403, "source_not_allowed")
-    status, body = _edge_post(hw, _edge_body(a, key, brand_ids=[str(b.org.brand_id)]))
-    assert status in (403, 422) and body["error"] in ("brand_not_allowed", "validation_failed"), body
-    assert _events_of(hw, b.org) == [] or all(str(e["org_id"]) == str(b.org.org_id) for e in _events_of(hw, b.org))
-    with hw.t.superuser() as su:  # nothing of A's capture was written under B
-        assert su.execute("SELECT count(*) AS n FROM consentvault.event WHERE org_id = %s AND page_url LIKE %s",
-                          (b.org.org_id, "https://example.test/signup")).fetchone()["n"] == 0
+    before_b = len(_posts_of(hw, b.org))
+    status, body = _edge_post(hw, _envelope(key, _edge_body(a, key, source_id=str(b.org.source_id), brand_ids=[str(b.org.brand_id)])))
+    assert status == 201 and body["receipt"]["org_id"] == str(a.org.org_id)
+    # the browser's own words are stored as sent; the event uses the key's source and brands, never the browser's
+    from .cloud_harness import post_body
+    assert json.loads(post_body(hw.t, _posts_of(hw, a.org)[-1]))["source_id"] == str(b.org.source_id)
+    with hw.t.superuser() as su:
+        ev = su.execute("SELECT source_id, brand_ids FROM consentvault.event WHERE org_id = %s ORDER BY seq DESC LIMIT 1", (a.org.org_id,)).fetchone()
+    assert str(ev["source_id"]) == str(a.org.source_id) and [str(x) for x in ev["brand_ids"]] == [str(a.org.brand_id)]
+    assert len(_posts_of(hw, b.org)) == before_b
 
 
-def test_an_unknown_revoked_or_unsigned_edge_capture_is_refused_by_name(hw):
+def test_an_unknown_revoked_or_unsigned_edge_capture_is_stored_with_the_reason_and_makes_no_event(hw):
     a = hw.cloud.a
     key = _site_key(hw, a)
-    unknown = "cv_site_" + secrets.token_urlsafe(18)
-    assert _edge_post(hw, _edge_body(a, unknown))[1]["error"] == "invalid_client"
-    assert _edge_post(hw, _edge_body(a, "not-a-key"))[1]["error"] == "invalid_client"
-    assert _edge_post(hw, _edge_body(a, key), secret=b"another-secret-another-secret-123456")[0] == 401
-    assert _edge_post(hw, _edge_body(a, key), ts=int(time.time()) - 3600)[1]["error"] == "invalid_client"
-    assert _edge_post(hw, _edge_body(a, key), sig="0" * 64)[1]["error"] == "invalid_client"
     revoked = _site_key(hw, a, revoke=True)
-    assert _edge_post(hw, _edge_body(a, revoked))[1]["error"] == "invalid_client"
+    unknown = "cv_site_" + secrets.token_urlsafe(18)
+    home = hw.t.home
+    before_events = len(_events_of(hw, a.org))
+    before_a = len(_posts_of(hw, a.org))
+    from .cloud_harness import raw_posts
+    cases = [
+        (_edge_post(hw, _envelope(unknown, _edge_body(a, unknown))), "site_key_state", "unknown", home),
+        (_edge_post(hw, _envelope("not-a-key", _edge_body(a, "not-a-key"))), "site_key_state", "unknown", home),
+        (_edge_post(hw, _envelope(revoked, _edge_body(a, revoked))), "site_key_state", "revoked", a.org.org_id),  # names its organisation
+        (_edge_post(hw, _envelope(key, _edge_body(a, key)), secret=b"another-secret-another-secret-123456"), "edge_envelope_signature", "failed", home),
+        (_edge_post(hw, _envelope(key, _edge_body(a, key)), sig="0" * 64), "edge_envelope_signature", "failed", home),
+    ]
+    platform, mine = raw_posts(hw.t, home), _posts_of(hw, a.org)[before_a:]
+    assert len(platform) == 4 and len(mine) == 1
+    seen = {str(home): iter(platform), str(a.org.org_id): iter(mine)}
+    for (status, answer), name, value, org in cases:
+        assert status == 201 and answer["stored"] is True and answer["receipt"]["org_id"] == str(org)
+        assert _facts(hw, next(seen[str(org)]))[name] == value
+    assert len(_events_of(hw, a.org)) == before_events
+    # an envelope whose signature failed is stored exactly as received (the envelope itself), and trusted for nothing
+    assert (platform[2]["intake"], platform[2]["headers_presented_by"]) == ("api", "vault-http")
 
 
-def test_a_replayed_edge_capture_is_refused_and_recorded_once(hw):
+def test_a_stale_edge_timestamp_is_a_fact_not_a_refusal(hw):
     a = hw.cloud.a
     key = _site_key(hw, a)
-    raw = json.dumps(_edge_body(a, key) | {"brand_ids": [str(a.org.brand_id)]}).encode()
+    status, body = _edge_post(hw, _envelope(key, _edge_body(a, key)), ts=int(time.time()) - 3600)
+    assert status == 201  # the signature covers the timestamp it was made with, so a stale one is still verified, and flagged
+    assert _facts(hw, _posts_of(hw, a.org)[-1]).get("edge_timestamp") in ("stale", None)
+
+
+def test_a_replayed_edge_capture_is_stored_again_with_the_fact_and_makes_one_event(hw):
+    a = hw.cloud.a
+    key = _site_key(hw, a)
+    raw = _envelope(key, _edge_body(a, key))
     stamp = str(int(time.time()))
     sig = hmac.new(EDGE_SECRET, stamp.encode() + b"." + raw, hashlib.sha256).hexdigest()
     before = len(_events_of(hw, a.org))
-    assert _edge_post(hw, {}, raw=raw, ts=stamp, sig=sig)[0] == 201
-    status, body = _edge_post(hw, {}, raw=raw, ts=stamp, sig=sig)
-    assert (status, body["error"]) == (401, "invalid_client")
+    assert _edge_post(hw, raw, ts=stamp, sig=sig)[0] == 201
+    status, body = _edge_post(hw, raw, ts=stamp, sig=sig)
+    assert status == 201 and body["stored"] is True
+    first, second = _posts_of(hw, a.org)[-2:]
+    assert _facts(hw, first)["replay"] == "fresh" and _facts(hw, second)["replay"] == "seen_before"
     assert len(_events_of(hw, a.org)) == before + 1
 
 
-def test_a_retired_source_refuses_its_site_key(hw):
+def test_a_retired_source_stores_the_capture_and_makes_no_event(hw):
     a = hw.cloud.a
     key = _site_key(hw, a, retire=True)
-    status, body = _edge_post(hw, _edge_body(a, key))
-    assert (status, body["error"]) == (403, "source_not_allowed")
+    before = len(_events_of(hw, a.org))
+    status, body = _edge_post(hw, _envelope(key, _edge_body(a, key)))
+    assert status == 201 and body["stored"] is True and body["receipt"]["org_id"] == str(a.org.org_id)
+    assert _facts(hw, _posts_of(hw, a.org)[-1])["site_key_state"] == "source_retired"
+    assert len(_events_of(hw, a.org)) == before
 
 
 def test_an_edge_capture_cannot_claim_a_verified_contact(hw):
     a = hw.cloud.a
     key = _site_key(hw, a)
-    status, body = _edge_post(hw, _edge_body(a, key, contact_verification="otp"))
-    assert (status, body["error"]) == (403, "role_not_allowed")
+    status, body = _edge_post(hw, _envelope(key, _edge_body(a, key, contact_verification="otp", origin="staff", method="staff")))
+    assert status == 201
+    with hw.t.superuser() as su:
+        ev = su.execute("SELECT contact_verification, origin, method FROM consentvault.event WHERE org_id = %s ORDER BY seq DESC LIMIT 1",
+                        (a.org.org_id,)).fetchone()
+    assert (ev["contact_verification"], ev["origin"], ev["method"]) == ("none", "consumer", "checkbox")
 
 
-def test_the_edge_path_is_off_until_a_signing_secret_is_configured(tenancy, tmp_path, pg_server):
+def test_the_edge_path_stores_the_post_as_received_until_a_signing_secret_is_configured(tenancy, tmp_path, pg_server):
     cloud = Cloud(tenancy, str(tmp_path / "evidence"))
     w = Wired(cloud, tmp_path, pg_server)  # no edge secret
     try:
         key = _site_key(w, cloud.a)
-        status, body = _edge_post(w, _edge_body(cloud.a, key))
-        assert (status, body["error"]) == (401, "unauthenticated")
+        status, body = _edge_post(w, _envelope(key, _edge_body(cloud.a, key)))
+        assert status == 201 and body["stored"] is True
+        from .cloud_harness import raw_posts
+        post = raw_posts(tenancy, tenancy.home)[-1]
+        assert _facts(w, post)["edge_envelope_signature"] == "no_edge_secret_configured"
     finally:
         w.close()
         cloud.close()

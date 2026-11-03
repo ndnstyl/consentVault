@@ -46,7 +46,10 @@ def test_every_tenant_table_forces_row_level_security_bound_to_the_verified_tena
                   and p["permissive"] == "RESTRICTIVE" and p["cmd"] == "SELECT" and "may_read_evidence" in p["qual"]}
         # the foundation's evidence tables plus the lanes' export jobs and gate decisions
         assert scoped == {"event", "contact_key", "contact_salt", "contact_log", "review", "export_job", "gate_decision",
-                          "confirmation_send", "confirmation_connect_test", "confirmation_reply"}
+                          "confirmation_send", "confirmation_connect_test", "confirmation_reply",
+                          # the raw post store (migration 0067): the post, its key, facts, readings, links, seals and anchors
+                          "raw_post", "raw_post_key", "raw_post_chain_head", "raw_post_fact", "raw_post_field",
+                          "raw_post_match", "raw_post_seal", "event_source_post"}
         audit = {p["tablename"] for p in policies if p["policyname"].endswith("_read_scope")
                  and p["permissive"] == "RESTRICTIVE" and p["cmd"] == "SELECT" and "may_read_audit" in p["qual"]}
         assert audit == {"audit_event"}

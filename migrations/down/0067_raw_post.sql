@@ -16,6 +16,7 @@ BEGIN
 END
 $$;
 
+DROP TABLE consentvault.event_source_post;
 DROP TABLE consentvault.raw_post_seal;
 DROP FUNCTION consentvault.raw_post_seal_guard();
 DROP FUNCTION consentvault.mark_raw_post_seal_verified(uuid);

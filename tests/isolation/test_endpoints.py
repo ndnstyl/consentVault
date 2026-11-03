@@ -91,16 +91,31 @@ def test_a_closed_organisation_gets_no_token_and_a_suspended_one_still_does(clou
 
 
 # capture -----------------------------------------------------------------------------------------------------------
-def test_capture_answers_a_receipt_only_and_the_receipt_verifies(cloud):
+def _last_post(cloud, org):
+    from .cloud_harness import raw_posts
+    return raw_posts(cloud.t, org.org_id)[-1]
+
+
+def _facts_of_last(cloud, org):
+    from .cloud_harness import facts_of
+    return facts_of(cloud.t, _last_post(cloud, org))
+
+
+def test_capture_answers_a_receipt_with_the_fingerprint_and_the_receipt_verifies(cloud):
+    from consentvault.rawpost import verify_post_receipt
+
     s, b = cloud.grant(cloud.a, X)
-    assert s == 201 and set(b) == {"ok", "event_id", "receipt"}
+    assert s == 201 and {"stored", "post_id", "received_at", "body_sha256", "body_bytes", "unusual_size", "receipt"} <= set(b)
+    assert b["stored"] is True and len(b["body_sha256"]) == 64 and b["unusual_size"] is False
     r = b["receipt"]
-    assert r["org_id"] == str(cloud.a.org.org_id) and r["event_id"] == b["event_id"] and r["seq"] >= 1
-    assert verify_receipt(r, cloud.receipts.public_key, "rcpt-test")
-    assert not verify_receipt({**r, "seq": r["seq"] + 1}, cloud.receipts.public_key, "rcpt-test")
+    assert r["org_id"] == str(cloud.a.org.org_id) and r["post_id"] == b["post_id"] and r["seq"] >= 1
+    assert r["body_sha256"] == b["body_sha256"]
+    assert verify_post_receipt(r, cloud.receipts.public_key, "rcpt-test")
+    assert not verify_post_receipt({**r, "seq": r["seq"] + 1}, cloud.receipts.public_key, "rcpt-test")
+    assert not verify_post_receipt({**r, "body_sha256": "0" * 64}, cloud.receipts.public_key, "rcpt-test")
 
 
-def test_capture_refuses_another_orgs_source_brand_and_wording_like_ones_that_do_not_exist(cloud):
+def test_capture_stores_another_orgs_source_brand_and_wording_exactly_like_ones_that_do_not_exist(cloud):
     import uuid
     a, b = cloud.a, cloud.b
     cases = [
@@ -110,33 +125,48 @@ def test_capture_refuses_another_orgs_source_brand_and_wording_like_ones_that_do
     ]
     for theirs, nobodys, name in cases:
         s1, r1 = cloud.grant(a, X, **theirs)
+        f1 = _facts_of_last(cloud, a.org)
         s2, r2 = cloud.grant(a, X, **nobodys)
-        assert s1 == s2 and r1["error"] == r2["error"] == name and _err(r1) == _err(r2)
+        f2 = _facts_of_last(cloud, a.org)
+        # the sender is told the same thing either way (stored); the operator's record names the same reason either way
+        assert s1 == s2 == 201 and r1["stored"] is r2["stored"] is True
+        assert f1["event_not_derived"] == f2["event_not_derived"] == name
     s, r = cloud.call("/v1/events", {"contact": X, "event_type": "revoke", "channels": ["sms"],
                                      "purposes": ["marketing"], "org_id": str(b.org.org_id)},
                       token=cloud.token(a, "capture"))
-    assert (s, r["error"]) == (422, "validation_failed")  # the org never comes from the body
+    assert s == 201 and r["receipt"]["org_id"] == str(a.org.org_id)  # the org never comes from the body
+    with cloud.t.superuser() as su:
+        assert su.execute("SELECT count(*) AS n FROM consentvault.raw_post WHERE org_id = %s", (b.org.org_id,)).fetchone()["n"] == 0
 
 
 def test_only_capture_verified_may_claim_a_verified_contact(cloud):
     s, r = cloud.grant(cloud.a, X, contact_verification="otp")
-    assert (s, r["error"]) == (403, "role_not_allowed")
+    assert s == 201 and r["stored"] is True
+    assert _facts_of_last(cloud, cloud.a.org)["event_not_derived"] == "role_not_allowed"
     s, r = cloud.grant(cloud.a, X, contact_verification="otp", token=cloud.token(cloud.a, "capture_verified"))
-    assert s == 201
+    assert s == 201 and r["event_id"]
+    with cloud.t.superuser() as su:
+        assert su.execute("SELECT contact_verification FROM consentvault.event WHERE event_id = %s", (r["event_id"],)
+                          ).fetchone()["contact_verification"] == "otp"
 
 
-def test_an_unknown_purpose_or_channel_is_refused_by_name(cloud):
+def test_an_unknown_purpose_or_channel_is_stored_and_the_reason_is_a_fact(cloud):
     s, r = cloud.grant(cloud.a, X, purposes=["surveys"])
-    assert (s, r["error"]) == (422, "UnknownPurposeError")
+    assert s == 201 and r["stored"] is True and "event_id" not in r
+    assert _facts_of_last(cloud, cloud.a.org)["event_not_derived"] == "UnknownPurposeError"
     s, r = cloud.grant(cloud.a, X, channels=["fax"])
-    assert (s, r["error"]) == (422, "invalid_channel")
+    assert s == 201 and r["stored"] is True and "event_id" not in r
+    assert _facts_of_last(cloud, cloud.a.org)["event_not_derived"] == "invalid_channel"
 
 
-def test_scopes_are_held_to_their_endpoints(cloud):
+def test_scopes_are_held_to_their_endpoints_and_a_capture_with_the_wrong_scope_is_stored_on_the_platform_intake(cloud):
     cap, gate, proof = (cloud.token(cloud.a, w) for w in ("capture", "gate_read", "proof_read"))
     assert cloud.gate(cloud.a, X, token=cap)[1]["error"] == "role_not_allowed"
     assert cloud.proof(cloud.a, X, token=gate)[1]["error"] == "role_not_allowed"
-    assert cloud.grant(cloud.a, X, token=proof)[1]["error"] == "role_not_allowed"
+    s, r = cloud.grant(cloud.a, X, token=proof)
+    assert s == 201 and r["stored"] is True and r["receipt"]["org_id"] == str(cloud.t.home) and "event_id" not in r
+    from .cloud_harness import facts_of, raw_posts
+    assert facts_of(cloud.t, raw_posts(cloud.t, cloud.t.home)[-1])["credential"]["reason"] == "ApiError"
 
 
 # gate -----------------------------------------------------------------------------------------------------------------

@@ -290,4 +290,12 @@ def test_no_request_line_or_query_string_reaches_a_log():
     assert src.rstrip().endswith("pass")
     edge = _P(__file__).resolve().parents[2] / "edge" / "src"
     for f in edge.glob("*.ts"):
-        assert "console." not in f.read_text(), f
+        text = f.read_text()
+        if f.name in ("envelope.ts", "gateway.ts"):
+            # the one place the edge writes anything: the loud alarm that nothing was stored. It carries a name and a reason,
+            # never a request line, a header, a body or a query string.
+            lines = [ln for ln in text.splitlines() if "console." in ln]
+            assert lines and all("consentvault" in ln and "alarm" in ln for ln in lines), f
+            assert not any("request.url" in ln or "url." in ln for ln in lines), f
+        else:
+            assert "console." not in text, f

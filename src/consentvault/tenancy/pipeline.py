@@ -161,7 +161,8 @@ def _split_display(payload: dict) -> tuple[dict, dict | None]:
 
 
 def parse_capture(payload: Any, body: bytes, scopes: tuple[str, ...]) -> CaptureRequest:
-    """Shape checks that need no database. Refuses with a contract error name.
+    """Shape checks that need no database, for the transitional event only. Declines with a contract error name; the post
+    itself is stored before this runs and nothing here can remove it.
 
     A top-level ``display`` is removed first. When it was present, the stored and hashed body becomes the canonical JSON
     of the rest of the object (sorted keys, compact separators, UTF-8, no ASCII escaping); when it was absent, the body is
@@ -171,12 +172,9 @@ def parse_capture(payload: Any, body: bytes, scopes: tuple[str, ...]) -> Capture
     payload, display = _split_display(payload)
     if display is not None:
         body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    if "disclosure_text" in payload:
-        raise ApiError("validation_failed", "wording is never accepted on the wire; register it and send its sha256",
-                       {"disclosure_text": "not accepted"})
-    unknown = sorted(set(payload) - set(CAPTURE_FIELDS))
-    if unknown:
-        raise ApiError("validation_failed", f"unknown fields: {unknown}", {u: "unknown field" for u in unknown})
+    # A field the event does not know (the wording text, a form's own fields) is never a reason to decline: the post is
+    # stored whole by the raw post store, and the transitional event is read from the fields it does know.
+    payload = {k: v for k, v in payload.items() if k in CAPTURE_FIELDS}
     for need in ("contact", "event_type", "channels", "purposes"):
         if need not in payload:
             raise ApiError("validation_failed", f"'{need}' is required", {need: "required"})

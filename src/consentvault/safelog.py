@@ -32,7 +32,7 @@ ERROR, REASON, TRACE, DETAIL = "error", "reason", "trace", "detail"
 
 FIELDS: dict[str, str] = {
     # ids
-    "request_id": ID, "event_id": ID, "send_id": ID, "outbox_id": ID, "export_id": ID, "subscription_id": ID,
+    "request_id": ID, "post_id": ID, "event_id": ID, "send_id": ID, "outbox_id": ID, "export_id": ID, "subscription_id": ID,
     "held_subscription_id": ID, "system_id": ID,
     # the organization
     "org_id": ORG_ID,

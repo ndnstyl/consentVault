@@ -34,7 +34,7 @@ test("the Stripe webhook is admitted with no bearer and the body bytes arrive un
 });
 
 test("only POST to the exact Stripe path is admitted without a bearer", async () => {
-  for (const [method, path] of [["GET", PATH], ["PUT", PATH], ["POST", PATH + "/x"], ["POST", "/v1/billing/webhooks"], ["POST", "/v1/billing/portal"], ["POST", "/v1/events"], ["POST", "/v1/permission"]]) {
+  for (const [method, path] of [["GET", PATH], ["PUT", PATH], ["POST", PATH + "/x"], ["POST", "/v1/billing/webhooks"], ["POST", "/v1/billing/portal"], ["POST", "/v1/permission"]]) {
     const { d, calls } = mk();
     const res = await handleGateway(r(path, { method, headers: { "stripe-signature": SIG }, body: method === "GET" ? undefined : "{}" }), ENV, d);
     assert.ok(res.status === 401 || res.status === 405, `${method} ${path} -> ${res.status}`);

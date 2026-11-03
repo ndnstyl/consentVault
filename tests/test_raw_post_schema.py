@@ -18,7 +18,7 @@ from isolation.harness import build_tenancy  # noqa: F401  (documented: the suit
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 TABLES = ("raw_post", "raw_post_key", "raw_post_chain_head", "raw_post_fact", "form_field_map", "raw_post_field",
-          "raw_post_match", "raw_post_seal")
+          "raw_post_match", "raw_post_seal", "event_source_post")
 
 
 @pytest.fixture

@@ -9,6 +9,7 @@ No CORS headers are ever sent. Requests whose Host header is not allowlisted are
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -27,7 +28,10 @@ from urllib.parse import parse_qs, urlsplit
 
 from .safelog import caller_detail, db_code, describe, refusal_code
 from . import config as config_mod
+from . import edge_envelope
 from .capture import capture_and_release, capture_verified
+from .capture_http import (Downstream, cors_headers, is_capture_path, is_preflight, read_any_body, request_headers,
+                           unavailable_answer)
 from . import dbclock
 from .db import connect
 from .errors import ConfigError, ConsentVaultError, NormalizationError
@@ -40,6 +44,9 @@ MAX_REPLAY_WINDOW_SECONDS = 39600  # the guard keeps a signature for twice the w
 MAX_BODY_BYTES = 1 << 20
 SIGNATURE_HEADER = "X-ConsentVault-Signature"
 TIMESTAMP_HEADER = "X-ConsentVault-Timestamp"
+
+SINGLE_CAPTURE_PREFIXES = ("/v1/events", "/v1/capture")
+CLOUD_CAPTURE_PREFIXES = ("/v1/events", "/v1/capture")
 
 ENV_SECRET = "CONSENTVAULT_API_SECRET"
 ENV_VERIFIED_SECRET = "CONSENTVAULT_API_VERIFIED_SECRET"
@@ -66,6 +73,7 @@ class ApiSettings:
     verified_secret: str | None = None
     default_region: str | None = None
     replay_window: int = REPLAY_WINDOW_SECONDS
+    raw_posts: object | None = None  # rawpost.RawPostWriter; None stores the bytes as sent (no key provider, no object store)
 
 
 def load_api_settings(path: str | os.PathLike | None = None, env: Mapping[str, str] | None = None) -> ApiSettings:
@@ -104,7 +112,15 @@ def sign(secret: str, timestamp: str, body: bytes) -> str:
 
 class SafeHTTPServer(ThreadingHTTPServer):
     """The server, with its default error printer replaced: an exception that escapes a request is logged as its class and the frames
-    it passed through, never its message, a local or the client address (socketserver would print the whole traceback to stderr)."""
+    it passed through, never its message, a local or the client address (socketserver would print the whole traceback to stderr).
+    ``drain`` waits for the work that follows an answer (reading the stored post, alarms, the transitional event)."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.downstream = Downstream()
+
+    def drain(self, timeout: float = 60.0) -> None:
+        self.downstream.drain(timeout)
 
     def handle_error(self, request, client_address) -> None:
         _log.error("a request failed outside its handler", exc_info=True)
@@ -118,12 +134,14 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # quiet by default
         pass
 
-    def _send(self, status: int, payload: dict) -> None:
+    def _send(self, status: int, payload: dict, extra: dict | None = None) -> None:
         body = json.dumps(payload, sort_keys=True).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -202,101 +220,161 @@ class _Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _capturing(self) -> bool:
+        return is_capture_path(urlsplit(self.path).path, SINGLE_CAPTURE_PREFIXES)
+
     def do_OPTIONS(self):
-        self._fail(405, "method_not_allowed", "no CORS preflight is served")
+        if self._capturing():
+            return self._capture()
+        self._fail(405, "method_not_allowed", "only GET and POST are served here")
 
     def do_PUT(self):
+        if self._capturing():
+            return self._capture()
         self._fail(405, "method_not_allowed", "only GET and POST are served")
 
     do_DELETE = do_PATCH = do_PUT
 
     def do_POST(self):
+        if self._capturing():
+            return self._capture()
         if not self._guard():
             return
-        if urlsplit(self.path).path != "/v1/events":
-            return self._fail(404, "not_found", "unknown path")
-        try:
-            length = int(self.headers.get("Content-Length") or "-1")
-        except ValueError:
-            length = -1
-        if length < 0 or length > MAX_BODY_BYTES:
-            return self._fail(413, "bad_length", f"Content-Length must be 0..{MAX_BODY_BYTES}")
-        body = self.rfile.read(length)
+        self._fail(404, "not_found", "unknown path")
 
+    def _capture(self) -> None:
+        """Any request under a capture prefix: store it whole, answer with the receipt, then read it. Nothing about the
+        request is checked first; what the checks found is a fact beside the post. A request the capture edge signed and
+        forwarded is stored as the browser sent it, with the edge's facts beside it."""
+        from .rawpost import Fact, RawRequest, StoreUnavailable
+
+        body, facts = read_any_body(self)
+        url = urlsplit(self.path)
         ts = self.headers.get(TIMESTAMP_HEADER) or ""
         sig = (self.headers.get(SIGNATURE_HEADER) or "").strip().lower()
         if sig.startswith("sha256="):
             sig = sig[7:]
         reason, by_verified_key = self._authentication_failure(ts, sig, body)
-        if reason is None:
-            reason = self._claim_signature(sig)
-        if reason is not None:
-            _log.warning("events request refused", reason=reason)
-            return self._fail(401, "unauthenticated", "the request could not be authenticated")
+        replay = self._claim_signature(sig) if reason is None else None
+        facts += [Fact("vault", "host_on_list", self._host_ok()), Fact("vault", "origin_header", self.headers.get("Origin")),
+                  Fact("vault", "request_signature", reason or "valid"), Fact("vault", "replay", replay or "fresh"),
+                  Fact("vault", "peer_address", self.client_address[0])]
+        envelope = None
+        if reason is None and not by_verified_key and edge_envelope.looks_like_envelope(body):
+            try:
+                envelope = edge_envelope.unpack(body)
+                facts += [Fact("edge", str(n), v) for n, v in envelope.edge_facts.items()]
+                if envelope.claimed_sha256 is not None and envelope.claimed_sha256 != hashlib.sha256(envelope.body).hexdigest():
+                    facts.append(Fact("vault", "edge_body_sha256_mismatch", True))
+            except edge_envelope.EnvelopeUnreadable as exc:  # loud-failure-exempt: recorded as the fact edge_envelope_unreadable; the signed bytes are stored as received
+                facts.append(Fact("vault", "edge_envelope_unreadable", str(exc)))
+        preflight = is_preflight(self)
+        if envelope is not None:
+            inner_preflight = envelope.method.upper() == "OPTIONS" and any(
+                n.lower() == "access-control-request-method" for n, _ in envelope.headers)
+            raw = RawRequest(intake="edge_single", method=envelope.method, path=envelope.path, query=envelope.query,
+                             headers=envelope.headers, body=envelope.body, headers_presented_by="edge-worker",
+                             kind="preflight" if inner_preflight else "post", edge_received_at=envelope.edge_received_at,
+                             facts=tuple(facts))
+        else:
+            raw = RawRequest(intake="api_single", method=self.command, path=url.path, query=url.query,
+                             headers=request_headers(self), body=body, kind="preflight" if preflight else "post",
+                             facts=tuple(facts))
+        cors = cors_headers(self)
+        with self.server.downstream.track():
+            try:
+                with connect(self.settings.dsn) as conn:
+                    stored = self.writer.write(conn, None, raw)
+            except (StoreUnavailable, ConsentVaultError, psycopg.Error) as exc:
+                _log.critical("a post could not be stored", error=type(exc).__name__)
+                status, answer = unavailable_answer()
+                return self._send(status, answer, cors)
+            if preflight and envelope is None:
+                self.send_response(204)
+                for k, v in cors.items():
+                    self.send_header(k, v)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            else:
+                self._send(201, stored.answer(), cors)
+            self._after_answer(stored, raw, body, reason, replay, by_verified_key, envelope)
+
+    def _after_answer(self, stored, raw, body: bytes, reason, replay, by_verified_key, envelope=None) -> None:
+        """Read the stored post and, for an authenticated event post, derive the transitional event. Never raises: the
+        answer is given and the post is stored; a failure is logged loudly and left as a fact."""
+        from . import intake
+        from .rawpost import Fact
 
         try:
+            with connect(self.settings.dsn) as conn:
+                intake.read_after_commit(self.writer, conn, None, stored, raw)
+                if raw.kind == "post" and raw.method == "POST" and (envelope is not None or raw.path == "/v1/events"):
+                    outcome, event_id = ("not_authenticated:" + reason, None) if reason else (
+                        ("replay", None) if replay else self._derive_event(conn, body, by_verified_key, envelope))
+                    self.writer.add_facts(conn, None, stored, [Fact("vault", "event_derived", event_id) if event_id else
+                                                               Fact("vault", "event_not_derived", outcome)])
+                    if event_id:
+                        self.writer.link_event(conn, None, stored, event_id)
+        except Exception as exc:  # loud-failure-exempt: logged critical below; the answer is given and the post is stored
+            _log.critical("the work after an answer failed; the post is stored", error=type(exc).__name__)
+
+    def _derive_event(self, conn, body: bytes, by_verified_key: bool, envelope=None) -> tuple[str, str | None]:
+        """The transitional step: an authenticated post that names a contact point and the event's own fields is also
+        written as a ledger event, so the contact check keeps answering until it reads the posts. Whatever it cannot do is
+        returned as the reason (stored as a fact); the post is never touched."""
+        if envelope is not None:
+            body = envelope.body
+        try:
             payload = json.loads(body.decode("utf-8"))
-            if not isinstance(payload, dict):
-                raise ValueError("body must be a JSON object")
-        except (ValueError, UnicodeDecodeError) as exc:
-            return self._fail(400, "bad_json", caller_detail(exc))
-        if "disclosure_text" in payload:
-            return self._fail(400, "disclosure_text_refused",
-                              "wording is not accepted on the wire; an operator registers it first "
-                              "(consentvault disclosure register) and the request carries only its sha256")
-        unknown = sorted(set(payload) - set(_EVENT_FIELDS) - {"checked", "inbound_message"})
-        if unknown:
-            return self._fail(400, "unknown_fields", f"unknown fields: {unknown}")
+        except (ValueError, UnicodeDecodeError):  # loud-failure-exempt: returned as the stored reason not_json
+            return "not_json", None
+        if not isinstance(payload, dict):
+            return "not_a_json_object", None
+        if envelope is not None:
+            payload = edge_envelope.widget_event(payload, envelope.headers, envelope.edge_facts)
+            payload.pop("source_id", None)
+            payload.pop("brand_ids", None)
+            payload["payload_sha256"] = hashlib.sha256(body).hexdigest()
         fields = {k: payload[k] for k in _EVENT_FIELDS if k in payload}
         for required in ("contact", "event_type", "channels", "purposes"):
             if required not in fields:
-                return self._fail(400, "missing_field", f"'{required}' is required")
+                return f"missing_field:{required}", None
         if fields.get("contact_verification", "none") != "none" and not by_verified_key:
-            return self._fail(403, "verification_key_required",
-                              "a grant that claims a verified contact point must be signed with the verified-grant "
-                              f"secret ({ENV_VERIFIED_SECRET}); the capture edge's secret cannot claim it")
+            return "verification_key_required", None
         fields.setdefault("method", "checkbox")
         fields.setdefault("origin", "consumer")
         for name in ("captured_at", "edge_received_at"):
             if fields.get(name) is not None:
                 try:
                     fields[name] = datetime.fromisoformat(str(fields[name]).replace("Z", "+00:00"))
-                except ValueError:
-                    return self._fail(400, f"bad_{name}", f"{name} must be ISO 8601 with a timezone")
+                except ValueError:  # loud-failure-exempt: returned as the stored reason bad_<field>
+                    return f"bad_{name}", None
         if fields.get("payload_sha256") is not None and not _SHA256_HEX.match(str(fields["payload_sha256"])):
-            return self._fail(400, "bad_payload_sha256", "payload_sha256 must be 64 lowercase hex characters")
+            fields.pop("payload_sha256")
         fields.setdefault("payload_sha256", hashlib.sha256(body).hexdigest())
         fields["region"] = self.settings.default_region
         fields["allowed_purposes"] = self.settings.purposes
         try:
-            with connect(self.settings.dsn) as conn:
-                if fields["event_type"] == "grant":
-                    fields.pop("event_type")
-                    fields.setdefault("disclosure_sha256", "")
-                    verification = fields.pop("contact_verification", "none")
-                    if verification == "none" and "inbound_message" in payload:
-                        return self._fail(400, "bad_inbound_message",
-                                          "inbound_message belongs only to an inbound_keyword grant")
-                    if verification == "none":
-                        ev, release, release_error = capture_and_release(
-                            conn, checked=payload.get("checked") is True, **fields)
-                    else:
-                        if payload.get("checked") is not True:
-                            return self._fail(422, "UncheckedConsentError", "the consent box was not checked; no grant recorded")
-                        ev, release, release_error = capture_verified(
-                            conn, verification=verification, inbound_message=payload.get("inbound_message"), **fields)
+            if fields["event_type"] == "grant":
+                fields.pop("event_type")
+                fields.setdefault("disclosure_sha256", "")
+                verification = fields.pop("contact_verification", "none")
+                if verification == "none":
+                    if "inbound_message" in payload:
+                        return "bad_inbound_message", None
+                    ev = capture_and_release(conn, checked=payload.get("checked") is True, **fields)[0]
                 else:
-                    ev, release, release_error = record_event(conn, **fields), None, None
+                    ev = capture_verified(conn, verification=verification, checked=payload.get("checked") is True,
+                                          inbound_message=payload.get("inbound_message"), **fields)[0]
+            else:
+                ev = record_event(conn, **fields)
         except ConsentVaultError as exc:
-            return self._fail(422, type(exc).__name__, caller_detail(exc))
-        answer = {"ok": True, "event_id": ev.event_id, "seq": ev.seq, "row_hash": ev.row_hash}
-        if release is not None:
-            answer["release"] = release
-        if release_error is not None:
-            answer["release_error"] = release_error
-        self._send(201, answer)
+            return type(exc).__name__, None
+        return "derived", ev.event_id
 
     def do_GET(self):
+        if self._capturing():
+            return self._capture()
         if not self._guard():
             return
         url = urlsplit(self.path)
@@ -334,8 +412,11 @@ def make_server(settings: ApiSettings, host: str = "127.0.0.1", port: int = 8080
     if not 0 < settings.replay_window <= MAX_REPLAY_WINDOW_SECONDS:
         raise ConfigError(f"replay_window must be 1 to {MAX_REPLAY_WINDOW_SECONDS} seconds: the replay guard keeps a "
                           "signature for twice the window and the database refuses a longer expiry")
+    from .rawpost import RawPostWriter
+
     handler = type("ConsentVaultHandler", (_Handler,), {
         "settings": settings,
+        "writer": settings.raw_posts if settings.raw_posts is not None else RawPostWriter(),
     })
     return SafeHTTPServer((host, port), handler)
 
@@ -597,6 +678,12 @@ def _api_error(name: str, detail: str, fields: dict | None = None):
     return ApiError(name, detail, fields)
 
 
+_CAPTURE_KEYS = frozenset({
+    "contact", "event_type", "channels", "purposes", "method", "origin", "disclosure_sha256", "subject_key", "captured_at",
+    "page_url", "client_ip", "user_agent", "session_ref", "bot_check", "source", "edge_received_at", "contact_verification",
+    "checked", "inbound_message", "source_id", "brand_ids", "attribution", "display"})
+
+
 @dataclass(frozen=True)
 class _EdgeClaims:
     """Stands where verified access-token claims stand, for a capture the edge forwarded: capture scope only, one minute."""
@@ -670,31 +757,41 @@ class _CloudHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.request_id = self._rid()
+        if is_capture_path(urlsplit(self.path).path, CLOUD_CAPTURE_PREFIXES):
+            return self._capture()
         if not self._host_ok():
             return self._error("invalid_request", "the Host header is not on the allowlist", 421)
         self._other_lanes("GET")
 
     def do_PUT(self):
         self.request_id = self._rid()
+        if is_capture_path(urlsplit(self.path).path, CLOUD_CAPTURE_PREFIXES):
+            return self._capture()
         if not self._host_ok():
             return self._error("invalid_request", "the Host header is not on the allowlist", 421)
         self._other_lanes("PUT")
 
     def do_PATCH(self):
         self.request_id = self._rid()
+        if is_capture_path(urlsplit(self.path).path, CLOUD_CAPTURE_PREFIXES):
+            return self._capture()
         if not self._host_ok():
             return self._error("invalid_request", "the Host header is not on the allowlist", 421)
         self._other_lanes("PATCH")
 
     def do_DELETE(self):
         self.request_id = self._rid()
+        if is_capture_path(urlsplit(self.path).path, CLOUD_CAPTURE_PREFIXES):
+            return self._capture()
         if not self._host_ok():
             return self._error("invalid_request", "the Host header is not on the allowlist", 421)
         self._other_lanes("DELETE")
 
     def do_OPTIONS(self):
         self.request_id = self._rid()
-        self._error("not_found", "no CORS preflight is served", 404)
+        if is_capture_path(urlsplit(self.path).path, CLOUD_CAPTURE_PREFIXES):
+            return self._capture()
+        self._error("not_found", "no CORS preflight is served here", 404)
 
     def _other_lanes(self, method: str, body: bytes | None = None) -> None:
         from .route_wiring import BodyNotJson
@@ -814,10 +911,12 @@ class _CloudHandler(BaseHTTPRequestHandler):
         from .tenancy.pipeline import EvidenceStoreUnavailable
 
         self.request_id = self._rid()
+        path = urlsplit(self.path).path
+        if is_capture_path(path, CLOUD_CAPTURE_PREFIXES):
+            return self._capture()
         if not self._host_ok():
             return self._error("invalid_request", "the Host header is not on the allowlist", 421)
-        path = urlsplit(self.path).path
-        route = {"/v1/oauth/token": self._token, "/v1/events": self._events, "/v1/permission": self._permission,
+        route = {"/v1/oauth/token": self._token, "/v1/permission": self._permission,
                  "/v1/permission:batch": self._permission_batch, "/v1/proof": self._proof,
                  "/v1/ebr-records": self._ebr, "/v1/dnc-scrubs": self._dnc}.get(path)
         if route is None:
@@ -862,103 +961,217 @@ class _CloudHandler(BaseHTTPRequestHandler):
                                  signer=self.settings.access_tokens)
         self._send(200, issued.answer())
 
-    def _events(self, body: bytes) -> None:
-        from .errors import (ConsentRefusedError, InvalidEventError, LedgerError, NormalizationError,
-                             UnknownDisclosureError, UnknownPurposeError)
-        from .release import release_after_tenant_grant
-        from .tenancy.pipeline import parse_capture
+    # capture: store everything, answer with a receipt, then read it -------------------------------------------------------
+    def _home_token(self, conn) -> tuple[str, str]:
+        from .tenancy.tokens import mint_org_token
 
-        if not (self.headers.get("Authorization") or "").strip() and self.headers.get(SIGNATURE_HEADER):
-            claims, payload = self._edge_claims(body)  # a browser capture the edge signed and forwarded
+        home = conn.execute("SELECT consentvault.home_org() AS h").fetchone()["h"]
+        return str(home), mint_org_token(self.settings.token_key, home, ("capture",), credential_id=None, ttl_seconds=60)
+
+    def _capture(self) -> None:
+        """Any request under a capture prefix, any method, any body: written whole to the raw post store before anything
+        reads it, answered with the receipt, then read. Authentication, the site key, the origin, the signature and the
+        bot check are facts beside the post, never reasons to refuse it (contracts/capture-api.md)."""
+        from .rawpost import Fact, RawRequest, StoreUnavailable
+
+        self.request_id = self._rid()
+        body, facts = read_any_body(self)
+        url = urlsplit(self.path)
+        headers = request_headers(self)
+        preflight = is_preflight(self)
+        facts += [Fact("vault", "host_on_list", self._host_ok()), Fact("vault", "origin_header", self.headers.get("Origin")),
+                  Fact("vault", "peer_address", self.client_address[0])]
+        identity = self._capture_identity(body, headers, url, facts)
+        if identity["envelope"]:  # the edge answers the browser's permission check itself; to the edge the vault answers with a receipt
+            preflight_inner = (identity["method"] or "").upper() == "OPTIONS" and any(
+                n.lower() == "access-control-request-method" for n, _ in identity["headers"] or ())
         else:
-            claims, payload = self._claims("capture", "capture_verified"), self._json(body)
-        req = parse_capture(payload, body, claims.scopes)
-        token = self._tenant_token(claims)
-        try:
-            with connect(self.settings.dsn) as conn:
-                result = self.pipeline.capture(conn, self._enter(token), req, credential_id=claims.credential_id)
-                if req.fields["event_type"] == "grant" and req.fields.get("origin", "consumer") == "consumer":
-                    reader = self._tenant_token(claims, ("capture", "gate_read"))
-                    try:
-                        with self._enter(reader)(conn):
-                            release_after_tenant_grant(conn, self.settings.crypto, result.event_id)
-                    except (ConsentVaultError, psycopg.Error) as exc:
-                        # the grant stands; the missing decision becomes an operator alarm row, not only a log line
-                        self._release_alarm(conn, token, result.event_id, exc)
-        except UnknownDisclosureError:
-            raise _api_error("UnknownDisclosureError", "this organization has not registered that wording") from None
-        except UnknownPurposeError:
-            raise _api_error("UnknownPurposeError", "the purpose is not in this organization's configured list") from None
-        except NormalizationError:
-            raise _api_error("invalid_contact", "the contact point is not a valid phone number or email address") from None
-        except (InvalidEventError, ConsentRefusedError) as exc:
-            raise _api_error("validation_failed", caller_detail(exc), {"event": type(exc).__name__}) from None
-        except LedgerError as exc:
-            if isinstance(exc.__cause__, psycopg.errors.IntegrityError):
-                raise _api_error("validation_failed", "the ledger refused the event: it breaks a ledger rule",
-                                 {"event": "LedgerError"}) from None
-            raise
-        self._send(201, {"ok": True, "event_id": result.event_id, "receipt": result.receipt})
+            preflight_inner = preflight
+        cors = cors_headers(self)
+        with self.server.downstream.track():
+            try:
+                with connect(self.settings.dsn) as conn:
+                    if identity["claims"] is not None:
+                        org_token = self._tenant_token(identity["claims"], ("capture",))
+                    elif identity["owner"] is not None:  # the key names an organisation even when it is revoked or its source retired
+                        from .tenancy.tokens import mint_org_token
 
-    def _edge_claims(self, body: bytes):
-        """The claims of a browser capture forwarded by the edge: the edge's HMAC over ``<timestamp>.<body>`` proves the
-        edge sent it, and the site key in the body (found by its hash) names the organisation and the source. Whatever
-        the browser could have put in ``source_id`` or ``brand_ids`` is checked against the source, never trusted."""
-        from .tenancy.admin_base import ApiError
+                        org_token = mint_org_token(self.settings.token_key, identity["owner"].org_id, ("capture",),
+                                                   credential_id=None, ttl_seconds=60)
+                    else:
+                        _, org_token = self._home_token(conn)
+                    enter = self._enter(org_token)
+                    raw = RawRequest(
+                        intake=identity["intake"], method=identity["method"] or self.command, path=identity["path"] or url.path,
+                        query=identity["query"] if identity["query"] is not None else url.query,
+                        headers=identity["headers"] if identity["headers"] is not None else headers,
+                        body=identity["body"] if identity["body"] is not None else body,
+                        headers_presented_by="edge-worker" if identity["envelope"] else "vault-http",
+                        kind="preflight" if preflight_inner else "post", edge_received_at=identity["edge_received_at"],
+                        facts=tuple(facts))
+                    stored = self.writer.write(conn, enter, raw)
+            except (StoreUnavailable, ConsentVaultError, psycopg.Error) as exc:
+                _log.critical("a post could not be stored", request_id=self.request_id, error=type(exc).__name__)
+                status, answer = unavailable_answer()
+                return self._send(status, answer, cors)
+            if preflight and not identity["envelope"]:
+                self.send_response(204)
+                for k, v in cors.items():
+                    self.send_header(k, v)
+                self.send_header("Content-Length", "0")
+                self.send_header("X-Request-Id", self.request_id)
+                self.end_headers()
+            else:
+                self._send(201, stored.answer(), cors)
+            self._after_answer(stored, raw, enter, identity)
+
+    def _capture_identity(self, body: bytes, headers, url, facts: list) -> dict:
+        """Who the post came from, as far as it can be told. Never raises and never refuses: what could not be verified is
+        a fact and the post goes to the platform intake (the home organisation's chain)."""
+        from .rawpost import Fact
+
+        out = {"claims": None, "intake": "api", "method": None, "path": None, "query": None, "headers": None, "body": None,
+               "envelope": False, "edge_received_at": None, "owner": None, "browser_body": None, "edge_facts": {}}
+        auth = (self.headers.get("Authorization") or "").strip()
+        signed = bool(self.headers.get(SIGNATURE_HEADER)) and not auth
+        if auth:
+            try:
+                out["claims"] = self._claims("capture", "capture_verified")
+                facts.append(Fact("vault", "credential", {"state": "verified", "credential_id": str(out["claims"].credential_id)}))
+            except Exception as exc:  # loud-failure-exempt: the failure is the stored fact credential, the post goes to the platform intake
+                facts.append(Fact("vault", "credential", {"state": "refused", "reason": type(exc).__name__}))
+        elif signed and self.command == "POST":
+            self._edge_envelope(body, facts, out)
+        return out
+
+    def _edge_envelope(self, body: bytes, facts: list, out: dict) -> None:
+        """A capture the edge forwarded: when the edge's signature verifies, the envelope is unpacked and the browser's own
+        request (method, path, headers, exact bytes) is what is stored, with the edge's facts beside it. When it does not
+        verify, the request as received (the envelope itself) is stored and nothing in it is trusted."""
+        from .rawpost import Fact
         from .tenancy.errors import ReplayError
         from .tenancy.replay import claim_nonce
         from .tenancy.site_keys import resolve_site_key
 
         secret = self.settings.edge_signing_secret
-        if not secret:
-            raise _api_error("unauthenticated", "this server does not accept edge-forwarded captures")
         ts = self.headers.get(TIMESTAMP_HEADER) or ""
         sig = (self.headers.get(SIGNATURE_HEADER) or "").strip().lower()
-        expected = hmac.new(secret, ts.encode("ascii", "replace") + b"." + body, hashlib.sha256).hexdigest()
-        if not ts or not hmac.compare_digest(sig.encode("utf-8"), expected.encode("utf-8")):
-            raise _api_error("invalid_client", "the edge signature does not match the body")
+        if not edge_envelope.verified(secret, ts, sig, body):
+            facts.append(Fact("vault", "edge_envelope_signature", "failed" if secret else "no_edge_secret_configured"))
+            return
+        facts.append(Fact("vault", "edge_envelope_signature", "verified"))
         try:
-            sent = float(ts)
-        except ValueError:
-            raise _api_error("invalid_client", "the edge timestamp must be unix seconds") from None
+            env = edge_envelope.unpack(body)
+        except edge_envelope.EnvelopeUnreadable as exc:  # loud-failure-exempt: recorded as the fact edge_envelope_unreadable; the signed bytes are stored as received
+            facts.append(Fact("vault", "edge_envelope_unreadable", str(exc)))
+            return
+        out.update(envelope=True, intake="edge_site_key", method=env.method, path=env.path, query=env.query,
+                   headers=env.headers, body=env.body, browser_body=env.body, edge_received_at=env.edge_received_at,
+                   edge_facts=env.edge_facts)
+        if env.claimed_sha256 is not None and env.claimed_sha256 != hashlib.sha256(env.body).hexdigest():
+            facts.append(Fact("vault", "edge_body_sha256_mismatch", True))
+        for name, value in env.edge_facts.items():
+            facts.append(Fact("edge", str(name), value))
+        site_key = next((v for n, v in env.headers if n.lower() == "x-consentvault-site-key"), None)
         window = self.settings.edge_timestamp_window_s
-        if not math.isfinite(sent):
-            raise _api_error("invalid_client", "the edge timestamp must be unix seconds")
         try:
-            with connect(self.settings.dsn) as conn:   # freshness is judged on the database's clock, never this host's
-                now = dbclock.epoch(conn)
-        except psycopg.Error as exc:
-            _log.error("edge clock unavailable; request refused", error=type(exc).__name__)
-            raise _api_error("service_unavailable", "the database clock could not be read; try again") from None
-        if abs(now - sent) > window:
-            raise _api_error("invalid_client", f"the edge timestamp is outside the {window} second window")
-        payload = self._json(body)
+            with connect(self.settings.dsn) as conn:
+                owner = resolve_site_key(conn, site_key) if site_key else None
+                facts.append(Fact("vault", "site_key_state", owner.state if owner else "unknown"))
+                try:
+                    facts.append(Fact("vault", "edge_timestamp",
+                                      "fresh" if abs(dbclock.epoch(conn) - float(ts)) <= window else "stale"))
+                except ValueError:  # loud-failure-exempt: recorded as the fact edge_timestamp unreadable
+                    facts.append(Fact("vault", "edge_timestamp", "unreadable"))
+                home = str(conn.execute("SELECT consentvault.home_org() AS h").fetchone()["h"])
+                try:
+                    claim_nonce(conn, owner.org_id if owner else home, "edge:" + sig,
+                                dbclock.now(conn) + timedelta(seconds=2 * window))
+                    facts.append(Fact("vault", "replay", "fresh"))
+                except ReplayError:  # loud-failure-exempt: recorded as the fact replay; the post is stored again
+                    facts.append(Fact("vault", "replay", "seen_before"))
+                    out["replayed"] = True
+        except (ConsentVaultError, psycopg.Error) as exc:
+            facts.append(Fact("vault", "site_key_lookup", "failed:" + type(exc).__name__))
+            return
+        if owner is not None:
+            out["owner"] = owner
+            if owner.state == "active":
+                out["claims"] = _EdgeClaims(owner.org_id, owner.credential_id)
+            origin = next((v for n, v in env.headers if n.lower() == "origin"), "")
+            facts.append(Fact("vault", "origin_on_list", origin in owner.allowed_origins))
+
+    def _after_answer(self, stored, raw, enter, identity: dict) -> None:
+        """Read the stored post and, for an identified post, derive the transitional event. Never raises: the answer is
+        given and the post is stored; a failure is logged loudly and left as a fact."""
+        from . import intake
+        from .rawpost import Fact
+
+        owner = identity["owner"]
+        try:
+            with connect(self.settings.dsn) as conn:
+                intake.read_after_commit(self.writer, conn, enter, stored, raw,
+                                         source_id=owner.source_id if owner else None, request_id=self.request_id)
+                if raw.kind == "post" and raw.method == "POST" and identity["claims"] is not None \
+                        and not identity.get("replayed") and (identity["envelope"] or raw.path == "/v1/events"):
+                    outcome, event_id = self._derive_event(conn, identity, raw)
+                    self.writer.add_facts(conn, enter, stored, [Fact("vault", "event_derived", event_id) if event_id else
+                                                                Fact("vault", "event_not_derived", outcome)])
+                    if event_id:
+                        self.writer.link_event(conn, enter, stored, event_id)
+        except Exception as exc:  # loud-failure-exempt: logged critical below; the answer is given and the post is stored
+            _log.critical("the work after an answer failed; the post is stored", request_id=self.request_id,
+                          error=type(exc).__name__)
+
+    def _derive_event(self, conn, identity: dict, raw) -> tuple[str, str | None]:
+        """The transitional step: an identified post that carries the event's own fields (or the widget's) is also written as
+        a ledger event, so the contact check keeps answering until it reads the posts. Whatever it cannot do is returned as
+        the reason (stored as a fact); the post is never touched."""
+        from .errors import (ConsentRefusedError, InvalidEventError, LedgerError, NormalizationError, UnknownDisclosureError,
+                             UnknownPurposeError)
+        from .release import release_after_tenant_grant
+        from .tenancy.admin_base import ApiError
+        from .tenancy.pipeline import EvidenceStoreUnavailable, parse_capture
+
+        claims, body = identity["claims"], bytes(raw.body)
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):  # loud-failure-exempt: returned as the stored reason not_json
+            return "not_json", None
         if not isinstance(payload, dict):
-            raise _api_error("invalid_request", "the body must be a JSON object")
-        payload = dict(payload)
-        site_key = payload.pop("site_key", None)
-        payload.pop("payload_sha256", None)  # the edge's own digest of the browser's body; the evidence holds the body
-        if payload.get("origin", "consumer") != "consumer" or payload.get("method") in ("staff", "import"):
-            raise _api_error("role_not_allowed", "a browser capture forwarded by the edge is always a consumer capture;"
-                                                 " the origin staff, import or regulatory is refused")
-        payload["origin"] = "consumer"
-        with connect(self.settings.dsn) as conn:
-            owner = resolve_site_key(conn, site_key)
-            if owner is None or owner.state == "revoked":
-                raise _api_error("invalid_client", "the site key is not known")
-            if owner.state != "active":
-                raise _api_error("source_not_allowed", "the capture source behind this site key is retired")
-            sent_source = payload.get("source_id")
-            if sent_source is not None and str(sent_source) != str(owner.source_id):
-                raise _api_error("source_not_allowed", "the source does not belong to the site key")
-            payload["source_id"] = str(owner.source_id)
-            if payload.get("event_type") == "grant" and not payload.get("brand_ids"):
-                payload["brand_ids"] = list(owner.brand_ids)
-            try:
-                claim_nonce(conn, owner.org_id, "edge:" + sig, dbclock.now(conn) + timedelta(seconds=2 * window))
-            except ReplayError:
-                raise _api_error("invalid_client", "this signed edge request was already accepted") from None
-        return _EdgeClaims(owner.org_id, owner.credential_id), payload
+            return "not_a_json_object", None
+        if identity["envelope"]:
+            owner = identity["owner"]
+            payload = edge_envelope.widget_event(payload, raw.headers, identity["edge_facts"],
+                                                 source_id=owner.source_id if owner else None,
+                                                 brand_ids=owner.brand_ids if owner else None, source="site_key")
+        else:
+            payload = {k: v for k, v in payload.items() if k in _CAPTURE_KEYS}
+        try:
+            req = parse_capture(payload, body, claims.scopes)
+            token = self._tenant_token(claims)
+            result = self.pipeline.capture(conn, self._enter(token), req, credential_id=claims.credential_id)
+            if req.fields["event_type"] == "grant" and req.fields.get("origin", "consumer") == "consumer":
+                reader = self._tenant_token(claims, ("capture", "gate_read"))
+                try:
+                    with self._enter(reader)(conn):
+                        release_after_tenant_grant(conn, self.settings.crypto, result.event_id)
+                except (ConsentVaultError, psycopg.Error) as exc:
+                    try:
+                        self._release_alarm(conn, token, result.event_id, exc)
+                    except ConsentVaultError as alarm_exc:  # the event stands; the missing alarm was logged critical by _release_alarm
+                        _log.critical("the event is recorded but neither its release decision nor its alarm was written",
+                                      event_id=result.event_id, request_id=self.request_id, error=type(alarm_exc).__name__)
+        except ApiError as exc:
+            return exc.name, None
+        except (UnknownDisclosureError, UnknownPurposeError, NormalizationError, InvalidEventError, ConsentRefusedError,
+                EvidenceStoreUnavailable) as exc:
+            return type(exc).__name__, None
+        except LedgerError as exc:
+            return ("LedgerError:" + type(exc.__cause__).__name__ if exc.__cause__ else "LedgerError"), None
+        except (ConsentVaultError, psycopg.Error) as exc:
+            return "unavailable:" + type(exc).__name__, None
+        return "derived", result.event_id
 
     def _release_alarm(self, conn, token: str, event_id: str, exc: BaseException) -> None:
         from .alarms import ALARM_RELEASE_NOT_WRITTEN, AlarmWriteError, raise_operator_alarm
@@ -1217,5 +1430,9 @@ def make_cloud_server(settings: CloudApiSettings, host: str = "127.0.0.1", port:
     _logscrub.install(_log.logger)  # the backstop sits on the standard logger the safe logger writes through
     pipeline = CapturePipeline(store=settings.evidence_store, crypto=settings.crypto, receipts=settings.receipts,
                                default_retain_years=settings.default_retain_years, region=settings.region)
-    handler = type("ConsentVaultCloudHandler", (_CloudHandler,), {"settings": settings, "pipeline": pipeline})
+    from .rawpost import RawPostWriter
+
+    writer = RawPostWriter(crypto=settings.crypto, store=settings.evidence_store, receipts=settings.receipts,
+                           retain_years=settings.default_retain_years)
+    handler = type("ConsentVaultCloudHandler", (_CloudHandler,), {"settings": settings, "pipeline": pipeline, "writer": writer})
     return SafeHTTPServer((host, port), handler)

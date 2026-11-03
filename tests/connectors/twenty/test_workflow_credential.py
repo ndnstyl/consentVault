@@ -409,8 +409,11 @@ def test_the_credential_checks_permission_only_and_every_check_names_it(env, clo
     status, body = cloud.call("/v1/permission:batch", {"items": [{"contact": "+15555552001", "channel": "sms",
                                                                   "purpose": "marketing"}]}, token=got["secret"])
     assert status == 403 and body["error"] == "role_not_allowed"
+    # a workflow credential cannot capture: the post is still stored (on the platform intake), and the credential fact says why
     status, body = cloud.call("/v1/events", {"contact": "+15555552001"}, token=got["secret"])
-    assert status == 403 and body["error"] == "role_not_allowed"
+    assert status == 201 and body["stored"] is True and "event_id" not in body
+    from isolation.cloud_harness import facts_of, raw_posts
+    assert facts_of(env.t, raw_posts(env.t, env.t.home)[-1])["credential"] == {"state": "refused", "reason": "ApiError"}
     conn, tok = _admin(env, env.t.a)
     with conn, org_transaction(conn, tok):
         wf.revoke(conn, tw.sys.system_id, got["credential_id"])

@@ -94,8 +94,9 @@ def capture_verified(
                 f"the inbound message is not a START keyword (read as {verdict.verdict}: {verdict.reason})")
     elif inbound_message is not None:
         raise InvalidEventError("inbound_message belongs only to an inbound_keyword grant")
+    if "checked" not in kwargs:
+        raise InvalidEventError("a verified grant needs the consent box value the person sent (checked); it is never defaulted")
     kwargs.setdefault("method", "keyword" if verification == "inbound_keyword" else "checkbox")
-    kwargs.setdefault("checked", True)
     return capture_and_release(conn, contact_verification=verification, **kwargs)
 
 

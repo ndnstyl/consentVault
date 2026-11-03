@@ -314,6 +314,14 @@ class RawPostWriter:
             for fact in facts:
                 self._insert_fact(conn, org, uuid.UUID(stored.post_id), stored.data_key, fact)
 
+    def link_event(self, conn: psycopg.Connection, enter: Callable, stored: StoredPost, event_id: str | uuid.UUID,
+                   role: str = "trigger") -> None:
+        """Record which post an event came from (``event_source_post``): an event written because of this post cites it."""
+        ctx = enter(conn) if enter is not None else conn.transaction()
+        with ctx:
+            conn.execute("INSERT INTO consentvault.event_source_post (org_id, event_id, post_id, role) VALUES (%s, %s, %s, %s)",
+                         (uuid.UUID(stored.org_id), uuid.UUID(str(event_id)), uuid.UUID(stored.post_id), role))
+
     def _receipt(self, org, post_id, seq, row_hash, received, body_sha) -> dict:
         body = {"org_id": str(org), "post_id": str(post_id), "seq": seq, "row_hash": row_hash,
                 "received_at": _stamp(received), "body_sha256": body_sha}

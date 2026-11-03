@@ -2,6 +2,21 @@
 
 All notable changes are listed here. Format follows Keep a Changelog; versions follow semantic versioning.
 
+## Unreleased
+
+- Raw post store: every request that reaches a capture path (any method, headers, body, size or origin, signed or not) is
+  written whole to an append-only, per-organisation hash chain before anything reads it, and answered with a signed
+  receipt carrying the fingerprint of the whole body. Large bodies are kept whole in the write-once evidence store. The
+  existing event chain and its seals are unchanged.
+- Nothing about a capture is refused any more: signatures, credentials, site keys, origins, hosts, bot checks, rates,
+  sizes and shapes are recorded as facts beside the post. The only refusal is `503 store_unavailable`, given when the vault
+  could not write, and it says nothing was stored.
+- Consent is read from the stored bytes as the exact value sent (`true`, `false`, `"on"`, absent), with the decision time
+  and the wording as sent, kept beside the arrival time, through a per-form field map. A missing box, missing wording,
+  unmapped form, unreadable body or unusual size raises an operator alarm.
+- The capture edge forwards the browser's own bytes and headers in one signed envelope and queues them when the vault is
+  down; the widget sends the decision time with its offset and the exact text on screen.
+
 ## 0.1.0 – initial release
 
 - Chained, append-only consent ledger with a database-enforced runtime role, anchoring of the chain head to an

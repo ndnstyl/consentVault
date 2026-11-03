@@ -54,3 +54,9 @@ anchor_sink = "https://anchors.example.com/hook"
 
 # Optional: directory of migrations (defaults to the ones shipped with the package).
 # migrations_dir = "migrations"
+
+# The raw post store (every request an intake receives is stored whole). These two byte levels never cut or refuse a post:
+# a body above the first is kept whole in the evidence object store instead of the database row (default 65536), and a body
+# above the second raises the "unusual size" alarm for the operator (default 1048576).
+# raw_post_inline_limit_bytes = 65536
+# raw_post_unusual_size_bytes = 1048576

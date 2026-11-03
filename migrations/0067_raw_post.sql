@@ -350,7 +350,8 @@ $$;
 GRANT SELECT, INSERT ON consentvault.raw_post, consentvault.raw_post_key, consentvault.raw_post_fact,
     consentvault.raw_post_field, consentvault.raw_post_match, consentvault.raw_post_chain_head,
     consentvault.event_source_post TO consentvault_app;
-GRANT SELECT ON consentvault.form_field_map, consentvault.raw_post_seal TO consentvault_app;
+GRANT SELECT ON consentvault.form_field_map TO consentvault_app;
+GRANT SELECT, INSERT ON consentvault.raw_post_seal TO consentvault_app;  -- the single-company seal job runs as the runtime role
 GRANT SELECT, INSERT ON consentvault.form_field_map TO consentvault_console;
 GRANT SELECT ON consentvault.raw_post, consentvault.raw_post_fact, consentvault.raw_post_field, consentvault.raw_post_match,
     consentvault.raw_post_key, consentvault.event_source_post TO consentvault_console;

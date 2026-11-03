@@ -153,7 +153,8 @@ def build_cloud(cfg, env: Mapping[str, str]):
     return api.CloudApiSettings(
         dsn=cfg.require_dsn(), token_key=token_key, access_tokens=access, receipts=receipts, crypto=crypto,
         evidence_store=store, token_endpoint_url=access_url, cursor_key=cursor_key, routes=routes,
-        portal_caller=auth.billing_caller, region=cfg.default_region)
+        portal_caller=auth.billing_caller, region=cfg.default_region,
+        raw_post_inline_limit_bytes=cfg.raw_post_inline_limit_bytes, raw_post_unusual_size_bytes=cfg.raw_post_unusual_size_bytes)
 
 
 def _serve_args(p: argparse.ArgumentParser) -> None:

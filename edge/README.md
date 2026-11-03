@@ -1,25 +1,33 @@
 # ConsentVault.AI capture edge
 
-A dependency-free Cloudflare Worker plus an embeddable checkbox widget. The widget shows a disclosure,
-hashes the exact text on screen at submit time, and posts to the worker. The worker adds what only the
-server knows (receipt time, client IP, user agent, optional Turnstile result, payload hash), signs the
-body and forwards it to the vault's `POST /v1/events`.
+A dependency-free Cloudflare Worker plus an embeddable checkbox widget. The widget shows a disclosure and, at
+submit, posts the box exactly as it is, the moment of the choice with its offset, and the text on screen with its
+hash. The worker adds what only the server knows (receipt time, client address, Turnstile answer) and forwards the
+browser's own request, signed, to the vault, which stores it whole.
 
 Cloudflare and Turnstile are used here only as the deploy target of this directory. The vault itself
 knows neither.
 
 ## What the worker does
 
-1. Accepts `POST /consent` only from origins listed in `ALLOWED_ORIGINS` (comma separated, exact match).
-2. Refuses anything that is not a valid shape. An unchecked box is refused with 422 and never forwarded.
-3. Accepts only the wording's hash, `disclosure_sha256`: the sha256 of the text the visitor had on screen at
-   submit time. The worker never accepts wording itself (a request carrying `disclosure_text` is refused with
-   400) and never substitutes a server-side copy. The operator registers the wording in the vault beforehand
-   with `consentvault disclosure register`; the vault refuses a grant whose hash it does not hold.
-4. Adds `edge_received_at` (its own receipt time, kept as evidence only; the vault stamps `received_at` itself), `client_ip` (from `CF-Connecting-IP`), `user_agent`, `bot_check`
-   (`none` or `turnstile:pass`; a failed check is refused) and `payload_sha256` (sha256 of the received body).
-5. Signs `timestamp + "." + body` with HMAC-SHA256 (`X-ConsentVault-Timestamp`, `X-ConsentVault-Signature`) and posts to
-   `VAULT_URL/v1/events`. A vault refusal or outage is returned as 502 with `recorded: false`.
+1. Accepts every request on its hostname: any path, any method, any body, any size, any origin. It checks nothing before
+   it stores.
+2. Forwards the browser's own request to the vault in one signed envelope: the method, path and query, every header as
+   the runtime presented it (the runtime lower-cases names and joins repeated values, and the record says so), and the
+   exact bytes of the body with their SHA-256 and byte count. The worker never builds, trims, sorts or sets a field of
+   the post; it sets no box value.
+3. Adds what only a server knows as facts in the envelope: its own arrival time, the client address headers (each
+   labelled by who sets it), `request.cf`, the site key's state, whether the origin is on the key's list, the rate count,
+   and the bot-check provider's answer exactly as given. A failed check, a missing key or an unlisted origin changes
+   nothing about what is stored.
+4. Signs `timestamp + "." + envelope` with HMAC-SHA256 (`X-ConsentVault-Timestamp`, `X-ConsentVault-Signature`) and posts to
+   `VAULT_URL/v1/events`, then answers the browser with the vault's receipt: `201` with the fingerprint of the whole body.
+5. Answers a browser permission check (`OPTIONS` with `Access-Control-Request-Method`) for any origin with `204` and
+   forwards it to be stored as a labelled preflight.
+6. When the vault cannot be reached and the edge has a durable store (`BODY_STORE`, `CAPTURE_QUEUE`), it keeps the body
+   there and answers `202 {"queued": true, ...}` with the body's fingerprint; the queue delivers in arrival order with
+   the facts `queued_at_edge` and `delivered_from_queue_at`. When it can store nowhere it answers `503 store_unavailable`
+   and says nothing was stored; that is the only answer that does.
 
 ## Deploy
 

@@ -1337,6 +1337,32 @@
       ]
     },
     {
+      "name": "CONSENTVAULT_RAW_POST_INLINE_LIMIT_BYTES",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_RAW_POST_UNUSUAL_SIZE_BYTES",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ]
+    },
+    {
       "name": "CV_DB_AUTH",
       "kind": "setting",
       "required": false,

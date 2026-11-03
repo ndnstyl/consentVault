@@ -350,3 +350,38 @@ def verify_raw_chain(conn: psycopg.Connection) -> list[dict]:
             breaks.append({"seq": r["seq"], "post_id": str(r["post_id"]), "reason": "row_hash does not recompute from the stored columns"})
         prev, expect = r["row_hash"], r["seq"] + 1
     return breaks
+
+
+def read_raw_sink(path: str) -> list[dict]:
+    """The raw post anchors a file sink holds (the lines labelled ``"chain": "raw_post"``)."""
+    out: list[dict] = []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for n, line in enumerate(fh, 1):
+                if not line.strip():
+                    continue
+                rec = json.loads(line)
+                if rec.get("chain") == "raw_post":
+                    out.append({"seq": int(rec["seq"]), "row_hash": str(rec["row_hash"]), "org_id": rec.get("org_id")})
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ConsentVaultError(f"cannot read the raw post anchors of {path}: {describe(exc)}") from exc
+    return out
+
+
+def verify_raw_anchors(conn: psycopg.Connection, *, sink_file: str | None = None) -> list[dict]:
+    """Every anchor of the entered organisation's raw post chain (the database rows, and the sink file's lines when given)
+    against the posts now held: a post missing at an anchored sequence, or holding a different hash, is a break."""
+    rows = {r["seq"]: r["row_hash"] for r in conn.execute(
+        "SELECT seq, row_hash FROM consentvault.raw_post WHERE org_id = (SELECT consentvault.current_org())")}
+    org = str(conn.execute("SELECT consentvault.current_org() AS o").fetchone()["o"])
+    anchors = [(a["seq"], a["row_hash"], "raw_post_chain_head") for a in conn.execute(
+        "SELECT seq, row_hash FROM consentvault.raw_post_chain_head ORDER BY anchored_at, seq")]
+    if sink_file:
+        anchors += [(a["seq"], a["row_hash"], "sink") for a in read_raw_sink(sink_file) if a["org_id"] in (None, org)]
+    breaks = []
+    for seq, row_hash, label in anchors:
+        if seq not in rows:
+            breaks.append({"seq": seq, "reason": f"anchored_post_missing:{label}"})
+        elif rows[seq] != row_hash:
+            breaks.append({"seq": seq, "reason": f"anchored_post_changed:{label}"})
+    return breaks

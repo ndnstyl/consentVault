@@ -53,10 +53,12 @@ of the flag, and keeps it apart from the systems that act on it.
   <img alt="Architecture: capture widget, edge worker, signed API, append-only ledger, seals and anchors, then gate, timeline and evidence bundle" src=".github/assets/architecture.svg" width="860">
 </p>
 
-The widget sends only the hash of the wording it showed. The edge worker adds what only a server knows (receipt
-time, IP address, user agent, bot-check result) and signs the forward. The vault stamps its own receipt time,
-chains the event, and refuses a grant whose wording it does not hold. Seals and anchors live outside your
-company's control. The gate, the consent timeline and the evidence bundle all read the same ledger. See
+The widget sends what the visitor did: the box exactly as it was (ticked or not), the moment of the choice with its
+offset, and the text that was on screen beside its hash. The edge worker adds what only a server knows (receipt time, IP
+address, bot-check answer) and forwards the browser's own request in one signed envelope. The vault writes every request it
+receives, whole and unchanged, to an append-only chain before anything reads it, and answers with a receipt carrying the
+fingerprint of what it stored; nothing about a capture is refused. The consent value is then read from the stored bytes
+exactly as it was sent. Seals and anchors live outside your company's control. The gate, the consent timeline and the evidence bundle all read the same ledger. See
 [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
 
 ## Quickstart
@@ -77,8 +79,9 @@ docker compose run --rm migrate
 docker compose up -d vault
 ```
 
-Record a grant. The wording must be registered first by an operator, because the vault refuses a grant whose
-wording it does not hold, and a grant may not name a channel or purpose its wording does not:
+Record a grant. The wording must be registered first by an operator: a grant event is written only for wording the vault
+holds, and a grant may not name a channel or purpose its wording does not (a capture that does not fit is still stored
+whole, and the reason is kept beside it):
 
 ```
 docker compose run --rm vault consentvault disclosure register \
@@ -105,7 +108,7 @@ everything else. See [deployment](docs/deployment.md).
 |---|---|
 | `consentvault migrate` | apply pending migrations as the owner role; refuses a changed, missing or out-of-order file |
 | `consentvault disclosure register` | store the exact consent wording and print its sha256 |
-| `consentvault capture` | record a checked consent box as a grant (unchecked is refused); `--verification otp` or `--verification inbound_keyword --inbound-message START` records that you verified the person controls the contact point, which a stop's release requires |
+| `consentvault capture` | record a checked consent box as a grant event; `--verification otp` or `--verification inbound_keyword --inbound-message START` records that you verified the person controls the contact point, which a stop's release requires |
 | `consentvault revoke` | record that a person withdrew consent (`--purpose '*'` withdraws every purpose) |
 | `consentvault verify-chain` | recompute the hash chain, check every anchor, report any break |
 | `consentvault anchor` | write the current chain head to `chain_head` and the external sink |

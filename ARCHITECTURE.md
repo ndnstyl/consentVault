@@ -85,11 +85,15 @@ INSERT on the ledger tables other than `contact_salt`, and EXECUTE on `consentva
 ## Capture edge (`edge/`)
 
 An edge worker (TypeScript, no dependencies) and an embeddable `consent-checkbox.js`. The widget renders a
-disclosure, computes its sha256 in the browser, and posts `{contact, checked, disclosure_sha256, page_url, session}`;
-it never sends the wording, and the operator registers the same wording in the vault beforehand.
-The worker adds receipt time, IP, user agent, a bot-check result, and the payload hash, signs the forward with
-HMAC, and posts it to `POST /v1/events`. Unchecked boxes never become grants. The exact field contract between
-the worker and the API is in `docs/api.md`; `tests/test_e2e_edge.py` runs the worker's code against a live API.
+disclosure, hashes the text on screen at submit, and posts `{contact, checked, decided_at, disclosure_text,
+disclosure_sha256, page_url, session}`: the box exactly as it is (ticked or not), the moment of the choice with its
+offset, and the text beside its hash. The worker forwards the browser's own request, with its exact bytes and every
+header, in one signed envelope together with what only a server knows (receipt time, IP, bot-check answer, whether the
+site key and origin are on the list). Those are facts stored beside the post, never reasons to refuse it. The vault
+writes the request to the raw post store first, then reads the consent value, decision time and wording from the stored
+bytes with the form's field map. A post that also fits the event rules is written as a ledger event afterwards. The exact
+contract between the worker and the API is in `docs/api.md`; `tests/test_e2e_edge.py` runs the worker's code against a
+live API.
 
 ## Out of scope for the core
 

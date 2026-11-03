@@ -74,6 +74,8 @@ class ApiSettings:
     default_region: str | None = None
     replay_window: int = REPLAY_WINDOW_SECONDS
     raw_posts: object | None = None  # rawpost.RawPostWriter; None stores the bytes as sent (no key provider, no object store)
+    raw_post_inline_limit_bytes: int = config_mod.DEFAULT_RAW_POST_INLINE_BYTES
+    raw_post_unusual_size_bytes: int = config_mod.DEFAULT_RAW_POST_UNUSUAL_BYTES
 
 
 def load_api_settings(path: str | os.PathLike | None = None, env: Mapping[str, str] | None = None) -> ApiSettings:
@@ -101,7 +103,8 @@ def load_api_settings(path: str | os.PathLike | None = None, env: Mapping[str, s
     return ApiSettings(
         dsn=cfg.require_dsn(), secret=secret, token=token, purposes=cfg.require_purposes(), allowed_hosts=hosts,
         verified_secret=env.get(ENV_VERIFIED_SECRET) or table.get("verified_secret"),
-        default_region=cfg.default_region,
+        default_region=cfg.default_region, raw_post_inline_limit_bytes=cfg.raw_post_inline_limit_bytes,
+        raw_post_unusual_size_bytes=cfg.raw_post_unusual_size_bytes,
     )
 
 
@@ -267,7 +270,7 @@ class _Handler(BaseHTTPRequestHandler):
                 if envelope.claimed_sha256 is not None and envelope.claimed_sha256 != hashlib.sha256(envelope.body).hexdigest():
                     facts.append(Fact("vault", "edge_body_sha256_mismatch", True))
             except edge_envelope.EnvelopeUnreadable as exc:  # loud-failure-exempt: recorded as the fact edge_envelope_unreadable; the signed bytes are stored as received
-                facts.append(Fact("vault", "edge_envelope_unreadable", str(exc)))
+                facts.append(Fact("vault", "edge_envelope_unreadable", describe(exc)))
         preflight = is_preflight(self)
         if envelope is not None:
             inner_preflight = envelope.method.upper() == "OPTIONS" and any(
@@ -416,7 +419,8 @@ def make_server(settings: ApiSettings, host: str = "127.0.0.1", port: int = 8080
 
     handler = type("ConsentVaultHandler", (_Handler,), {
         "settings": settings,
-        "writer": settings.raw_posts if settings.raw_posts is not None else RawPostWriter(),
+        "writer": settings.raw_posts if settings.raw_posts is not None else RawPostWriter(
+            inline_limit=settings.raw_post_inline_limit_bytes, unusual_size=settings.raw_post_unusual_size_bytes),
     })
     return SafeHTTPServer((host, port), handler)
 
@@ -505,8 +509,10 @@ class CloudApiSettings:
     region: str | None = None
     routes: tuple = ()  # route objects of other lanes: handles(method, path) -> bool; handle(method, path, ...)
     portal_caller: object = None  # callable(headers) -> caller for portal routes (session lane), or None
-    edge_signing_secret: bytes | None = None  # the capture edge's HMAC secret; None means edge captures are refused
+    edge_signing_secret: bytes | None = None  # the capture edge's HMAC secret; None means edge captures are stored as received
     edge_timestamp_window_s: int = 300
+    raw_post_inline_limit_bytes: int = config_mod.DEFAULT_RAW_POST_INLINE_BYTES
+    raw_post_unusual_size_bytes: int = config_mod.DEFAULT_RAW_POST_UNUSUAL_BYTES
 
     def __repr__(self) -> str:
         return f"CloudApiSettings(token_endpoint_url={self.token_endpoint_url!r}, hosts={self.allowed_hosts!r})"
@@ -1063,7 +1069,7 @@ class _CloudHandler(BaseHTTPRequestHandler):
         try:
             env = edge_envelope.unpack(body)
         except edge_envelope.EnvelopeUnreadable as exc:  # loud-failure-exempt: recorded as the fact edge_envelope_unreadable; the signed bytes are stored as received
-            facts.append(Fact("vault", "edge_envelope_unreadable", str(exc)))
+            facts.append(Fact("vault", "edge_envelope_unreadable", describe(exc)))
             return
         out.update(envelope=True, intake="edge_site_key", method=env.method, path=env.path, query=env.query,
                    headers=env.headers, body=env.body, browser_body=env.body, edge_received_at=env.edge_received_at,
@@ -1433,6 +1439,7 @@ def make_cloud_server(settings: CloudApiSettings, host: str = "127.0.0.1", port:
     from .rawpost import RawPostWriter
 
     writer = RawPostWriter(crypto=settings.crypto, store=settings.evidence_store, receipts=settings.receipts,
-                           retain_years=settings.default_retain_years)
+                           retain_years=settings.default_retain_years, inline_limit=settings.raw_post_inline_limit_bytes,
+                           unusual_size=settings.raw_post_unusual_size_bytes)
     handler = type("ConsentVaultCloudHandler", (_CloudHandler,), {"settings": settings, "pipeline": pipeline, "writer": writer})
     return SafeHTTPServer((host, port), handler)

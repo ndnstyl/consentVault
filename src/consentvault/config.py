@@ -30,6 +30,10 @@ ENV_SEAL_MAX_DELAY = "CONSENTVAULT_SEAL_MAX_DELAY_SECONDS"
 ENV_UNSEALED_GRACE = "CONSENTVAULT_UNSEALED_GRACE_SECONDS"
 ENV_BACKUP_RETENTION = "CONSENTVAULT_BACKUP_RETENTION_DAYS"
 ENV_DB_AUTH = "CONSENTVAULT_DB_AUTH"
+ENV_RAW_POST_INLINE = "CONSENTVAULT_RAW_POST_INLINE_LIMIT_BYTES"
+ENV_RAW_POST_UNUSUAL = "CONSENTVAULT_RAW_POST_UNUSUAL_SIZE_BYTES"
+DEFAULT_RAW_POST_INLINE_BYTES = 64 * 1024
+DEFAULT_RAW_POST_UNUSUAL_BYTES = 1024 * 1024
 ENV_KEY_PROVIDER = "CONSENTVAULT_KEY_PROVIDER"
 # IAM database login (db_auth = "iam"): (key, setting, the name the cloud task definitions set, file key, alias wins
 # over the file). The cloud task's own names are deliberate per task and win over the file; AWS_REGION is ambient (any
@@ -73,6 +77,10 @@ class Config:
     backup_retention_days: int = DEFAULT_BACKUP_RETENTION_DAYS
     db_auth: str = "password"
     key_provider: str | None = None
+    # The raw post store's two byte levels (neither ever cuts or refuses a post): bodies above the first are kept whole in the
+    # evidence object store instead of the row; bodies above the second raise the unusual-size alarm for the operator.
+    raw_post_inline_limit_bytes: int = DEFAULT_RAW_POST_INLINE_BYTES
+    raw_post_unusual_size_bytes: int = DEFAULT_RAW_POST_UNUSUAL_BYTES
     # {key id: ES256 public key PEM} of the portal edge Worker(s) allowed to sign sign-in assertions. Rotation order: add the
     # new key here, deploy the edge signing with it, then remove the old key.
     edge_assertion_keys: Mapping[str, str] = field(default_factory=dict)
@@ -196,6 +204,16 @@ def load_config(path: str | os.PathLike | None = None, env: Mapping[str, str] | 
                                   f"lower-case database login name, not {op_user!r}")
             operator_dsn = _iam_dsn({**env, "CONSENTVAULT_DB_USER": op_user, "CV_DB_USER": op_user}, data, None, None)
     edge_keys = _edge_keys(env.get(ENV_EDGE_KEYS), data.get("edge_assertion_keys"))
+
+    def byte_level(env_key: str, key: str, default: int, least: int) -> int:
+        raw = env.get(env_key) or data.get(key, default)
+        if isinstance(raw, bool) or not _DIGITS.fullmatch(str(raw).strip()) or int(str(raw).strip()) < least:
+            raise ConfigError(f"setting '{key}' must be a whole number of bytes, at least {least} (default {default}); it is a "
+                              "level that stores a body elsewhere or raises an alarm, never a limit on what is stored")
+        return int(str(raw).strip())
+
+    raw_inline = byte_level(ENV_RAW_POST_INLINE, "raw_post_inline_limit_bytes", DEFAULT_RAW_POST_INLINE_BYTES, 0)
+    raw_unusual = byte_level(ENV_RAW_POST_UNUSUAL, "raw_post_unusual_size_bytes", DEFAULT_RAW_POST_UNUSUAL_BYTES, 1)
     return Config(
         dsn=dsn,
         default_region=region.upper() if region else None,
@@ -210,6 +228,8 @@ def load_config(path: str | os.PathLike | None = None, env: Mapping[str, str] | 
         backup_retention_days=backup_days,
         db_auth=auth,
         key_provider=pick(ENV_KEY_PROVIDER, "key_provider"),
+        raw_post_inline_limit_bytes=raw_inline,
+        raw_post_unusual_size_bytes=raw_unusual,
         edge_assertion_keys=edge_keys,
     )
 

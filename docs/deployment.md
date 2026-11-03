@@ -161,6 +161,8 @@ Environment wins over `consentvault.toml`.
 | `anchor_sink` | `CONSENTVAULT_ANCHOR_SINK` | where `consentvault anchor` writes the chain head: a file path or an http(s) webhook URL |
 | `seal_max_delay_seconds` | `CONSENTVAULT_SEAL_MAX_DELAY_SECONDS` | longest a seal's signing time may come after the event was received (default 86400) |
 | `unsealed_grace_seconds` | `CONSENTVAULT_UNSEALED_GRACE_SECONDS` | longest an event may stay unsealed before `verify-seals` fails it (default 3600) |
+| `raw_post_inline_limit_bytes` | `CONSENTVAULT_RAW_POST_INLINE_LIMIT_BYTES` | a captured body above this many bytes is kept whole in the evidence object store instead of the database row (default 65536); never cuts or refuses a post |
+| `raw_post_unusual_size_bytes` | `CONSENTVAULT_RAW_POST_UNUSUAL_SIZE_BYTES` | a captured body above this many bytes raises the unusual-size alarm (default 1048576); never cuts or refuses a post |
 | `backup_retention_days` | `CONSENTVAULT_BACKUP_RETENTION_DAYS` | age of the oldest database backup; a key version a rotation retired is kept this long so any backup still restores (default 35) |
 | `default_region` | `CONSENTVAULT_DEFAULT_REGION` | region for phone numbers written without a country code |
 | `tsa_url` | `CONSENTVAULT_TSA_URL` | timestamp authority (required; no default) |

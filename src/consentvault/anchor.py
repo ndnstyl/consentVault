@@ -134,8 +134,41 @@ def _post(url: str, body: str) -> None:
         raise AnchorError(f"anchor webhook {sink_label(url)} unreachable: {describe(exc)}") from exc
 
 
+def _anchor_raw_posts(conn: psycopg.Connection, sink: str, when: datetime, org: str, tenant: bool) -> dict | None:
+    """Anchor the head of the organisation's raw-post chain the way the event head is anchored: verified first, written to the
+    sink (a file or a webhook; an S3 object lock sink keeps the event heads only), then recorded in raw_post_chain_head.
+    None when the organisation has no raw post yet."""
+    from .rawpost import verify_raw_chain
+
+    breaks = verify_raw_chain(conn)
+    if breaks:
+        raise ChainError(f"refusing to anchor a broken raw post chain: {len(breaks)} break(s), first at seq {breaks[0]['seq']}")
+    head = conn.execute("SELECT seq, row_hash FROM consentvault.raw_post WHERE org_id = consentvault.current_org()"
+                        " ORDER BY seq DESC LIMIT 1").fetchone()
+    if head is None:
+        return None
+    record = {"chain": "raw_post", "seq": head["seq"], "row_hash": head["row_hash"],
+              "anchored_at": when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")}
+    if tenant:
+        record["org_id"] = org
+    line = json.dumps(record, sort_keys=True, separators=(",", ":"))
+    if not is_s3(sink):
+        if _is_url(sink):
+            _post(sink, line)
+        else:
+            _write_file(sink, line)
+    try:
+        row = conn.execute(
+            "INSERT INTO consentvault.raw_post_chain_head (seq, row_hash, sink, anchored_at) VALUES (%s, %s, %s, %s)"
+            " RETURNING head_uuid", (head["seq"], head["row_hash"], sink_label(sink), when)).fetchone()
+    except psycopg.Error as exc:
+        raise AnchorError(f"the raw post head was written to the sink but raw_post_chain_head refused it: {describe(exc)}") from exc
+    return {**record, "sink": sink_label(sink), "anchor_id": str(row["head_uuid"])}
+
+
 def anchor(conn: psycopg.Connection, sink: str, *, now: datetime | None = None) -> dict:
-    """Anchor the current head. Refuses an empty or broken ledger; the sink is written before the database row."""
+    """Anchor the current head of both chains (the events and the raw posts). Refuses an empty or broken ledger; the sink is
+    written before the database row. The answer is the event head's record, with the raw post head's under ``raw_post``."""
     if not sink:
         raise AnchorError("no anchor sink configured", code="no_anchor_sink")
     breaks = verify_chain(conn)
@@ -143,28 +176,37 @@ def anchor(conn: psycopg.Connection, sink: str, *, now: datetime | None = None) 
         raise ChainError(f"refusing to anchor a broken chain: {len(breaks)} break(s), first at seq {breaks[0].seq}")
     head = conn.execute("SELECT seq, row_hash FROM consentvault.event WHERE org_id = consentvault.current_org()"
                         " ORDER BY seq DESC LIMIT 1").fetchone()
-    if head is None:
-        raise AnchorError("the ledger is empty; there is no head to anchor")
     when = now or datetime.now(timezone.utc)
-    record = {"seq": head["seq"], "row_hash": head["row_hash"],
-              "anchored_at": when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")}
     orgs = conn.execute("SELECT consentvault.current_org() AS org, consentvault.home_org() AS home").fetchone()
-    if orgs["org"] != orgs["home"]:  # a tenant's sink record names its organisation (verify_chain reads it)
-        record["org_id"] = str(orgs["org"])
-    line = json.dumps(record, sort_keys=True, separators=(",", ":"))
-    if is_s3(sink):
-        publish_s3(sink, str(orgs["org"]), record)
-    elif _is_url(sink):
-        _post(sink, line)
-    else:
-        _write_file(sink, line)
-    try:
-        row = conn.execute(
-            "INSERT INTO consentvault.chain_head (seq, row_hash, sink, anchored_at) VALUES (%s, %s, %s, %s)"
-            " RETURNING head_uuid",
-            (head["seq"], head["row_hash"], sink_label(sink), when),
-        ).fetchone()
-    except psycopg.Error as exc:
-        raise AnchorError(
-            f"the head was written to the sink but chain_head refused it: {describe(exc)}") from exc
-    return {**record, "sink": sink_label(sink), "anchor_id": str(row["head_uuid"])}
+    tenant = orgs["org"] != orgs["home"]  # a tenant's sink record names its organisation (verify_chain reads it)
+    result: dict = {}
+    if head is not None:
+        record = {"seq": head["seq"], "row_hash": head["row_hash"],
+                  "anchored_at": when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")}
+        if tenant:
+            record["org_id"] = str(orgs["org"])
+        line = json.dumps(record, sort_keys=True, separators=(",", ":"))
+        if is_s3(sink):
+            publish_s3(sink, str(orgs["org"]), record)
+        elif _is_url(sink):
+            _post(sink, line)
+        else:
+            _write_file(sink, line)
+        try:
+            row = conn.execute(
+                "INSERT INTO consentvault.chain_head (seq, row_hash, sink, anchored_at) VALUES (%s, %s, %s, %s)"
+                " RETURNING head_uuid",
+                (head["seq"], head["row_hash"], sink_label(sink), when),
+            ).fetchone()
+        except psycopg.Error as exc:
+            raise AnchorError(
+                f"the head was written to the sink but chain_head refused it: {describe(exc)}") from exc
+        result = {**record, "sink": sink_label(sink), "anchor_id": str(row["head_uuid"])}
+    raw = _anchor_raw_posts(conn, sink, when, str(orgs["org"]), tenant)
+    if head is None and raw is None:
+        raise AnchorError("the ledger is empty; there is no head to anchor")
+    if raw is not None:
+        result["raw_post"] = raw
+        result.setdefault("anchor_id", raw["anchor_id"])
+        result.setdefault("sink", raw["sink"])
+    return result

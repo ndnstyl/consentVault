@@ -266,6 +266,38 @@ def load_field_map(conn: psycopg.Connection, source_id: uuid.UUID | str | None, 
     return BUILT_IN_BY_INTAKE.get(intake)
 
 
+def add_field_map(conn: psycopg.Connection, *, set_by: str, source_id: uuid.UUID | str | None = None, body_format: str = "json",
+                  consent_paths: Iterable[str] = (), consent_ticked_value: str | None = None,
+                  contact_paths: Iterable[tuple[str, str]] = (), **paths) -> int:
+    """Append the next version of a form's field map (never an edit: an old version stays as it was). Runs inside the entered
+    organisation on a login that may write maps (the operator console's). Returns the new version number. ``paths`` may name any
+    of decision_time_path, wording_path, wording_hash_path, seller_paths, form_version_path, checkbox_default_path,
+    submit_context_path, third_party_cert_path, jurisdiction_path, channel_scope_path."""
+    allowed = {"decision_time_path", "wording_path", "wording_hash_path", "seller_paths", "form_version_path",
+               "checkbox_default_path", "submit_context_path", "third_party_cert_path", "jurisdiction_path", "channel_scope_path"}
+    unknown = set(paths) - allowed
+    if unknown:
+        raise ValueError(f"unknown field map settings: {sorted(unknown)}")
+    source = uuid.UUID(str(source_id)) if source_id else None
+    row = conn.execute(
+        "SELECT coalesce(max(map_version), 0) + 1 AS v FROM consentvault.form_field_map"
+        " WHERE org_id = (SELECT consentvault.current_org()) AND source_id IS NOT DISTINCT FROM %s", (source,)).fetchone()
+    version = row["v"]
+    cols = ["source_id", "map_version", "consent_ticked_value", "body_format", "consent_paths", "contact_paths", "set_by", *paths]
+    vals = [source, version, consent_ticked_value, body_format, list(consent_paths),
+            json.dumps([{"path": p, "kind": k} for p, k in contact_paths]), set_by, *paths.values()]
+    conn.execute(f"INSERT INTO consentvault.form_field_map ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})", vals)
+    return version
+
+
+def list_field_maps(conn: psycopg.Connection, source_id: uuid.UUID | str | None = None) -> list[dict]:
+    """Every stored version of the maps of one source (or the organisation default), oldest first, with who set it and when."""
+    source = uuid.UUID(str(source_id)) if source_id else None
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM consentvault.form_field_map WHERE org_id = (SELECT consentvault.current_org())"
+        " AND source_id IS NOT DISTINCT FROM %s ORDER BY map_version", (source,)).fetchall()]
+
+
 # Readings -----------------------------------------------------------------------------------------------------------------
 
 @dataclass(frozen=True)

@@ -168,16 +168,24 @@ def test_a_start_that_is_not_the_whole_message_goes_to_read_and_lifts_nothing(wo
 
 
 @pytest.mark.parametrize("body", ["UNSTOP", "YES", "start", "Start", "unstop", "yes"])
-def test_a_whole_message_start_word_in_any_case_lifts_a_consumers_own_stop(world, stack, armed, body):
-    """confirmations.md section 7 (START, UNSTOP and YES alone, case-insensitive, are a start: one keyword grant naming sms)."""
+def test_a_whole_message_start_word_in_any_case_is_stored_as_received_and_restores_nothing(world, stack, armed, body):
+    """Ruling: a START text restores nothing; it is stored exactly as received, creates no event and lifts no stop. The way back
+    is the customer's own re-engagement form."""
     o = world.a
     world.capture(o, P)
     world.stop(o, P)
+    before = len(events(world, o))
+    posts = _sms_posts(world, o)
     text_in(armed, body, sender=P)
-    grants = [e for e in events(world, o, "grant") if e["recorded_by"] == "confirmations"]
-    assert len(grants) == 1 and list(grants[0]["channels"]) == ["sms"] and grants[0]["method"] == "keyword"
+    assert len(events(world, o)) == before and not [e for e in events(world, o, "grant") if e["recorded_by"] == "confirmations"]
+    assert _sms_posts(world, o) == posts + 1  # the text itself, as its own raw post
     (got,) = replies(o.boss)
-    assert (got["verdict"], got["state"]) == ("start", "start") and got["event_id"] == str(grants[0]["event_id"])
+    assert (got["verdict"], got["state"]) == ("start", "start") and got["event_id"] is None
+    assert o.boss.ok("GET", "/v1/records", {})["items"][0]["channels"]["sms"]["counts"]["stop_on_record"] >= 1
+
+
+def _sms_posts(world, o) -> int:
+    return world.sql(o, "SELECT count(*) AS n FROM consentvault.raw_post WHERE org_id = %s AND intake = 'sms_reply'", (o.org_id,))[0]["n"]
 
 
 def test_a_stop_reply_is_one_revoke_across_sms_voice_and_artificial_voice_and_leaves_email(world, stack, armed):
@@ -276,20 +284,19 @@ def test_an_unread_reply_for_24_hours_raises_the_alarm_and_counts_show_in_settin
 
 
 # ---- START ---------------------------------------------------------------------------------------------------------------
-def test_start_after_a_stop_is_a_keyword_grant_naming_texts_only_and_lifts_the_stop(world, stack, armed):
-    """confirmations.md section 7 (START: tenant_capture, checked true, channels sms, method keyword, contact_verification
-    inbound_keyword, session_ref, source Confirmation replies; the core release rule decides)."""
+def test_start_after_a_stop_writes_one_raw_post_and_no_event_and_the_stop_stays(world, stack, armed):
+    """Ruling: a START text restores nothing. One raw post, zero events, the stop in force on every channel, no reply text from
+    ConsentVault (the customer's own automation answers START with a link to its re-engagement form)."""
     o = world.a
     world.capture(o, P, channels=("sms", "voice"))
     world.stop(o, P, channels=("sms", "voice", "artificial_voice"))
+    before, posts = len(events(world, o)), _sms_posts(world, o)
+    stack.twilio.sent.clear()
     text_in(armed, "START", sender=P, sid="SMst")
-    grants = [e for e in events(world, o, "grant") if e["recorded_by"] == "confirmations"]
-    assert len(grants) == 1 and list(grants[0]["channels"]) == ["sms"] and grants[0]["method"] == "keyword"
-    assert _plain_session(world, o, grants[0]) == "twilio:SMst" and grants[0]["contact_verification"] == "inbound_keyword"
-    assert grants[0]["disclosure_sha256"] == o.wording
+    assert len(events(world, o)) == before and _sms_posts(world, o) == posts + 1 and stack.twilio.sent == []
     rec = o.boss.ok("GET", "/v1/records", {})["items"][0]
-    assert rec["channels"]["sms"]["counts"]["consent_record_found"] >= 1
-    assert rec["channels"]["voice"]["counts"]["stop_on_record"] >= 1
+    assert rec["channels"]["sms"]["counts"]["stop_on_record"] >= 1 and rec["channels"]["voice"]["counts"]["stop_on_record"] >= 1
+    assert rec["channels"]["sms"]["counts"]["consent_record_found"] == 0
 
 
 def test_start_with_no_stop_on_record_changes_nothing_and_sends_no_reply(world, stack, armed):
@@ -305,17 +312,13 @@ def test_start_with_no_stop_on_record_changes_nothing_and_sends_no_reply(world, 
     assert got["verdict"] == "start" and got["event_id"] is None  # recorded as a reply only
 
 
-def test_start_after_a_stop_with_no_earlier_grant_is_a_reply_only_with_the_refused_text(world, stack, armed):
-    """confirmations.md section 7 (with no earlier grant there is no wording to name: no_held_disclosure, START recorded as a
-    reply only, the refused text is sent and the reply goes to the to-read list with the cause)."""
+def test_start_after_a_stop_with_no_earlier_grant_is_stored_and_changes_nothing(world, stack, armed):
     o = world.a
     world.stop(o, P)  # a stop on a contact who never granted
     stack.twilio.sent.clear()
+    n = len(events(world, o))
     text_in(armed, "START", sender=P, sid="SMng1")
-    assert [e for e in events(world, o, "grant") if e["recorded_by"] == "confirmations"] == []
-    assert any("We could not turn texts back on from this message. Contact us at" in m["body"] for m in stack.twilio.sent)
-    (got,) = replies(o.boss)
-    assert got["state"] == "to_read" and "no_held_disclosure" in (got["reason"] or "")
+    assert len(events(world, o)) == n and stack.twilio.sent == []
 
 
 def test_start_from_a_number_with_no_record_is_a_reply_only(world, stack, armed):
@@ -326,45 +329,27 @@ def test_start_from_a_number_with_no_record_is_a_reply_only(world, stack, armed)
     assert [e for e in events(world, o) if e["recorded_by"] == "confirmations"] == []
 
 
-def test_start_is_refused_when_the_stop_was_not_the_consumers_own(world, stack, armed):
-    """confirmations.md section 7 (stop_not_consumers_own: a stop of origin staff is not lifted; the refused text is sent and the
-    reply goes to the to-read list with the cause)."""
+def test_start_changes_nothing_whoever_wrote_the_stop_and_whatever_the_wording_names(world, stack, armed):
     o = world.a
     world.capture(o, P)
     world.stop(o, P, origin="staff", method="written")
+    voice_only = world.register_wording(o, "Acme may call you about offers. Reply STOP to end.", ["voice"], ["marketing"])
+    world.capture(o, "+15555550999", channels=("voice",), wording=voice_only)
+    world.stop(o, "+15555550999", channels=("voice",))
+    n = len(events(world, o))
     stack.twilio.sent.clear()
     text_in(armed, "START", sender=P, sid="SMn1")
-    assert not [e for e in events(world, o, "grant") if e["recorded_by"] == "confirmations"]
-    refused = [m["body"] for m in stack.twilio.sent]
-    assert len(refused) == 1 and refused[0].startswith("Acme Flooring: We could not turn texts back on from this message. Contact us at ") and refused[0].endswith(" and we will help.")
-    (got,) = replies(o.boss)
-    assert got["state"] == "to_read" and "stop_not_consumers_own" in (got["reason"] or "")
+    text_in(armed, "START", sender="+15555550999", sid="SMn2")
+    assert len(events(world, o)) == n and stack.twilio.sent == []
 
 
-def test_start_is_refused_when_the_wording_the_person_agreed_to_names_no_text(world, stack, armed):
-    """confirmations.md section 7 (the latest grant's wording does not name sms: GrantScopeError, START recorded as a reply only,
-    refused text sent, reply to read)."""
-    o = world.a
-    voice_only = world.register_wording(o, "Acme may call you about offers. Reply STOP to end.", ["voice"], ["marketing"])
-    world.capture(o, P, channels=("voice",), wording=voice_only)
-    world.stop(o, P, channels=("voice",))
-    stack.twilio.sent.clear()
-    text_in(armed, "START", sender=P, sid="SMn2")
-    assert not [e for e in events(world, o, "grant") if e["recorded_by"] == "confirmations"]
-    assert any("We could not turn texts back on from this message. Contact us at" in m["body"] for m in stack.twilio.sent)
-    (got,) = replies(o.boss)
-    assert got["state"] == "to_read" and "GrantScopeError" in (got["reason"] or "")
-
-
-def test_start_lifts_a_stop_even_after_our_own_opt_out_reply(world, stack, armed, monkeypatch):
-    """confirmations.md section 7 (C2: our own replies do not count as contact since the stop, with the release rule's
-    no-contact-since-stop check switched on)."""
-    monkeypatch.setenv("CONSENTVAULT_RELEASE_REQUIRE_NO_CONTACT_SINCE_STOP", "1")
+def test_start_after_our_own_opt_out_reply_still_restores_nothing(world, stack, armed, monkeypatch):
     o = world.a
     world.capture(o, P)
     text_in(armed, "STOP", sender=P, sid="SMc1")
+    n = len(events(world, o))
     text_in(armed, "START", sender=P, sid="SMc2")
-    assert [e for e in events(world, o, "grant") if e["recorded_by"] == "confirmations"]
+    assert len(events(world, o)) == n and not [e for e in events(world, o, "grant") if e["recorded_by"] == "confirmations"]
 
 
 def test_our_replies_are_sent_per_the_table_and_suppressed_when_the_provider_replies_itself(world, stack, armed):
@@ -378,10 +363,9 @@ def test_our_replies_are_sent_per_the_table_and_suppressed_when_the_provider_rep
     text_in(armed, "STOP", sender=P, sid="SMh2")
     assert stack.twilio.sent[-1]["body"] == ("Acme Flooring: You are unsubscribed and will get no more texts or calls from us. "
                                              "Email is not affected. Reply START to get texts again.")
+    sent = len(stack.twilio.sent)
     text_in(armed, "START", sender=P, sid="SMh3")
-    assert [r["our_reply"] for r in replies(o.boss)] == ["sent", "sent", "sent"]  # help, stop, start: all sent by us
-    assert stack.twilio.sent[-1]["body"] == ("Acme Flooring: You will get texts from us again. Msg frequency varies. "
-                                             "Msg & data rates may apply. Reply STOP to opt out, HELP for help.")
+    assert len(stack.twilio.sent) == sent  # a START gets no answer from ConsentVault: the customer's own automation answers it
 
 
 def test_help_is_answered_at_most_once_per_contact_per_hour(world, stack, armed, db_follows_service_clock):
@@ -409,10 +393,10 @@ def test_with_the_provider_replying_itself_none_of_our_three_replies_are_sent(wo
     tin(a, "STOP", sender=P, sid="SMp2")
     tin(a, "START", sender=P, sid="SMp3")
     assert stack.twilio.sent == []
-    assert [e for e in events(world, o, "grant") if e["recorded_by"] == "confirmations"]
+    assert not [e for e in events(world, o, "grant") if e["recorded_by"] == "confirmations"]
     assert len(replies(o.boss)) == 3
     by_verdict = {r["verdict"]: r for r in replies(o.boss)}
-    assert {v: by_verdict[v]["our_reply"] for v in ("help", "stop", "start")} == {"help": "provider_replied", "stop": "provider_replied", "start": "provider_replied"}
+    assert {v: by_verdict[v]["our_reply"] for v in ("help", "stop")} == {"help": "provider_replied", "stop": "provider_replied"}
 
 
 HELP_TEXT = ("Acme Flooring: Help: help@acme.example, +18135550100. Reply STOP to opt out of texts and calls. "
@@ -435,10 +419,10 @@ def test_replies_follow_the_organization_status(world, stack, armed, status, hel
     text_in(armed, "HELP", sender=P, sid="SMo1")
     text_in(armed, "STOP", sender=P, sid="SMo2")
     text_in(armed, "START", sender=P, sid="SMo3")
-    expected = ([HELP_TEXT] if help_sent else []) + ([STOP_TEXT] if stop_sent else []) + ([START_TEXT] if start_sent else [])
+    expected = ([HELP_TEXT] if help_sent else []) + ([STOP_TEXT] if stop_sent else [])  # a START is never answered by ConsentVault
     assert [m["body"] for m in stack.twilio.sent] == expected
-    assert [r["our_reply"] for r in sorted(replies(o.boss), key=lambda r: r["received_at"])] == [
-        "sent" if help_sent else "skipped", "sent" if stop_sent else "skipped", "sent" if start_sent else "skipped"]
+    assert [r["our_reply"] for r in sorted(replies(o.boss), key=lambda r: r["received_at"])][:2] == [
+        "sent" if help_sent else "skipped", "sent" if stop_sent else "skipped"]
 
 
 def test_replies_are_not_sent_when_registration_is_not_marked_except_the_opt_out(world, stack, armed):
@@ -471,7 +455,7 @@ def test_reply_messages_are_contact_log_rows_with_their_own_outcomes(world, stac
     text_in(armed, "STOP", sender=P, sid="SMq2")
     text_in(armed, "START", sender=P, sid="SMq3")
     got = sorted(r["outcome"] for r in world.sql(o, "SELECT outcome FROM consentvault.contact_log WHERE org_id = %s AND recorded_by = 'confirmations'", (o.org_id,)))
-    assert got == ["help_reply", "optout_reply", "start_reply"]
+    assert got == ["help_reply", "optout_reply"]  # a START gets no reply from ConsentVault
 
 
 # ---- public pages --------------------------------------------------------------------------------------------------------

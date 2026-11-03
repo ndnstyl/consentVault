@@ -44,19 +44,41 @@ def _permission(server, contact="%2B12125550101"):
 STOP = {"contact": "+12125550101", "event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"], "method": "keyword"}
 
 
-def test_stop_then_start_then_a_byte_identical_stop_makes_a_second_stop(server, disclosure, conn):
+def test_stop_then_a_start_text_then_a_byte_identical_stop_the_stop_holds_throughout_and_start_writes_no_event(server, disclosure, conn):
     now = int(time.time())
+    assert _grant_first(server, disclosure, now - 60)
     assert _signed(server, STOP, now - 30)[0] == 201
-    start = _grant(disclosure)
-    start["contact_verification"] = "inbound_keyword"
-    start.update(method="keyword", inbound_message="START")
-    from test_api import VERIFIED_SECRET
-    assert _post(server, start, secret=VERIFIED_SECRET, ts=now - 20)[0] == 201
-    assert _permission(server)["allowed"] is True
-    assert _signed(server, STOP, now - 10)[0] == 201  # byte for byte the same body as the first stop, a new request
     assert _permission(server)["allowed"] is False
-    stops = conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE event_type = 'revoke'").fetchone()["n"]
-    assert stops == 2
+    start = {"contact": "+12125550101", "event_type": "grant", "channels": ["sms"], "purposes": ["marketing"], "method": "keyword",
+             "contact_verification": "inbound_keyword", "inbound_message": "START", "checked": True, "disclosure_sha256": disclosure}
+    from test_api import VERIFIED_SECRET
+    posts, events = len(_posts(conn)), conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"]
+    assert _post(server, start, secret=VERIFIED_SECRET, ts=now - 20)[0] == 201
+    assert len(_posts(conn)) == posts + 1  # one raw post
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"] == events  # and no event
+    assert _facts(conn, _posts(conn)[-1]["post_id"])["event_not_derived"] == "a_text_is_not_consent"
+    assert _permission(server)["allowed"] is False
+    assert _signed(server, STOP, now - 10)[0] == 201  # byte for byte the first stop, a new request: recorded
+    assert _permission(server)["allowed"] is False
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE event_type = 'revoke'").fetchone()["n"] == 2
+
+
+def _grant_first(server, disclosure, ts):
+    return _signed(server, _grant(disclosure), ts)[0] == 201
+
+
+def test_stop_then_a_re_engagement_form_grant_then_a_byte_identical_stop_is_recorded_and_the_check_answers_stopped(server, disclosure, conn):
+    now = int(time.time())
+    assert _grant_first(server, disclosure, now - 80)
+    assert _signed(server, STOP, now - 60)[0] == 201
+    form = _grant(disclosure)
+    form["contact_verification"] = "otp"  # the person confirmed their number on the customer's re-engagement form
+    from test_api import VERIFIED_SECRET
+    assert _post(server, form, secret=VERIFIED_SECRET, ts=now - 40)[0] == 201
+    assert _permission(server)["allowed"] is True
+    assert _signed(server, STOP, now - 20)[0] == 201
+    assert _permission(server)["allowed"] is False
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE event_type = 'revoke'").fetchone()["n"] == 2
 
 
 def test_a_web_grant_then_a_revoke_then_the_identical_grant_and_revoke_again_follow_the_person_each_time(server, disclosure, conn):

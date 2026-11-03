@@ -60,21 +60,17 @@ def test_stop_everything_from_an_email_link_also_stops_the_same_persons_phone(wo
     assert b"Already stopped" in again.raw
 
 
-def test_a_start_the_provider_does_not_confirm_leaves_the_stop_in_place_with_a_named_reason(world, stack, armed):
+def test_a_start_whatever_the_provider_says_is_stored_and_restores_nothing(world, stack, armed):
     from contract_world.confirm import replies, text_in
     o = world.a
     world.capture(o, NY)
     world.stop(o, NY)
     stack.twilio.unknown_messages.add("SMfake")
     text_in(armed, "START", sender=NY, sid="SMfake")
-    assert [e for e in world.sql(o, "SELECT 1 FROM consentvault.event WHERE org_id = %s AND recorded_by = 'confirmations'", (o.org_id,))] == []
-    (got,) = replies(o.boss)
-    assert got["state"] == "to_read" and "provider_unconfirmed" in got["reason"]
-    stack.twilio.unreachable = False
     text_in(armed, "START", sender=NY, sid="SMreal")
-    assert world.sql(o, "SELECT 1 FROM consentvault.event WHERE org_id = %s AND recorded_by = 'confirmations'"
-                        " AND event_type = 'grant'", (o.org_id,))
-    assert ("SMreal", NY) in stack.twilio.asked_about
+    assert world.sql(o, "SELECT 1 FROM consentvault.event WHERE org_id = %s AND recorded_by = 'confirmations'", (o.org_id,)) == []
+    assert ("SMreal", NY) not in stack.twilio.asked_about  # the provider is not even asked: a text is never consent
+    assert [r["state"] for r in replies(o.boss)] == ["start", "start"]
 
 
 def test_erasing_a_contact_cancels_its_queued_sends_and_leaves_no_sealed_number_in_a_queued_reply(world, stack, armed):

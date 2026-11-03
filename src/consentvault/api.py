@@ -354,6 +354,8 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
             payload.pop("brand_ids", None)
             payload["payload_sha256"] = hashlib.sha256(body).hexdigest()
         fields = {k: payload[k] for k in _EVENT_FIELDS if k in payload}
+        if fields.get("contact_verification") == "inbound_keyword" or "inbound_message" in payload:
+            return "a_text_is_not_consent", None  # a START (or any text) restores nothing; the way back is a form
         for required in ("contact", "event_type", "channels", "purposes"):
             if required not in fields:
                 return f"missing_field:{required}", None
@@ -1186,6 +1188,8 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                                                  brand_ids=owner.brand_ids if owner else None, source="site_key")
         else:
             payload = {k: v for k, v in payload.items() if k in _CAPTURE_KEYS}
+        if payload.get("contact_verification") == "inbound_keyword" or "inbound_message" in payload:
+            return "a_text_is_not_consent", None  # a START (or any text) restores nothing; the way back is a form
         try:
             req = parse_capture(payload, body, claims.scopes)
             token = self._tenant_token(claims)

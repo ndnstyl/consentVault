@@ -365,17 +365,15 @@ def test_the_capture_edges_secret_cannot_claim_a_verified_contact_but_the_post_i
     assert _facts(conn, _posts(conn)[0]["post_id"])["event_not_derived"] == "verification_key_required"
 
 
-def test_an_inbound_start_keyword_grant_lifts_the_stop_only_for_a_start_message(server, conn, disclosure):
+def test_an_inbound_start_text_is_stored_and_never_a_grant_or_a_lift(server, conn, disclosure):
     _own_stop(conn)
     payload = _grant(disclosure)
-    payload.update({"contact_verification": "inbound_keyword", "method": "keyword", "inbound_message": "what is this"})
+    payload.update({"contact_verification": "inbound_keyword", "method": "keyword", "inbound_message": "START"})
+    n = conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"]
     status, body, _ = _post(server, payload, secret=VERIFIED_SECRET)
     _stored(status, body)
-    assert _facts(conn, _posts(conn)[0]["post_id"])["event_not_derived"] == "InvalidEventError"
-    payload["inbound_message"] = "START"
-    status, body, _ = _post(server, payload, secret=VERIFIED_SECRET)
-    _stored(status, body)
-    assert conn.execute("SELECT release_outcome FROM consentvault.event WHERE event_type = 'release'").fetchone()["release_outcome"] == "released"
+    assert _facts(conn, _posts(conn)[0]["post_id"])["event_not_derived"] == "a_text_is_not_consent"
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"] == n
 
 
 def test_wording_on_the_wire_is_stored_exactly_as_sent_and_the_registered_wording_is_not_replaced(server, conn, disclosure):

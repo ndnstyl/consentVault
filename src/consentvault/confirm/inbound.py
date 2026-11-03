@@ -114,7 +114,17 @@ class InboundMixin:
         if n >= FAILURES_TO_ALARM:
             self._alarm_raise(conn, "inbound_signature_failures", {"account_id": str(account_id), "count": n}, now)
 
+    def _store_raw(self, conn, org, account_id, headers: dict, body: bytes) -> None:
+        """The request, exactly as received, is the first thing written (before any check). Raises StoreUnavailable."""
+        from ..rawpost import Fact, RawPostWriter, RawRequest
+
+        req = RawRequest(intake="sms_reply", method="POST", path=f"/v1/connectors/sms/{account_id}", query="",
+                         headers=tuple((str(k), str(v)) for k, v in (headers or {}).items()), body=bytes(body),
+                         facts=(Fact("vault", "account_id", str(account_id)),))
+        RawPostWriter(crypto=self.crypto).write(conn, lambda c: c.transaction(), req)
+
     def _inbound(self, conn, org, account_id, headers: dict, body: bytes, now: datetime, pending: list) -> Reply:
+        self._store_raw(conn, org, account_id, headers, body)
         acct = conn.execute("SELECT org_id, account_id, status, provider, sender_ct, inbound_url, provider_replies, inbound_verified_at,"
                             " disconnected_at FROM consentvault.sending_account WHERE org_id = %s AND account_id = %s",
                             (org, account_id)).fetchone()
@@ -227,18 +237,10 @@ class InboundMixin:
             if settings:
                 queued.append(("help_reply", texts.help_reply(settings["organization_name"], settings["help_email"], settings["help_phone"])))
         elif action == "start":
+            # A START text restores nothing (ruling: the way back is a form the person fills in). It is stored as received (the
+            # raw post and this reply row), writes no event and lifts no stop; the customer's own automation answers it with a
+            # link to its re-engagement form, and a grant from that form is the only way consent returns.
             state = "start"
-            if any(self._stop_on_record(conn, org, fp, ch) for ch in ("sms", "voice", "artificial_voice")):
-                granted, why = self._lift_stop(conn, org, acct, norm, fp, text, sid)
-                if granted is not None:
-                    event_id = uuid.UUID(granted)
-                    if settings:
-                        queued.append(("start_reply", texts.start_reply(settings["organization_name"])))
-                else:
-                    state, reason = "to_read", f"{reason}; texts not turned back on: {why}"[:300]
-                    if settings:
-                        queued.append(("start_reply", texts.start_refused_reply(settings["organization_name"], settings["help_email"],
-                                                                                  settings["help_phone"])))
         conn.execute(
             "INSERT INTO consentvault.confirmation_reply (org_id, reply_id, account_id, from_fp, matched_record_id, body_ct, from_ct,"
             " key_kind, received_at, provider_message_id, verdict, reason, matched_words, state, event_id)"
@@ -250,32 +252,6 @@ class InboundMixin:
         for kind, message in queued:
             pending.append(self._queue_reply(conn, org, kind=kind, reply_id=reply_id, fp=fp, dest=norm, body=message, now=now))
         return Reply(200, {"status": state})
-
-    def _lift_stop(self, conn, org, acct: dict, norm: str, fp: str, text: str, sid: str) -> tuple[Optional[str], str]:
-        """START after a stop: the person's own message is a keyword grant naming texts, and the core's release rule decides.
-        Returns (the grant's event id, "") when it lifted the stop, else (None, why). Nothing is written when it did not."""
-        if not self._provider_holds(conn, org, acct, sid, norm):
-            return None, "provider_unconfirmed"
-        last = conn.execute("SELECT disclosure_sha256, brand_ids, purposes FROM consentvault.event WHERE org_id = %s AND contact_fp = %s"
-                            " AND event_type = 'grant' ORDER BY seq DESC LIMIT 1", (org, fp)).fetchone()
-        if last is None:
-            return None, "no_held_disclosure"
-        try:
-            with conn.transaction():  # a savepoint: a START that lifts nothing leaves no grant behind
-                ev = tenant_capture(conn, self.crypto, contact=norm, event_type="grant", channels=["sms"],
-                                    purposes=list(last["purposes"]), method="keyword", origin="consumer", checked=True,
-                                    contact_verification="inbound_keyword", inbound_message=text,
-                                    disclosure_sha256=last["disclosure_sha256"], brand_ids=list(last["brand_ids"] or []),
-                                    session_ref=f"twilio:{sid}", recorded_by=RECORDED_BY,
-                                    source_id=self._system_source(conn, SYSTEM_REPLIES))
-                result = release_after_tenant_grant(conn, self.crypto, ev.event_id)
-                if "sms" not in result.released_channels:
-                    raise _NotLifted(sorted(result.refusals) or ["not_released"])
-        except _NotLifted as refused:
-            return None, ",".join(refused.causes)
-        except (InvalidEventError, EmptyConsentError, UncheckedConsentError, UnknownDisclosureError) as exc:
-            return None, type(exc).__name__
-        return ev.event_id, ""
 
     def _provider_holds(self, conn, org, acct: dict, sid: str, number: str) -> bool:
         """A stop is lifted only on a message the provider itself confirms it received from this number. Anything else (no way to

@@ -77,8 +77,9 @@ event, so the permission answer keeps working; whatever the vault cannot turn in
 Any other field, including `disclosure_text`, is stored in the post as sent and used for nothing else. Events are ordered by
 arrival (`seq`), not by `captured_at`.
 
-A consumer grant lifts the contact's own earlier stop only when its `contact_verification` is `otp` or `inbound_keyword`. A
-plain web-form grant (`none`) leaves the stop in force and a pending `release` row appears in `review`.
+A consumer grant lifts the contact's own earlier stop only when its `contact_verification` is `otp`: the person confirmed their
+number on a form. A plain web-form grant (`none`) leaves the stop in force and a pending `release` row appears in `review`. A
+claim of `inbound_keyword`, or any `inbound_message`, is stored and makes no event: a text is never consent.
 
 ## `GET /v1/permission`
 
@@ -92,6 +93,25 @@ class>"`; a caller that reads only `allowed` is never told yes by a failure.
 ## `GET /v1/proof`
 
 `?contact=` with the bearer token. Answers the same structure as `consentvault proof`.
+
+## A START text restores nothing: wiring it to a re-engagement form
+
+ConsentVault never treats a text as consent. A START (or UNSTOP, YES, or any other inbound text) is stored exactly as it was
+received, as its own post, and writes no consent event and lifts no stop. A person who stopped gets back on the list only by
+consenting again on a form.
+
+To give people a way back, wire it in your own messaging automation:
+
+1. Build a re-engagement form on your own site: the person types their number, ticks the consent box (left as it is by default
+   unticked) and submits. Send it through the capture widget or the signed API like any other capture, so the new post carries
+   the full proof: address, device, browser, the exact consent language shown, the box as left and the time.
+2. Set your messaging provider (or your own automation) to answer an inbound START with a link to that form.
+3. Where you confirm the person controls the number (a one-time code on the form), send the grant with
+   `contact_verification` set to `otp` and signed with the verified-grant secret. That grant, and only that kind of record, lifts
+   the person's earlier stop.
+
+Whether a prior express written consent or an established business relationship stands is for your own counsel; ConsentVault
+records what was sent and never decides it.
 
 ---
 

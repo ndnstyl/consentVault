@@ -113,7 +113,7 @@ def test_an_edge_capture_lands_in_the_organisation_its_site_key_belongs_to(hw):
     assert len(_posts_of(hw, a.org)) == posts_a + 1 and len(_posts_of(hw, b.org)) == posts_b
     assert body["receipt"]["org_id"] == str(a.org.org_id)
     post = _posts_of(hw, a.org)[-1]
-    assert (post["intake"], post["headers_presented_by"]) == ("edge_site_key", "edge-worker")
+    assert (post["intake"], post["headers_presented_by"]) == ("edge_site_key", "vault-http")  # the signed envelope, as received
     facts = _facts(hw, post)
     assert facts["site_key_state"] == "active" and facts["edge_envelope_signature"] == "verified"
     assert facts["client_ip"] == "203.0.113.9" and facts["origin_on_list"] in (True, False)
@@ -137,8 +137,8 @@ def test_a_site_key_never_reaches_another_organisations_source_or_brand(hw):
     status, body = _edge_post(hw, _envelope(key, _edge_body(a, key, source_id=str(b.org.source_id), brand_ids=[str(b.org.brand_id)])))
     assert status == 201 and body["receipt"]["org_id"] == str(a.org.org_id)
     # the browser's own words are stored as sent; the event uses the key's source and brands, never the browser's
-    from .cloud_harness import post_body
-    assert json.loads(post_body(hw.t, _posts_of(hw, a.org)[-1]))["source_id"] == str(b.org.source_id)
+    from .cloud_harness import inner_body
+    assert json.loads(inner_body(hw.t, _posts_of(hw, a.org)[-1]))["source_id"] == str(b.org.source_id)
     with hw.t.superuser() as su:
         ev = su.execute("SELECT source_id, brand_ids FROM consentvault.event WHERE org_id = %s ORDER BY seq DESC LIMIT 1", (a.org.org_id,)).fetchone()
     assert str(ev["source_id"]) == str(a.org.source_id) and [str(x) for x in ev["brand_ids"]] == [str(a.org.brand_id)]
@@ -175,9 +175,12 @@ def test_an_unknown_revoked_or_unsigned_edge_capture_is_stored_with_the_reason_a
 def test_a_stale_edge_timestamp_is_a_fact_not_a_refusal(hw):
     a = hw.cloud.a
     key = _site_key(hw, a)
+    before = len(_events_of(hw, a.org))
     status, body = _edge_post(hw, _envelope(key, _edge_body(a, key)), ts=int(time.time()) - 3600)
     assert status == 201  # the signature covers the timestamp it was made with, so a stale one is still verified, and flagged
-    assert _facts(hw, _posts_of(hw, a.org)[-1]).get("edge_timestamp") in ("stale", None)
+    facts = _facts(hw, _posts_of(hw, a.org)[-1])
+    assert facts["edge_timestamp"] == "stale" and facts["event_not_derived"] == "stale_timestamp"
+    assert len(_events_of(hw, a.org)) == before  # an old signed request makes no consent event
 
 
 def test_a_replayed_edge_capture_is_stored_again_with_the_fact_and_makes_one_event(hw):

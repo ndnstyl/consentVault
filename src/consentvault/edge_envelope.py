@@ -57,25 +57,41 @@ def looks_like_envelope(body: bytes) -> bool:
     return isinstance(parsed, dict) and "body_b64" in parsed and "headers" in parsed
 
 
+def _text(env: dict, name: str) -> str:
+    value = env.get(name)
+    if not isinstance(value, str):
+        raise ValueError(f"the envelope's {name} is not text")
+    return value
+
+
 def unpack(body: bytes) -> Unpacked:
-    """The browser's request inside a signed envelope. Raises ``EnvelopeUnreadable`` (the caller stores the signed bytes)."""
+    """The browser's request inside a signed envelope, read strictly: nothing is defaulted and no type is changed. An envelope
+    that is not shaped as the contract says raises ``EnvelopeUnreadable`` (the caller still stores the signed bytes)."""
     try:
         env = json.loads(body.decode("utf-8"))
         if not isinstance(env, dict):
             raise ValueError("the envelope is not an object")
-        raw = base64.b64decode(env.get("body_b64", ""), validate=True)
-        headers = tuple((str(n), str(v)) for n, v in env.get("headers", []))
+        raw = base64.b64decode(_text(env, "body_b64"), validate=True)
+        raw_headers = env.get("headers")
+        if not isinstance(raw_headers, list) or not all(
+                isinstance(h, list) and len(h) == 2 and all(isinstance(x, str) for x in h) for h in raw_headers):
+            raise ValueError("the envelope's headers are not a list of name and value pairs")
+        facts = env.get("edge_facts")
+        if not isinstance(facts, dict):
+            raise ValueError("the envelope's edge_facts is not an object")
+        claimed = env.get("body_sha256")
+        if claimed is not None and not isinstance(claimed, str):
+            raise ValueError("the envelope's body_sha256 is not text")
+        method, path, query = _text(env, "method"), _text(env, "path"), _text(env, "query")
     except (ValueError, UnicodeDecodeError, TypeError, binascii.Error) as exc:
         raise EnvelopeUnreadable(f"the edge envelope could not be read: {type(exc).__name__}") from exc
-    facts = env.get("edge_facts") if isinstance(env.get("edge_facts"), dict) else {}
     seen = None
     if isinstance(facts.get("edge_received_at"), str):
         try:
             seen = datetime.fromisoformat(facts["edge_received_at"].replace("Z", "+00:00"))
         except ValueError:  # loud-failure-exempt: the edge's own text is kept whole as the edge fact edge_received_at
             seen = None
-    return Unpacked(str(env.get("method") or "POST"), str(env.get("path") or "/"), str(env.get("query") or ""), headers, raw,
-                    facts, env.get("body_sha256") if isinstance(env.get("body_sha256"), str) else None, seen)
+    return Unpacked(method, path, query, tuple((n, v) for n, v in raw_headers), raw, facts, claimed, seen)
 
 
 def widget_event(browser: dict, headers, edge_facts: dict, *, source_id=None, brand_ids=None, source: str | None = None) -> dict:

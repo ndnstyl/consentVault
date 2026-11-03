@@ -4,7 +4,7 @@
 // or drop the request. A request that arrives while the vault is down waits in the edge's durable store and is told so.
 
 import {
-  deliverBatch, durableFrom, storeAndAnswer, type CaptureDeps as EnvelopeDeps, type Durable, type QueueLike, type QueueMessage, type R2Like,
+  alarmDeadLetters, deliverBatch, durableFrom, storeAndAnswer, type CaptureDeps as EnvelopeDeps, type Durable, type QueueLike, type QueueMessage, type R2Like,
 } from "./envelope.ts";
 
 export interface SiteKeyRecord {
@@ -24,6 +24,7 @@ export interface CaptureEnv {
   DEFAULT_RATE_LIMIT_PER_MINUTE?: string;
   BODY_STORE?: R2Like; // optional: where a request waits while the vault is down (with CAPTURE_QUEUE)
   CAPTURE_QUEUE?: QueueLike;
+  DEAD_LETTER_QUEUE?: string; // the name of the dead-letter queue: a message there raises an alarm
 }
 
 export interface RateLimiter {
@@ -137,8 +138,10 @@ export default {
     return handleCapture(request, env, { fetch: (...a) => fetch(...a), now: () => new Date(), rateLimiter: limiter, durable: durableFrom(env) });
   },
   // The queue consumer: delivers waiting requests to the vault in arrival order.
-  async queue(batch: { messages: QueueMessage[] }, env: CaptureEnv): Promise<void> {
-    await deliverBatch(batch.messages, env, { fetch: (...a) => fetch(...a), now: () => new Date() });
+  async queue(batch: { queue?: string; messages: QueueMessage[] }, env: CaptureEnv): Promise<void> {
+    const deps = { fetch: (...a: Parameters<typeof fetch>) => fetch(...a), now: () => new Date() };
+    if (env.DEAD_LETTER_QUEUE && batch.queue === env.DEAD_LETTER_QUEUE) return alarmDeadLetters(batch.messages, deps);
+    await deliverBatch(batch.messages, env, deps);
   },
 };
 

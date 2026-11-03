@@ -109,13 +109,17 @@ test("a WAF verdict on a capture route is a fact, not a block", async () => {
   assert.equal(facts(calls).waf.code, "waf_blocked");
 });
 
-test("an origin that cannot be reached on a capture route is the one answer that says nothing was stored", async () => {
+test("an origin that does not answer a capture is reported as unknown whether stored, with the fingerprint to look up", async () => {
   const alarms: string[] = [];
   const { d } = mk(201, true);
   const res = await handleGateway(r("/v1/events", { method: "POST", headers: { authorization: BEARER }, body: "{}" }), ENV, { ...d, alarm: (n) => alarms.push(n) });
   assert.equal(res.status, 503);
-  assert.deepEqual(await res.json(), { stored: false, error: "store_unavailable", detail: "the record store could not be written; nothing was stored; send again" });
-  assert.deepEqual(alarms, ["capture.store_unavailable"]);
+  const body = (await res.json()) as { stored: string; error: string; body_sha256: string; detail: string };
+  assert.equal(body.stored, "unknown");
+  assert.equal(body.error, "store_unknown");
+  assert.equal(body.body_sha256, "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a");
+  assert.match(body.detail, /not known whether/);
+  assert.deepEqual(alarms, ["capture.store_unknown"]);
   const noSettings = await handleGateway(r("/v1/events", { method: "POST", body: "{}" }), { ...ENV, ORIGIN_URL: "" }, { ...d, alarm: (n) => alarms.push(n) });
   assert.equal(noSettings.status, 503);
 });

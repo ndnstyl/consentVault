@@ -1,5 +1,6 @@
 """Edge -> API seam: the real worker logic under node, forwarding into a live ``consentvault serve`` thread."""
 
+import base64
 import hashlib
 import json
 import shutil
@@ -80,12 +81,13 @@ def test_the_edge_stores_both_posts_and_only_the_checked_box_becomes_a_grant(liv
     assert no["status"] == 201 and no["body"]["stored"] is True
     # the edge forwards the browser's exact bytes; the unchecked post is stored whole and is not made a grant
     assert _envelope_body(ok) == checked_raw.encode() and _envelope_body(no) == unchecked_raw.encode()
-    assert ok["body"]["body_sha256"] == hashlib.sha256(checked_raw.encode()).hexdigest()
-    assert no["body"]["body_sha256"] == hashlib.sha256(unchecked_raw.encode()).hexdigest()
 
     posts = conn.execute("SELECT * FROM consentvault.raw_post ORDER BY seq").fetchall()
-    assert [bytes(p["body_ct"]) for p in posts] == [checked_raw.encode(), unchecked_raw.encode()]
-    assert all(p["intake"] == "edge_single" and p["headers_presented_by"] == "edge-worker" for p in posts)
+    # the post is the signed envelope exactly as received; the browser's bytes are inside it
+    inner = [base64.b64decode(json.loads(bytes(p["body_ct"]))["body_b64"]) for p in posts]
+    assert inner == [checked_raw.encode(), unchecked_raw.encode()]
+    assert [p["body_sha256"] for p in posts] == [ok["body"]["body_sha256"], no["body"]["body_sha256"]]
+    assert all(p["intake"] == "edge_single" for p in posts)
     assert posts[0]["edge_received_at"] is not None
     consent = [json.loads(bytes(r["values_ct"])) for r in conn.execute(
         "SELECT values_ct FROM consentvault.raw_post_field WHERE field = 'consent' ORDER BY (SELECT seq FROM consentvault.raw_post p"

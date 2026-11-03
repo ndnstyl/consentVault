@@ -82,8 +82,9 @@ def read_after_commit(writer: RawPostWriter, conn: psycopg.Connection, enter: Ca
         out.failures.append(f"field_map:{type(exc).__name__}")
         return out
     out.map_label = fmap.label if fmap else None
-    content_type = next((v for n, v in req.headers if n.lower() == "content-type"), None)
-    out.readings = extract.read_fields(bytes(req.body), content_type, fmap)
+    read_headers = req.read_headers if req.read_headers is not None else req.headers
+    content_type = next((v for n, v in read_headers if n.lower() == "content-type"), None)
+    out.readings = extract.read_fields(bytes(req.read_body if req.read_body is not None else req.body), content_type, fmap)
     try:
         extract.write_readings(conn, enter, org=org, post_id=stored.post_id, map_version=fmap.map_version if fmap else 0,
                                readings=out.readings, data_key=stored.data_key)

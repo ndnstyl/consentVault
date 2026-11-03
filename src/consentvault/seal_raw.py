@@ -27,7 +27,7 @@ RAW_SEAL_VERSION = HASH_VERSION
 
 
 def _row_cts(row: dict) -> tuple[dict, dict]:
-    ct = {"query_ct": bytes(row["query_ct"]), "headers_ct": bytes(row["headers_ct"]),
+    ct = {"query_ct": bytes(row["query_ct"]), "headers_ct": bytes(row["headers_ct"]), "path_ct": bytes(row["path_ct"]),
           "body_ct": bytes(row["body_ct"]) if row["body_ct"] is not None else None}
     return canonical_row(row, ct), ct
 

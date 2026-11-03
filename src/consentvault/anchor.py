@@ -136,7 +136,7 @@ def _post(url: str, body: str) -> None:
 
 def _anchor_raw_posts(conn: psycopg.Connection, sink: str, when: datetime, org: str, tenant: bool) -> dict | None:
     """Anchor the head of the organisation's raw-post chain the way the event head is anchored: verified first, written to the
-    sink (a file or a webhook; an S3 object lock sink keeps the event heads only), then recorded in raw_post_chain_head.
+    sink (a file, a webhook or an S3 object lock bucket), then recorded in raw_post_chain_head.
     None when the organisation has no raw post yet."""
     from .rawpost import verify_raw_chain
 
@@ -152,11 +152,12 @@ def _anchor_raw_posts(conn: psycopg.Connection, sink: str, when: datetime, org: 
     if tenant:
         record["org_id"] = org
     line = json.dumps(record, sort_keys=True, separators=(",", ":"))
-    if not is_s3(sink):
-        if _is_url(sink):
-            _post(sink, line)
-        else:
-            _write_file(sink, line)
+    if is_s3(sink):
+        publish_s3(sink, org, record)  # a write-once object under its own folder, so the outside record exists for raw heads too
+    elif _is_url(sink):
+        _post(sink, line)
+    else:
+        _write_file(sink, line)
     try:
         row = conn.execute(
             "INSERT INTO consentvault.raw_post_chain_head (seq, row_hash, sink, anchored_at) VALUES (%s, %s, %s, %s)"

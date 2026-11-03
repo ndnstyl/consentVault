@@ -316,3 +316,12 @@ test("a queued body that is missing from the store or a message that cannot be r
   assert.deepEqual(garbage.log, ["retry"]);
   assert.deepEqual(alarms, ["capture.queue_unreadable"]);
 });
+
+test("a message that reached the dead-letter queue raises an alarm and is acknowledged, never dropped quietly", async () => {
+  const alarms: string[] = [];
+  const m = msg(JSON.stringify({ body_key: "bodies/x", envelope: {}, queued_at: NOW.toISOString() }));
+  const { alarmDeadLetters } = await import("../src/envelope.ts");
+  alarmDeadLetters([m, msg("not json")], { ...mk({ alarms }).d });
+  assert.deepEqual(alarms, ["capture.queue_dead_letter", "capture.queue_dead_letter"]);
+  assert.deepEqual(m.log, ["ack"]);
+});

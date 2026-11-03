@@ -53,6 +53,76 @@ class Downstream:
                 self._cv.wait(left)
 
 
+class StoreRefusedRequests:
+    """For a ``BaseHTTPRequestHandler``: the standard library refuses some requests before any handler runs (a request line over
+    64 KiB, more than 100 headers, a line that does not parse, a version it does not speak, a method it has no ``do_`` for).
+    On a capture path, and for anything that did not parse at all, those are stored as received instead and answered with the
+    receipt. A subclass names ``_capture`` (the storing method) and ``_is_capture_target`` (whether the path is a capture path)."""
+
+    _parsing = False
+    _extra_facts: tuple = ()
+
+    def handle_one_request(self):
+        import email.message
+
+        try:
+            self.raw_requestline = self.rfile.readline(65537)
+            self._extra_facts = ()
+            if len(self.raw_requestline) > 65536:
+                self.requestline = self.request_version = self.command = ""
+                self.headers = email.message.Message()
+                self._store_refused(414)
+                return
+            if not self.raw_requestline:
+                self.close_connection = True
+                return
+            self._parsing = True
+            try:
+                parsed = self.parse_request()
+            finally:
+                self._parsing = False
+            if not parsed:
+                return  # send_error stored it
+            method = getattr(self, "do_" + self.command, None)
+            if method is None:
+                if self._is_capture_target():
+                    self._extra_facts = (Fact("vault", "method_without_a_handler", self.command),)
+                    self._capture()
+                else:
+                    self.send_error(501, "Unsupported method (%r)" % self.command)
+                    return
+            else:
+                method()
+            self.wfile.flush()
+        except TimeoutError:
+            self.log_error("Request timed out")
+            self.close_connection = True
+
+    def send_error(self, code, message=None, explain=None):
+        if self._parsing and code in (400, 414, 431, 501, 505):
+            self._parsing = False
+            self._store_refused(code)
+            return
+        super().send_error(code, message, explain)
+
+    def _store_refused(self, code: int) -> None:
+        """Store a request the standard library refused before dispatch: the request line as received, the headers it managed
+        to read, and the body when it could be read; the refusal is a fact."""
+        import base64
+        import email.message
+
+        line = bytes(getattr(self, "raw_requestline", b"") or b"")
+        tokens = line.decode("latin-1").split()
+        if getattr(self, "headers", None) is None:
+            self.headers = email.message.Message()
+        self.command = (tokens[0] if tokens else "") or "UNKNOWN"
+        self.path = tokens[1] if len(tokens) > 1 else ""
+        self._extra_facts = (Fact("vault", "refused_by_the_http_server", {"status": code}),
+                             Fact("vault", "raw_request_line_b64", base64.b64encode(line[:65536]).decode("ascii")))
+        self.close_connection = True
+        self._capture()
+
+
 def is_capture_path(path: str, prefixes: tuple[str, ...]) -> bool:
     return any(path == p or path.startswith(p.rstrip("/") + "/") for p in prefixes)
 

@@ -26,6 +26,7 @@ from urllib.parse import unquote_to_bytes
 
 import psycopg
 
+from .errors import ConsentVaultError
 from .ledger import canonical_dumps
 
 FIELDS = ("consent", "decision_time", "wording", "wording_hash", "contact", "seller", "form_version", "checkbox_default",
@@ -33,6 +34,10 @@ FIELDS = ("consent", "decision_time", "wording", "wording_hash", "contact", "sel
 SENT, NOT_SENT, MANY, UNMAPPED, UNREADABLE = "sent", "not_sent", "sent_more_than_once", "unmapped", "body_unreadable"
 COL_VALUES = "raw_post_field.values"
 EXTRACTOR_VERSION = 1
+
+
+class ReadingNotWritten(ConsentVaultError):
+    """No reading of this field was written for this post (never "not sent": that is a reading the reader made)."""
 
 
 class Unreadable(Exception):
@@ -46,6 +51,7 @@ _STR = re.compile(rb'"(?:[^"\\]|\\.)*"', re.DOTALL)
 _LIT = re.compile(rb"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null")
 _SKIP = re.compile(rb'"(?:[^"\\]|\\.)*"|[\[\]{}]', re.DOTALL)
 _MAX_DEPTH = 400
+_DISPOSITION_NAME = re.compile(rb'(?:^|[\r\n;]|[;\s])\s*name\s*=\s*"((?:[^"\\]|\\.)*)"', re.I)
 
 
 def pointer_tokens(pointer: str) -> tuple[str, ...]:
@@ -190,7 +196,7 @@ def multipart_occurrences(body: bytes, content_type: str | None, names: Iterable
         head, sep, rest = chunk.partition(b"\r\n\r\n")
         if not sep:
             continue
-        nm = re.search(rb'name="((?:[^"\\]|\\.)*)"', head, re.I)
+        nm = _DISPOSITION_NAME.search(head)  # only the name parameter: filename="checked" is not the field called checked
         if nm is None:
             continue
         name = nm.group(1).decode("utf-8", "replace")
@@ -390,8 +396,8 @@ def write_readings(conn: psycopg.Connection, enter: Callable | None, *, org: uui
                                            tc.encrypt_field(data_key, org, f"{post_id}:{map_version}:{r.field}", COL_VALUES, raw))
             conn.execute(
                 "INSERT INTO consentvault.raw_post_field (org_id, post_id, map_version, field, state, values_ct, occurrences,"
-                " decision_time_parsed) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                (org, post_id, map_version, r.field, r.state, ct, r.occurrences, r.decision_time_parsed))
+                " extractor_version, decision_time_parsed) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (org, post_id, map_version, r.field, r.state, ct, r.occurrences, EXTRACTOR_VERSION, r.decision_time_parsed))
             n += 1
     return n
 
@@ -409,12 +415,13 @@ def read_stored_values(conn: psycopg.Connection, org: uuid.UUID | str, post_id: 
         + (" AND map_version = %s" if map_version is not None else "") + " ORDER BY map_version LIMIT 1",
         (org, post_id, field) + ((map_version,) if map_version is not None else ())).fetchone()
     if row is None:
-        return {"state": NOT_SENT, "map_version": None, "occurrences": 0, "values": [], "decision_time_parsed": None}
+        raise ReadingNotWritten(f"no reading of {field!r} was written for post {post_id}"
+                                + (f" under map version {map_version}" if map_version is not None else ""))
     values: list = []
     if row["values_ct"] is not None:
         blob = bytes(row["values_ct"])
         raw = blob if data_key is None else tc.decrypt_field(
             data_key, org, f"{post_id}:{row['map_version']}:{field}", COL_VALUES, blob)
         values = json.loads(raw)
-    return {"state": row["state"], "map_version": row["map_version"], "occurrences": row["occurrences"], "values": values,
+    return {"state": row["state"], "map_version": row["map_version"], "extractor_version": row["extractor_version"], "occurrences": row["occurrences"], "values": values,
             "decision_time_parsed": row["decision_time_parsed"]}

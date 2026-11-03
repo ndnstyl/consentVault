@@ -32,10 +32,13 @@ CREATE TABLE consentvault.raw_post (
     received_at          timestamptz NOT NULL,
     method               text NOT NULL,
     path                 text NOT NULL,
+    path_ct              bytea NOT NULL,
     query_ct             bytea NOT NULL,
     headers_ct           bytea NOT NULL,
     body_ct              bytea,
     body_object_id       uuid,
+    body_object_sha256   text CHECK (body_object_sha256 ~ '^[0-9a-f]{64}$'),
+    facts_sha256         text NOT NULL CHECK (facts_sha256 ~ '^[0-9a-f]{64}$'),
     body_bytes           bigint NOT NULL CHECK (body_bytes >= 0),
     body_sha256          text NOT NULL CHECK (body_sha256 ~ '^[0-9a-f]{64}$'),
     unusual_size         boolean NOT NULL,
@@ -170,6 +173,7 @@ CREATE TABLE consentvault.raw_post_fact (
     source      text NOT NULL,
     name        text NOT NULL,
     value_ct    bytea NOT NULL,
+    arrival_ordinal integer,   -- set for the facts known at arrival: their digest is part of the post's row hash
     recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (org_id, post_id, fact_id),
     FOREIGN KEY (org_id, post_id) REFERENCES consentvault.raw_post (org_id, post_id)
@@ -222,6 +226,7 @@ CREATE TABLE consentvault.raw_post_field (
     state                text NOT NULL CHECK (state IN ('sent', 'not_sent', 'sent_more_than_once', 'unmapped', 'body_unreadable')),
     values_ct            bytea,
     occurrences          integer NOT NULL CHECK (occurrences >= 0),
+    extractor_version    integer NOT NULL,
     decision_time_parsed timestamptz,
     extracted_at         timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (org_id, post_id, map_version, field),
@@ -306,6 +311,21 @@ $$;
 REVOKE ALL ON FUNCTION consentvault.mark_raw_post_seal_verified(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION consentvault.mark_raw_post_seal_verified(uuid) TO consentvault_app, consentvault_integrity;
 
+-- 6b. seen_payload: every body the vault has already seen, kept for good (a replay record that expires would let an old signed
+-- request be sent again and make a new consent event). A post whose body is already here derives no event.
+CREATE TABLE consentvault.seen_payload (
+    org_id      uuid NOT NULL DEFAULT consentvault.current_org() REFERENCES consentvault.organization (org_id),
+    body_sha256 text NOT NULL CHECK (body_sha256 ~ '^[0-9a-f]{64}$'),
+    post_id     uuid NOT NULL,
+    seen_at     timestamptz NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (org_id, body_sha256),
+    FOREIGN KEY (org_id, post_id) REFERENCES consentvault.raw_post (org_id, post_id)
+);
+CREATE TRIGGER seen_payload_append_only BEFORE UPDATE OR DELETE ON consentvault.seen_payload
+    FOR EACH ROW EXECUTE FUNCTION consentvault.refuse_change();
+CREATE TRIGGER seen_payload_no_truncate BEFORE TRUNCATE ON consentvault.seen_payload
+    FOR EACH STATEMENT EXECUTE FUNCTION consentvault.refuse_change();
+
 -- 6a. event_source_post: which post a derived event came from ------------------------------------------------------------
 -- Append-only (org, event, post, role): ``trigger`` is the request that caused the event, ``reference`` an earlier record the
 -- derived feature relied on. A separate table, so no column is added to the sealed event table.
@@ -330,7 +350,7 @@ DECLARE
     t text;
 BEGIN
     FOREACH t IN ARRAY ARRAY['raw_post', 'raw_post_key', 'raw_post_chain_head', 'raw_post_fact', 'form_field_map',
-                             'raw_post_field', 'raw_post_match', 'raw_post_seal', 'event_source_post'] LOOP
+                             'raw_post_field', 'raw_post_match', 'raw_post_seal', 'event_source_post', 'seen_payload'] LOOP
         EXECUTE format('ALTER TABLE consentvault.%I ENABLE ROW LEVEL SECURITY', t);
         EXECUTE format('ALTER TABLE consentvault.%I FORCE ROW LEVEL SECURITY', t);
         EXECUTE format('CREATE POLICY %I ON consentvault.%I USING (org_id = (SELECT consentvault.current_org()))'
@@ -347,13 +367,25 @@ $$;
 
 -- Grants -----------------------------------------------------------------------------------------------------------------
 -- The runtime role appends and reads (reads still pass the evidence read scope); nothing here is ever updated.
-GRANT SELECT, INSERT ON consentvault.raw_post, consentvault.raw_post_key, consentvault.raw_post_fact,
-    consentvault.raw_post_field, consentvault.raw_post_match, consentvault.raw_post_chain_head,
-    consentvault.event_source_post TO consentvault_app;
+-- The columns a database clock stamps (recorded_at, extracted_at, matched_at, created_at) are not insertable by the runtime
+-- role, so a caller can never set the time of a fact, a reading, a link or a key.
+GRANT SELECT ON consentvault.raw_post, consentvault.raw_post_key, consentvault.raw_post_fact, consentvault.raw_post_field,
+    consentvault.raw_post_match, consentvault.raw_post_chain_head, consentvault.event_source_post, consentvault.seen_payload
+    TO consentvault_app;
+GRANT INSERT ON consentvault.raw_post, consentvault.raw_post_chain_head TO consentvault_app;
+GRANT INSERT (org_id, post_id, post_key_wrapped, key_version) ON consentvault.raw_post_key TO consentvault_app;
+GRANT INSERT (org_id, post_id, fact_id, source, name, value_ct, arrival_ordinal) ON consentvault.raw_post_fact TO consentvault_app;
+GRANT INSERT (org_id, post_id, map_version, field, state, values_ct, occurrences, extractor_version, decision_time_parsed)
+    ON consentvault.raw_post_field TO consentvault_app;
+GRANT INSERT (org_id, post_id, match_id, map_version, status, unmatched_reason, contact_kind, contact_fp, record_id,
+    previous_post_id, previous_same_source_post_id, consent_before_ct, consent_after_ct, changed, wording_changed,
+    same_fingerprint_as_previous) ON consentvault.raw_post_match TO consentvault_app;
+GRANT INSERT (org_id, event_id, post_id, role) ON consentvault.event_source_post TO consentvault_app;
+GRANT INSERT (org_id, body_sha256, post_id) ON consentvault.seen_payload TO consentvault_app;
 GRANT SELECT ON consentvault.form_field_map TO consentvault_app;
 GRANT SELECT, INSERT ON consentvault.raw_post_seal TO consentvault_app;  -- the single-company seal job runs as the runtime role
 GRANT SELECT, INSERT ON consentvault.form_field_map TO consentvault_console;
 GRANT SELECT ON consentvault.raw_post, consentvault.raw_post_fact, consentvault.raw_post_field, consentvault.raw_post_match,
     consentvault.raw_post_key, consentvault.event_source_post TO consentvault_console;
-GRANT SELECT ON consentvault.raw_post, consentvault.raw_post_seal, consentvault.raw_post_chain_head TO consentvault_integrity;
+GRANT SELECT ON consentvault.raw_post, consentvault.raw_post_fact, consentvault.raw_post_seal, consentvault.raw_post_chain_head TO consentvault_integrity;
 GRANT INSERT ON consentvault.raw_post_seal, consentvault.raw_post_chain_head TO consentvault_integrity;

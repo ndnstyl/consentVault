@@ -3,7 +3,7 @@
 // with the vault's receipt. The origin list and the bot check are facts in the envelope; neither is a reason to refuse.
 
 import {
-  deliverBatch, durableFrom, hmacSha256Hex, sha256Hex, storeAndAnswer, type CaptureDeps as EnvelopeDeps, type Durable, type QueueLike,
+  alarmDeadLetters, deliverBatch, durableFrom, hmacSha256Hex, sha256Hex, storeAndAnswer, type CaptureDeps as EnvelopeDeps, type Durable, type QueueLike,
   type QueueMessage, type R2Like,
 } from "./envelope.ts";
 
@@ -17,6 +17,7 @@ export interface Env {
   TURNSTILE_SECRET?: string;
   BODY_STORE?: R2Like; // optional: where a request waits while the vault is down (with CAPTURE_QUEUE)
   CAPTURE_QUEUE?: QueueLike;
+  DEAD_LETTER_QUEUE?: string; // the name of the dead-letter queue: a message there raises an alarm
 }
 
 export interface Deps {
@@ -84,7 +85,9 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     return handleConsent(request, env, { fetch: (...a) => fetch(...a), now: () => new Date(), durable: durableFrom(env) });
   },
-  async queue(batch: { messages: QueueMessage[] }, env: Env): Promise<void> {
-    await deliverBatch(batch.messages, env, { fetch: (...a) => fetch(...a), now: () => new Date() });
+  async queue(batch: { queue?: string; messages: QueueMessage[] }, env: Env): Promise<void> {
+    const deps = { fetch: (...a: Parameters<typeof fetch>) => fetch(...a), now: () => new Date() };
+    if (env.DEAD_LETTER_QUEUE && batch.queue === env.DEAD_LETTER_QUEUE) return alarmDeadLetters(batch.messages, deps);
+    await deliverBatch(batch.messages, env, deps);
   },
 };

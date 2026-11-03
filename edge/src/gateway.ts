@@ -162,8 +162,13 @@ async function forwardCapture(request: Request, env: GatewayEnv, deps: GatewayDe
     const res = await deps.fetch(clean(env.ORIGIN_URL) + url.pathname + url.search, { method: request.method, headers, body });
     return new Response(res.body, { status: res.status, headers: scrub(res.headers) });
   } catch (e) {
-    (deps.alarm ?? ((n, d) => console.error(`consentvault gateway alarm ${n}: ${d}`)))("capture.store_unavailable", `the vault did not answer a capture (${(e as Error).name}); nothing was stored`);
-    return new Response(JSON.stringify({ stored: false, error: "store_unavailable", detail: "the record store could not be written; nothing was stored; send again" }), {
+    // The vault did not answer, so it is not known whether it stored the request: the answer says so and gives the
+    // fingerprint of what was sent, which the receipt lookup finds if the vault did store it.
+    const digest = await crypto.subtle.digest("SHA-256", body ?? new ArrayBuffer(0));
+    const fingerprint = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+    (deps.alarm ?? ((n, d) => console.error(`consentvault gateway alarm ${n}: ${d}`)))("capture.store_unknown", `the vault did not answer a capture (${(e as Error).name}); it is not known whether it was stored`);
+    return new Response(JSON.stringify({ stored: "unknown", error: "store_unknown", body_sha256: fingerprint,
+      detail: "the vault did not answer; it is not known whether this request was stored; look its fingerprint up through the receipt lookup before sending it again" }), {
       status: 503, headers: { "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": request.headers.get("origin") || "*", vary: "origin" },
     });
   }

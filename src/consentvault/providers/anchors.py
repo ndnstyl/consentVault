@@ -167,7 +167,8 @@ class S3ObjectLockAnchorSink(AnchorSink):
 
     def publish(self, org_id: str, record: Mapping) -> AnchorReceipt:
         full, body = _canonical(org_id, record)
-        key = f"anchors/{full['seq']:012d}-{full['row_hash'][:32]}.json"
+        folder = "anchors" if not full.get("chain") else f"anchors-{full['chain']}"  # the raw post chain has its own folder
+        key = f"{folder}/{full['seq']:012d}-{full['row_hash'][:32]}.json"
         try:
             self._store.put(org_id, key, body, retain_until=self._clock() + timedelta(days=self._days))
         except EvidenceExistsError:

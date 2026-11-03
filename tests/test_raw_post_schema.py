@@ -134,7 +134,7 @@ def test_there_is_no_other_check_on_raw_post_than_ids_hashes_and_the_one_body_ru
     text = " ".join(checks.values())
     for column in ("intake", "method", "path", "kind", "headers_presented_by", "unusual_size"):
         assert column not in text.replace("body_bytes", "").replace("unusual", ""), f"a check names {column}"
-    assert len(checks) == 7  # seq, body_bytes, body_sha256, prev_hash, row_hash, hash_version, one body
+    assert len(checks) == 9  # seq, body_bytes, body_sha256, prev_hash, row_hash, hash_version, one body, the two digests' shapes
 
 
 def test_an_organisation_cannot_read_or_write_the_others_posts(tenancy, writer):
@@ -183,8 +183,10 @@ def test_the_0067_down_migration_leaves_nothing_behind_on_an_empty_vault(dsn, su
 
 
 def _raw_insert(app, *, org_id, post_id, seq, prev_hash, body_ct=b"x", body_object_id=None, received_at="clock_timestamp()"):
-    sql = ("INSERT INTO consentvault.raw_post (org_id, post_id, seq, intake, received_at, method, path, query_ct, headers_ct,"
-           " body_ct, body_object_id, body_bytes, body_sha256, unusual_size, headers_presented_by, kind, encryption,"
-           f" prev_hash, row_hash, hash_version) VALUES (%s, %s, %s, 'api', {received_at}, 'POST', '/', %s, %s, %s, %s, 1, %s,"
+    sql = ("INSERT INTO consentvault.raw_post (org_id, post_id, seq, intake, received_at, method, path, path_ct, query_ct, headers_ct,"
+           " body_ct, body_object_id, body_object_sha256, facts_sha256, body_bytes, body_sha256, unusual_size,"
+           " headers_presented_by, kind, encryption, prev_hash, row_hash, hash_version)"
+           f" VALUES (%s, %s, %s, 'api', {received_at}, 'POST', '/', %s, %s, %s, %s, %s, %s, %s, 1, %s,"
            " false, 'vault-http', 'post', 'none', %s, %s, 3)")
-    app.execute(sql, (org_id, post_id, seq, b"", b"", body_ct, body_object_id, "b" * 64, prev_hash, hashlib.sha256(os.urandom(8)).hexdigest()))
+    app.execute(sql, (org_id, post_id, seq, b"/", b"", b"", body_ct, body_object_id, "c" * 64 if body_object_id else None, "d" * 64,
+                      "b" * 64, prev_hash, hashlib.sha256(os.urandom(8)).hexdigest()))

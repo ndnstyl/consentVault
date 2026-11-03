@@ -26,8 +26,8 @@ def test_a_forbidden_origin_through_the_edge_is_stored_as_sent_and_the_event_is_
     key = _site_key(hw, a)
     status, body = _edge_post(hw, _envelope(key, _edge_body(a, key, origin=origin)))
     assert status == 201 and body["stored"] is True
-    from isolation.cloud_harness import post_body
-    assert json.loads(post_body(hw.t, _posts_of(hw, a.org)[-1]))["origin"] == origin
+    from isolation.cloud_harness import inner_body
+    assert json.loads(inner_body(hw.t, _posts_of(hw, a.org)[-1]))["origin"] == origin
     assert _last_event(hw, a.org)["origin"] == "consumer"
 
 

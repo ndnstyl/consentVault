@@ -30,7 +30,7 @@ from .safelog import caller_detail, db_code, describe, refusal_code
 from . import config as config_mod
 from . import edge_envelope
 from .capture import capture_and_release, capture_verified
-from .capture_http import (Downstream, cors_headers, is_capture_path, is_preflight, read_any_body, request_headers,
+from .capture_http import (StoreRefusedRequests, Downstream, cors_headers, is_capture_path, is_preflight, read_any_body, request_headers,
                            transport_credentials_removed, unavailable_answer)
 from . import dbclock
 from .db import connect
@@ -129,7 +129,7 @@ class SafeHTTPServer(ThreadingHTTPServer):
         _log.error("a request failed outside its handler", exc_info=True)
 
 
-class _Handler(BaseHTTPRequestHandler):
+class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
     server_version = "consentvault"
     sys_version = ""
     settings: ApiSettings
@@ -146,7 +146,8 @@ class _Handler(BaseHTTPRequestHandler):
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def _fail(self, status: int, error: str, detail: str) -> None:
         self._send(status, {"ok": False, "error": error, "detail": detail})
@@ -226,6 +227,8 @@ class _Handler(BaseHTTPRequestHandler):
     def _capturing(self) -> bool:
         return is_capture_path(urlsplit(self.path).path, SINGLE_CAPTURE_PREFIXES)
 
+    _is_capture_target = _capturing
+
     def do_OPTIONS(self):
         if self._capturing():
             return self._capture()
@@ -264,27 +267,29 @@ class _Handler(BaseHTTPRequestHandler):
                   Fact("vault", "peer_address", self.client_address[0])]
         if transport_credentials_removed(self):
             facts.append(Fact("vault", "gateway_service_credentials_not_stored", True))
+        facts += list(self._extra_facts)
         envelope = None
         if reason is None and not by_verified_key and edge_envelope.looks_like_envelope(body):
             try:
                 envelope = edge_envelope.unpack(body)
                 facts += [Fact("edge", str(n), v) for n, v in envelope.edge_facts.items()]
+                facts.append(Fact("vault", "browser_body_sha256", hashlib.sha256(envelope.body).hexdigest()))
                 if envelope.claimed_sha256 is not None and envelope.claimed_sha256 != hashlib.sha256(envelope.body).hexdigest():
                     facts.append(Fact("vault", "edge_body_sha256_mismatch", True))
             except edge_envelope.EnvelopeUnreadable as exc:  # loud-failure-exempt: recorded as the fact edge_envelope_unreadable; the signed bytes are stored as received
                 facts.append(Fact("vault", "edge_envelope_unreadable", describe(exc)))
         preflight = is_preflight(self)
-        if envelope is not None:
-            inner_preflight = envelope.method.upper() == "OPTIONS" and any(
-                n.lower() == "access-control-request-method" for n, _ in envelope.headers)
-            raw = RawRequest(intake="edge_single", method=envelope.method, path=envelope.path, query=envelope.query,
-                             headers=envelope.headers, body=envelope.body, headers_presented_by="edge-worker",
-                             kind="preflight" if inner_preflight else "post", edge_received_at=envelope.edge_received_at,
-                             facts=tuple(facts))
-        else:
-            raw = RawRequest(intake="api_single", method=self.command, path=url.path, query=url.query,
-                             headers=request_headers(self), body=body, kind="preflight" if preflight else "post",
-                             facts=tuple(facts))
+        inner_preflight = envelope is not None and envelope.method.upper() == "OPTIONS" and any(
+            n.lower() == "access-control-request-method" for n, _ in envelope.headers)
+        # what is stored is what was received: for an edge post, the signed envelope bytes exactly
+        raw = RawRequest(intake="edge_single" if envelope is not None else "api_single", method=self.command, path=url.path,
+                         query=url.query, headers=request_headers(self), body=body,
+                         headers_presented_by="vault-http",
+                         kind="preflight" if (inner_preflight if envelope is not None else preflight) else "post",
+                         edge_received_at=envelope.edge_received_at if envelope is not None else None,
+                         facts=tuple(facts), path_bytes=self.path.split("?", 1)[0].encode("latin-1", "replace"),
+                         read_body=envelope.body if envelope is not None else None,
+                         read_headers=envelope.headers if envelope is not None else None)
         cors = cors_headers(self)
         with self.server.downstream.track():
             try:
@@ -313,9 +318,16 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             with connect(self.settings.dsn) as conn:
                 intake.read_after_commit(self.writer, conn, None, stored, raw)
-                if raw.kind == "post" and raw.method == "POST" and (envelope is not None or raw.path == "/v1/events"):
-                    outcome, event_id = ("not_authenticated:" + reason, None) if reason else (
-                        ("replay", None) if replay else self._derive_event(conn, body, by_verified_key, envelope))
+                if raw.kind == "post" and (envelope.method if envelope is not None else raw.method) == "POST" \
+                        and (envelope is not None or raw.path == "/v1/events"):
+                    if reason:
+                        outcome, event_id = "not_authenticated:" + reason, None
+                    elif replay:
+                        outcome, event_id = "replay", None
+                    elif not self.writer.claim_payload(conn, None, stored):
+                        outcome, event_id = "payload_seen_before", None
+                    else:
+                        outcome, event_id = self._derive_event(conn, body, by_verified_key, envelope)
                     self.writer.add_facts(conn, None, stored, [Fact("vault", "event_derived", event_id) if event_id else
                                                                Fact("vault", "event_not_derived", outcome)])
                     if event_id:
@@ -703,7 +715,7 @@ class _EdgeClaims:
         return 60
 
 
-class _CloudHandler(BaseHTTPRequestHandler):
+class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
     server_version = "consentvault"
     sys_version = ""
     settings: CloudApiSettings
@@ -715,6 +727,9 @@ class _CloudHandler(BaseHTTPRequestHandler):
     def send_response(self, code, message=None):
         self._sent_status = code  # read by the metrics hook in do_POST
         super().send_response(code, message)
+
+    def _is_capture_target(self) -> bool:
+        return is_capture_path(urlsplit(self.path).path, CLOUD_CAPTURE_PREFIXES)
 
     # plumbing ---------------------------------------------------------------------------------------------------
     def _rid(self) -> str:
@@ -731,7 +746,8 @@ class _CloudHandler(BaseHTTPRequestHandler):
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def _error(self, name: str, detail: str, status: int, fields: dict | None = None) -> None:
         body = {"error": name, "detail": detail, "request_id": self.request_id}
@@ -991,10 +1007,12 @@ class _CloudHandler(BaseHTTPRequestHandler):
                   Fact("vault", "peer_address", self.client_address[0])]
         if transport_credentials_removed(self):
             facts.append(Fact("vault", "gateway_service_credentials_not_stored", True))
+        facts += list(self._extra_facts)
         identity = self._capture_identity(body, headers, url, facts)
-        if identity["envelope"]:  # the edge answers the browser's permission check itself; to the edge the vault answers with a receipt
-            preflight_inner = (identity["method"] or "").upper() == "OPTIONS" and any(
-                n.lower() == "access-control-request-method" for n, _ in identity["headers"] or ())
+        inner = identity["inner"]
+        if inner is not None:  # the edge answers the browser's permission check itself; to the edge the vault answers with a receipt
+            preflight_inner = inner.method.upper() == "OPTIONS" and any(
+                n.lower() == "access-control-request-method" for n, _ in inner.headers)
         else:
             preflight_inner = preflight
         cors = cors_headers(self)
@@ -1011,20 +1029,20 @@ class _CloudHandler(BaseHTTPRequestHandler):
                     else:
                         _, org_token = self._home_token(conn)
                     enter = self._enter(org_token)
+                    # what is stored is what was received: for an edge post, the signed envelope bytes exactly
                     raw = RawRequest(
-                        intake=identity["intake"], method=identity["method"] or self.command, path=identity["path"] or url.path,
-                        query=identity["query"] if identity["query"] is not None else url.query,
-                        headers=identity["headers"] if identity["headers"] is not None else headers,
-                        body=identity["body"] if identity["body"] is not None else body,
-                        headers_presented_by="edge-worker" if identity["envelope"] else "vault-http",
+                        intake=identity["intake"], method=self.command, path=url.path, query=url.query,
+                        headers=headers, body=body, headers_presented_by="vault-http",
                         kind="preflight" if preflight_inner else "post", edge_received_at=identity["edge_received_at"],
-                        facts=tuple(facts))
+                        facts=tuple(facts), path_bytes=self.path.split("?", 1)[0].encode("latin-1", "replace"),
+                        read_body=inner.body if inner is not None else None,
+                        read_headers=inner.headers if inner is not None else None)
                     stored = self.writer.write(conn, enter, raw)
             except (StoreUnavailable, ConsentVaultError, psycopg.Error) as exc:
                 _log.critical("a post could not be stored", request_id=self.request_id, error=type(exc).__name__)
                 status, answer = unavailable_answer()
                 return self._send(status, answer, cors)
-            if preflight and not identity["envelope"]:
+            if preflight and inner is None:
                 self.send_response(204)
                 for k, v in cors.items():
                     self.send_header(k, v)
@@ -1040,8 +1058,8 @@ class _CloudHandler(BaseHTTPRequestHandler):
         a fact and the post goes to the platform intake (the home organisation's chain)."""
         from .rawpost import Fact
 
-        out = {"claims": None, "intake": "api", "method": None, "path": None, "query": None, "headers": None, "body": None,
-               "envelope": False, "edge_received_at": None, "owner": None, "browser_body": None, "edge_facts": {}}
+        out = {"claims": None, "intake": "api", "inner": None, "stale": False,
+               "envelope": False, "edge_received_at": None, "owner": None, "edge_facts": {}}
         auth = (self.headers.get("Authorization") or "").strip()
         signed = bool(self.headers.get(SIGNATURE_HEADER)) and not auth
         if auth:
@@ -1075,9 +1093,9 @@ class _CloudHandler(BaseHTTPRequestHandler):
         except edge_envelope.EnvelopeUnreadable as exc:  # loud-failure-exempt: recorded as the fact edge_envelope_unreadable; the signed bytes are stored as received
             facts.append(Fact("vault", "edge_envelope_unreadable", describe(exc)))
             return
-        out.update(envelope=True, intake="edge_site_key", method=env.method, path=env.path, query=env.query,
-                   headers=env.headers, body=env.body, browser_body=env.body, edge_received_at=env.edge_received_at,
-                   edge_facts=env.edge_facts)
+        out.update(envelope=True, intake="edge_site_key", inner=env, edge_received_at=env.edge_received_at,
+                   edge_facts=env.edge_facts, stale=True)  # stale until the database's clock says the signed time is fresh
+        facts.append(Fact("vault", "browser_body_sha256", hashlib.sha256(env.body).hexdigest()))
         if env.claimed_sha256 is not None and env.claimed_sha256 != hashlib.sha256(env.body).hexdigest():
             facts.append(Fact("vault", "edge_body_sha256_mismatch", True))
         for name, value in env.edge_facts.items():
@@ -1089,8 +1107,9 @@ class _CloudHandler(BaseHTTPRequestHandler):
                 owner = resolve_site_key(conn, site_key) if site_key else None
                 facts.append(Fact("vault", "site_key_state", owner.state if owner else "unknown"))
                 try:
-                    facts.append(Fact("vault", "edge_timestamp",
-                                      "fresh" if abs(dbclock.epoch(conn) - float(ts)) <= window else "stale"))
+                    fresh = abs(dbclock.epoch(conn) - float(ts)) <= window
+                    out["stale"] = not fresh
+                    facts.append(Fact("vault", "edge_timestamp", "fresh" if fresh else "stale"))
                 except ValueError:  # loud-failure-exempt: recorded as the fact edge_timestamp unreadable
                     facts.append(Fact("vault", "edge_timestamp", "unreadable"))
                 home = str(conn.execute("SELECT consentvault.home_org() AS h").fetchone()["h"])
@@ -1122,9 +1141,15 @@ class _CloudHandler(BaseHTTPRequestHandler):
             with connect(self.settings.dsn) as conn:
                 intake.read_after_commit(self.writer, conn, enter, stored, raw,
                                          source_id=owner.source_id if owner else None, request_id=self.request_id)
-                if raw.kind == "post" and raw.method == "POST" and identity["claims"] is not None \
-                        and not identity.get("replayed") and (identity["envelope"] or raw.path == "/v1/events"):
-                    outcome, event_id = self._derive_event(conn, identity, raw)
+                inner = identity["inner"]
+                if raw.kind == "post" and (inner.method if inner else raw.method) == "POST" and identity["claims"] is not None \
+                        and (inner is not None or raw.path == "/v1/events"):
+                    if identity["stale"] or identity.get("replayed"):
+                        outcome, event_id = ("stale_timestamp" if identity["stale"] else "replay"), None
+                    elif not self.writer.claim_payload(conn, enter, stored):
+                        outcome, event_id = "payload_seen_before", None
+                    else:
+                        outcome, event_id = self._derive_event(conn, identity, raw)
                     self.writer.add_facts(conn, enter, stored, [Fact("vault", "event_derived", event_id) if event_id else
                                                                 Fact("vault", "event_not_derived", outcome)])
                     if event_id:
@@ -1143,7 +1168,7 @@ class _CloudHandler(BaseHTTPRequestHandler):
         from .tenancy.admin_base import ApiError
         from .tenancy.pipeline import EvidenceStoreUnavailable, parse_capture
 
-        claims, body = identity["claims"], bytes(raw.body)
+        claims, body = identity["claims"], bytes(raw.read_body if raw.read_body is not None else raw.body)
         try:
             payload = json.loads(body.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):  # loud-failure-exempt: returned as the stored reason not_json
@@ -1152,7 +1177,7 @@ class _CloudHandler(BaseHTTPRequestHandler):
             return "not_a_json_object", None
         if identity["envelope"]:
             owner = identity["owner"]
-            payload = edge_envelope.widget_event(payload, raw.headers, identity["edge_facts"],
+            payload = edge_envelope.widget_event(payload, raw.read_headers, identity["edge_facts"],
                                                  source_id=owner.source_id if owner else None,
                                                  brand_ids=owner.brand_ids if owner else None, source="site_key")
         else:

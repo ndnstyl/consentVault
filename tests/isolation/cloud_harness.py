@@ -175,7 +175,8 @@ class Cloud:
     def grant(self, co: CloudOrg, contact: str, *, token: str | None = None, **extra) -> tuple[int, dict]:
         body = {"contact": contact, "event_type": "grant", "checked": True, "channels": ["sms"],
                 "purposes": ["marketing"], "disclosure_sha256": co.wording, "brand_ids": [str(co.org.brand_id)],
-                "session_ref": "s-1", "page_url": "https://example.test/signup", **extra}
+                "session_ref": "s-1", "page_url": "https://example.test/signup",
+                "client_nonce": str(uuid.uuid4()), **extra}  # a body the vault has already seen derives no event
         return self.call("/v1/events", body, token=token or self.token(co, "capture"))
 
     def gate(self, co: CloudOrg, contact: str, channel="sms", purpose="marketing", token=None) -> tuple[int, dict]:
@@ -226,3 +227,10 @@ def facts_of(t: Tenancy, row) -> dict:
     return {f["name"]: json.loads(bytes(f["value_ct"]) if key is None else
                                   tc.decrypt_field(key, row["org_id"], str(row["post_id"]), "raw_post_fact.value", bytes(f["value_ct"])))
             for f in found}
+
+
+def inner_body(t: Tenancy, row) -> bytes:
+    """The browser's own bytes inside a stored edge envelope (the post itself holds the signed envelope, exactly as received)."""
+    import base64
+
+    return base64.b64decode(json.loads(post_body(t, row))["body_b64"])

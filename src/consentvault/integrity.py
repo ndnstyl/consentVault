@@ -171,10 +171,13 @@ def _own_sink_records(sink_file: str, org: uuid.UUID, home: uuid.UUID, into: str
         out.writelines(keep)
 
 
-def verify_chain_every_org(conn: psycopg.Connection, *, sink_file: str | None = None) -> dict:
+def verify_chain_every_org(conn: psycopg.Connection, *, sink_file: str | None = None, store=None, crypto=None) -> dict:
     """{org id: ledger rows checked}. A break fails that organisation. With ``sink_file`` each organisation is checked
-    against its own records in the file sink (the sink holds every organisation's anchors)."""
+    against its own records in the file sink (the sink holds every organisation's anchors). The raw post chain is checked
+    too: every link and row hash, every fact digest, every anchor (database and sink), and, when ``store`` is given, every
+    stored body read back and compared with its fingerprint."""
     from .ledger import verify_chain
+    from .rawpost import verify_raw_anchors, verify_raw_bodies, verify_raw_chain
 
     def one(c, org):
         own = None
@@ -185,14 +188,18 @@ def verify_chain_every_org(conn: psycopg.Connection, *, sink_file: str | None = 
                 os.close(fd)
                 _own_sink_records(sink_file, org, home, own)
             breaks = verify_chain(c, sink_file=own if own else sink_file)
+            raw = (verify_raw_chain(c) + verify_raw_anchors(c, sink_file=own if own else (
+                sink_file if sink_file and os.path.exists(sink_file) else None)) + verify_raw_bodies(c, store, crypto))
         finally:
             if own:
                 os.unlink(own)
-        if breaks:
-            raise _OrgFailure(f"{len(breaks)} break(s): "
-                              + "; ".join(f"seq {b.seq} {b.reason}" for b in breaks[:20]))
+        if breaks or raw:
+            raise _OrgFailure(f"{len(breaks) + len(raw)} break(s): "
+                              + "; ".join([f"seq {b.seq} {b.reason}" for b in breaks[:20]]
+                                          + [f"raw post seq {b['seq']} {b['reason']}" for b in raw[:20]]))
         return c.execute("SELECT count(*) AS n FROM consentvault.event WHERE org_id = consentvault.current_org()"
-                         ).fetchone()["n"]
+                         ).fetchone()["n"] + c.execute("SELECT count(*) AS n FROM consentvault.raw_post WHERE org_id = "
+                                                       "consentvault.current_org()").fetchone()["n"]
     return _each_org(conn, JOB_VERIFY_CHAIN, one)
 
 

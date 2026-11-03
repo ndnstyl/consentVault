@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 import pkgutil
 import sys
 from urllib.parse import urlparse
@@ -137,7 +138,14 @@ def _run_verify_chain(args, cfg) -> int:
             return EXIT_BROKEN
         if per_org:  # multi-tenant: every organisation, each under its own token
             try:
-                checked = integrity.verify_chain_every_org(conn, sink_file=sink)
+                from .cmd_cloud import evidence_store_only
+                from .errors import ConfigError
+
+                try:
+                    store = evidence_store_only(cfg, os.environ)
+                except ConfigError:  # loud-failure-exempt: no store configured here; a post kept in the store is then a named break below
+                    store = None
+                checked = integrity.verify_chain_every_org(conn, sink_file=sink, store=store)
             except integrity.IntegrityRunError as exc:
                 metrics.emit("VerifyChainFailures", len(exc.failures))
                 print(f"consentvault: {describe(exc)}", file=sys.stderr)
@@ -147,8 +155,12 @@ def _run_verify_chain(args, cfg) -> int:
             print(json.dumps({"ok": True, "orgs": checked}))
             return EXIT_OK
         breaks = verify_chain(conn, sink_file=sink)
-    metrics.emit("VerifyChainFailures", 1 if breaks else 0)
-    out = {"ok": not breaks, "breaks": [b.__dict__ for b in breaks]}
+        from .rawpost import verify_raw_anchors, verify_raw_chain
+
+        raw = verify_raw_chain(conn) + verify_raw_anchors(conn, sink_file=sink if sink and os.path.exists(sink) else None)
+    metrics.emit("VerifyChainFailures", 1 if (breaks or raw) else 0)
+    out = {"ok": not (breaks or raw), "breaks": [b.__dict__ for b in breaks], "raw_post_breaks": raw}
+    breaks = list(breaks) + raw
     if webhook:
         out["sink_not_checked"] = True
         print("consentvault: sink_not_checked: the anchor sink is a webhook and cannot be read back; only the "

@@ -46,6 +46,7 @@ INTAKES = ("edge_site_key", "edge_single", "gateway", "api", "api_single", "sign
            "restore", "site_form")
 
 COL_BODY, COL_HEADERS, COL_QUERY, COL_FACT = "raw_post.body", "raw_post.headers", "raw_post.query", "raw_post_fact.value"
+COL_PATH = "raw_post.path"
 _LOCK_SQL = "SELECT pg_advisory_xact_lock(consentvault.raw_post_lock_key(consentvault.current_org()))"
 
 
@@ -73,6 +74,10 @@ class RawRequest:
     kind: str = "post"
     edge_received_at: datetime | None = None
     facts: tuple[Fact, ...] = ()
+    path_bytes: bytes | None = None  # the request path exactly as received (default: ``path`` as UTF-8)
+    # what the field map reads when the stored body is a signed envelope: the browser's own body and headers inside it
+    read_body: bytes | None = None
+    read_headers: tuple[tuple[str, str], ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -129,7 +134,8 @@ def canonical_row(row: Mapping[str, Any], ct: Mapping[str, bytes | None]) -> dic
     return {
         "org_id": str(row["org_id"]), "post_id": str(row["post_id"]), "seq": row["seq"], "intake": row["intake"],
         "received_at": _stamp(row["received_at"]), "method": row["method"], "path": row["path"],
-        "query_ct_sha256": dig(ct["query_ct"]), "headers_ct_sha256": dig(ct["headers_ct"]),
+        "path_ct_sha256": dig(ct["path_ct"]), "body_object_sha256": row["body_object_sha256"],
+        "facts_sha256": row["facts_sha256"], "query_ct_sha256": dig(ct["query_ct"]), "headers_ct_sha256": dig(ct["headers_ct"]),
         "body_ct_sha256": dig(ct["body_ct"]),
         "body_object_id": str(row["body_object_id"]) if row["body_object_id"] is not None else None,
         "body_bytes": row["body_bytes"], "body_sha256": row["body_sha256"], "unusual_size": row["unusual_size"],
@@ -137,6 +143,12 @@ def canonical_row(row: Mapping[str, Any], ct: Mapping[str, bytes | None]) -> dic
         "headers_presented_by": row["headers_presented_by"], "kind": row["kind"], "encryption": row["encryption"],
         "prev_hash": row["prev_hash"], "hash_version": HASH_VERSION,
     }
+
+
+def facts_digest(items) -> str:
+    """The digest of the facts known at arrival, in order: (ordinal, source, name, SHA-256 of the stored value)."""
+    return hashlib.sha256(canonical_dumps([[i, src, name, hashlib.sha256(bytes(ct)).hexdigest()] for i, src, name, ct in items])
+                          .encode("utf-8")).hexdigest()
 
 
 def raw_post_row_hash(row: Mapping[str, Any], ct: Mapping[str, bytes | None]) -> str:
@@ -259,12 +271,18 @@ class RawPostWriter:
             enc = ENC_WRAPPED if key is not None else ENC_NONE
             blob = self._seal(key, org, post_id, COL_BODY, body)
             body_ct = blob
+            object_sha = None
             if object_id is not None:
                 retain = who["now"] + timedelta(days=366 * self.retain_years)
                 record = self.store.put(str(org), f"raw-posts/{object_id}", blob, retain_until=retain)
                 if record.sha256 != hashlib.sha256(blob).hexdigest():
                     raise StoreUnavailable("the evidence store's copy of the body does not match what was sent to it")
-                body_ct = None
+                body_ct, object_sha = None, record.sha256
+            path_raw = req.path_bytes if req.path_bytes is not None else _as_bytes(req.path)
+            path_ct = self._seal(key, org, post_id, COL_PATH, path_raw)
+            fact_rows = [(i, _db_text(f.source), _db_text(f.name),
+                          self._seal(key, org, post_id, COL_FACT, canonical_dumps(f.value).encode("utf-8")))
+                         for i, f in enumerate(req.facts)]
             query_ct = self._seal(key, org, post_id, COL_QUERY, _as_bytes(req.query))
             headers_ct = self._seal(key, org, post_id, COL_HEADERS, headers_json(req.headers))
             ctx = enter(conn) if enter is not None else conn.transaction()
@@ -275,27 +293,32 @@ class RawPostWriter:
                 row = {
                     "org_id": org, "post_id": post_id, "seq": head["seq"] + 1 if head else 1,
                     "intake": _db_text(req.intake), "received_at": received, "method": _db_text(req.method),
-                    "path": _db_text(req.path), "body_object_id": object_id, "body_bytes": size, "body_sha256": body_sha,
+                    "path": _db_text(req.path), "body_object_id": object_id, "body_object_sha256": object_sha,
+                    "facts_sha256": facts_digest(fact_rows), "body_bytes": size, "body_sha256": body_sha,
                     "unusual_size": size > self.unusual_size, "edge_received_at": req.edge_received_at,
                     "headers_presented_by": _db_text(req.headers_presented_by), "kind": _db_text(req.kind),
                     "encryption": enc, "prev_hash": head["row_hash"] if head else GENESIS,
                 }
-                ct = {"query_ct": query_ct, "headers_ct": headers_ct, "body_ct": body_ct}
+                ct = {"query_ct": query_ct, "headers_ct": headers_ct, "body_ct": body_ct, "path_ct": path_ct}
                 row_hash = raw_post_row_hash(row, ct)
                 conn.execute(
-                    "INSERT INTO consentvault.raw_post (org_id, post_id, seq, intake, received_at, method, path, query_ct,"
-                    " headers_ct, body_ct, body_object_id, body_bytes, body_sha256, unusual_size, edge_received_at,"
+                    "INSERT INTO consentvault.raw_post (org_id, post_id, seq, intake, received_at, method, path, path_ct, query_ct,"
+                    " headers_ct, body_ct, body_object_id, body_object_sha256, facts_sha256, body_bytes, body_sha256,"
+                    " unusual_size, edge_received_at,"
                     " headers_presented_by, kind, encryption, prev_hash, row_hash, hash_version)"
                     " VALUES (%(org_id)s, %(post_id)s, %(seq)s, %(intake)s, %(received_at)s, %(method)s, %(path)s,"
-                    " %(query_ct)s, %(headers_ct)s, %(body_ct)s, %(body_object_id)s, %(body_bytes)s, %(body_sha256)s,"
+                    " %(path_ct)s, %(query_ct)s, %(headers_ct)s, %(body_ct)s, %(body_object_id)s, %(body_object_sha256)s,"
+                    " %(facts_sha256)s, %(body_bytes)s, %(body_sha256)s,"
                     " %(unusual_size)s, %(edge_received_at)s, %(headers_presented_by)s, %(kind)s, %(encryption)s,"
                     " %(prev_hash)s, %(row_hash)s, 3)",
                     {**row, **ct, "row_hash": row_hash})
                 if wrapped is not None:
                     conn.execute("INSERT INTO consentvault.raw_post_key (org_id, post_id, post_key_wrapped, key_version)"
                                  " VALUES (%s, %s, %s, %s)", (org, post_id, wrapped.ciphertext, wrapped.key_version))
-                for fact in req.facts:
-                    self._insert_fact(conn, org, post_id, key, fact)
+                for i, source, name, value_ct in fact_rows:
+                    conn.execute("INSERT INTO consentvault.raw_post_fact (org_id, post_id, fact_id, source, name, value_ct,"
+                                 " arrival_ordinal) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                                 (org, post_id, uuid.uuid4(), source, name, value_ct, i))
         except StoreUnavailable:
             raise
         except ConsentVaultError as exc:  # provider, key and store failures all mean the same: nothing was stored
@@ -312,6 +335,15 @@ class RawPostWriter:
                      " VALUES (%s, %s, %s, %s, %s, %s)",
                      (org, post_id, uuid.uuid4(), _db_text(fact.source), _db_text(fact.name),
                       self._seal(key, org, post_id, COL_FACT, raw)))
+
+    def claim_payload(self, conn: psycopg.Connection, enter: Callable, stored: StoredPost) -> bool:
+        """Record this post's body as seen, for good. True when it had not been seen before; False when an earlier post of the
+        organisation carried the identical body (the caller derives no consent event from it)."""
+        ctx = enter(conn) if enter is not None else conn.transaction()
+        with ctx:
+            cur = conn.execute("INSERT INTO consentvault.seen_payload (org_id, body_sha256, post_id) VALUES (%s, %s, %s)"
+                               " ON CONFLICT DO NOTHING", (uuid.UUID(stored.org_id), stored.body_sha256, uuid.UUID(stored.post_id)))
+            return cur.rowcount == 1
 
     def add_facts(self, conn: psycopg.Connection, enter: Callable, stored: StoredPost, facts: Iterable[Fact]) -> None:
         """Facts learned after the post committed (appended; never changes the post)."""
@@ -351,10 +383,15 @@ def verify_raw_chain(conn: psycopg.Connection) -> list[dict]:
             breaks.append({"seq": r["seq"], "post_id": str(r["post_id"]), "reason": f"seq {r['seq']} where {expect} was expected"})
         if r["prev_hash"] != prev:
             breaks.append({"seq": r["seq"], "post_id": str(r["post_id"]), "reason": "prev_hash is not the previous row's hash"})
-        ct = {"query_ct": bytes(r["query_ct"]), "headers_ct": bytes(r["headers_ct"]),
+        ct = {"query_ct": bytes(r["query_ct"]), "headers_ct": bytes(r["headers_ct"]), "path_ct": bytes(r["path_ct"]),
               "body_ct": bytes(r["body_ct"]) if r["body_ct"] is not None else None}
         if raw_post_row_hash(r, ct) != r["row_hash"]:
             breaks.append({"seq": r["seq"], "post_id": str(r["post_id"]), "reason": "row_hash does not recompute from the stored columns"})
+        arrival = [(f["arrival_ordinal"], f["source"], f["name"], f["value_ct"]) for f in conn.execute(
+            "SELECT arrival_ordinal, source, name, value_ct FROM consentvault.raw_post_fact WHERE org_id = %s AND post_id = %s"
+            " AND arrival_ordinal IS NOT NULL ORDER BY arrival_ordinal", (r["org_id"], r["post_id"]))]
+        if facts_digest(arrival) != r["facts_sha256"]:
+            breaks.append({"seq": r["seq"], "post_id": str(r["post_id"]), "reason": "the facts known at arrival do not match the row's facts digest"})
         prev, expect = r["row_hash"], r["seq"] + 1
     return breaks
 
@@ -391,4 +428,46 @@ def verify_raw_anchors(conn: psycopg.Connection, *, sink_file: str | None = None
             breaks.append({"seq": seq, "reason": f"anchored_post_missing:{label}"})
         elif rows[seq] != row_hash:
             breaks.append({"seq": seq, "reason": f"anchored_post_changed:{label}"})
+    return breaks
+
+
+def verify_raw_bodies(conn: psycopg.Connection, store, crypto=None) -> list[dict]:
+    """Read every stored body of the entered organisation back and compare it with what the row fingerprints: an inline body
+    against the body ciphertext digest already in the row hash, an object in the store against ``body_object_sha256`` (which
+    the row hash covers), and, when ``crypto`` can open the post key, the decrypted bytes against ``body_sha256`` and
+    ``body_bytes``. A missing or changed object is a break."""
+    from .providers.errors import ProviderError
+    from .tenancy import crypto as tc
+    from .tenancy.keys_protocol import WrappedKey
+
+    org = conn.execute("SELECT consentvault.current_org() AS o").fetchone()["o"]
+    breaks: list[dict] = []
+    for r in conn.execute("SELECT * FROM consentvault.raw_post WHERE org_id = %s ORDER BY seq", (org,)).fetchall():
+        who = {"seq": r["seq"], "post_id": str(r["post_id"])}
+        if r["body_object_id"] is not None:
+            if store is None:
+                breaks.append({**who, "reason": "the body is in the evidence store and no store was given to read it"})
+                continue
+            try:
+                blob = store.get(str(org), f"raw-posts/{r['body_object_id']}")
+            except ProviderError as exc:  # loud-failure-exempt: recorded as a break in the returned list, which the job reports
+                breaks.append({**who, "reason": f"the stored body cannot be read: {type(exc).__name__}"})
+                continue
+            if hashlib.sha256(blob).hexdigest() != r["body_object_sha256"]:
+                breaks.append({**who, "reason": "the stored body differs from the digest in the row"})
+                continue
+        else:
+            blob = bytes(r["body_ct"])
+        plain = blob
+        if r["encryption"] == ENC_WRAPPED and crypto is None:
+            continue  # no key custody here: the digest comparison above is what can be checked
+        if r["encryption"] == ENC_WRAPPED:
+            k = conn.execute("SELECT post_key_wrapped, key_version FROM consentvault.raw_post_key WHERE org_id = %s AND post_id = %s",
+                             (org, r["post_id"])).fetchone()
+            if k is None:
+                continue  # key erased: the digest comparison above is what can be checked
+            plain = tc.decrypt_field(crypto.open_contact_key(org, WrappedKey(bytes(k["post_key_wrapped"]), k["key_version"])),
+                                     org, str(r["post_id"]), COL_BODY, blob)
+        if hashlib.sha256(plain).hexdigest() != r["body_sha256"] or len(plain) != r["body_bytes"]:
+            breaks.append({**who, "reason": "the body does not match its fingerprint"})
     return breaks

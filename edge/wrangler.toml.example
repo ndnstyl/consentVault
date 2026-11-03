@@ -28,3 +28,10 @@ SOURCE_ID = "site-form"
 # queue = "consentvault-edge-capture"
 # max_batch_size = 10
 # max_retries = 100
+# dead_letter_queue = "consentvault-edge-capture-dead"   # a request the queue gives up on lands here and raises an alarm
+#
+# [[queues.consumers]]
+# queue = "consentvault-edge-capture-dead"
+#
+# [vars]
+# DEAD_LETTER_QUEUE = "consentvault-edge-capture-dead"

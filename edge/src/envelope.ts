@@ -247,6 +247,20 @@ export interface QueueMessage {
   ack(): void;
   retry(): void;
 }
+/** A request the queue gave up on (it reached the dead-letter queue): never silent, an alarm names each one. */
+export function alarmDeadLetters(messages: QueueMessage[], deps: CaptureDeps): void {
+  for (const m of messages) {
+    let queuedAt = "unknown time";
+    try {
+      queuedAt = (JSON.parse(m.body) as QueuedMessage).queued_at;
+    } catch {
+      queuedAt = "unreadable message";
+    }
+    alarm(deps, "capture.queue_dead_letter", `a request accepted at ${queuedAt} could not be delivered after every retry; its body is still in the store`);
+    m.ack();
+  }
+}
+
 export const QUEUE_DEADLINE_MS = 60 * 60 * 1000;
 
 /**

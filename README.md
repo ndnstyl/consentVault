@@ -38,10 +38,10 @@ of the flag, and keeps it apart from the systems that act on it.
 <tr>
 <td valign="top"><b>Two database roles</b><br>The runtime role can read and append, nothing else. It owns nothing and cannot change history, the schema or the triggers; only the owner role migrates.</td>
 <td valign="top"><b>The wording is evidence</b><br>The exact disclosure text is stored once by its sha256, and every grant references it by hash.</td>
-<td valign="top"><b>Stops count as much as grants</b><br>Events are ordered by arrival, never by a time the caller claims. A stop outranks a grant until the person's own later, verified grant is released under the release rule. A stop for <code>*</code> stops every purpose.</td>
+<td valign="top"><b>Stops count as much as grants</b><br>Events are ordered by arrival, never by a time the caller claims. A stop and a later consent are both kept, in the order they arrived, with every fact that shows who sent each: the contact point, the words, the times, and any proof the integrator gives that the person controls the contact point. The record shows the person's own later consent beside their stop, and what verifies it; it never ranks, releases or refuses either one, and no staff member, operator or customer can lift a stop. A stop for <code>*</code> stops every purpose.</td>
 </tr>
 <tr>
-<td valign="top"><b>Fail closed, with a reason</b><br>If the vault cannot answer, the answer is "no", with a named reason. The answer reports what the record shows, not a legal conclusion.</td>
+<td valign="top"><b>The answer is the record</b><br>If the vault cannot answer, it says so with the reason. The answer is the record as it stands, not a yes or a no. The answer reports what the record shows, not a legal conclusion.</td>
 <td valign="top"><b>Capture edge included</b><br>A dependency-free edge worker and an embeddable checkbox widget that hashes the wording on screen at submit time.</td>
 <td valign="top"><b>Self-verifying evidence</b><br>Export a bundle a reviewer can check with only Python and openssl, using trust roots and anchors taken from outside the bundle.</td>
 </tr>
@@ -50,13 +50,13 @@ of the flag, and keeps it apart from the systems that act on it.
 ## How it works
 
 <p align="center">
-  <img alt="Architecture: capture widget, edge worker, signed API, append-only ledger, seals and anchors, then gate, timeline and evidence bundle" src=".github/assets/architecture.svg" width="860">
+  <img alt="Architecture: capture widget, edge worker, signed API, append-only ledger, seals and anchors, then read, timeline and evidence bundle" src=".github/assets/architecture.svg" width="860">
 </p>
 
-The widget sends only the hash of the wording it showed. The edge worker adds what only a server knows (receipt
+The widget sends the wording on the screen at submit time. The edge worker adds what only a server knows (receipt
 time, IP address, user agent, bot-check result) and signs the forward. The vault stamps its own receipt time,
-chains the event, and refuses a grant whose wording it does not hold. Seals and anchors live outside your
-company's control. The gate, the consent timeline and the evidence bundle all read the same ledger. See
+chains the event, and stores the wording as sent, with its hash. A wording the vault has not seen before is stored as a new version on first sight, never refused. Where the wording names fewer channels than the post claims, both are kept as sent and shown side by side. Seals and anchors live outside your
+company's control. Every read, the consent timeline and the evidence bundle all read the same ledger. See
 [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
 
 ## Quickstart
@@ -77,8 +77,7 @@ docker compose run --rm migrate
 docker compose up -d vault
 ```
 
-Record a grant. The wording must be registered first by an operator, because the vault refuses a grant whose
-wording it does not hold, and a grant may not name a channel or purpose its wording does not:
+Record a grant. The capture surface sends the wording on the screen at submit time, and the vault stores it as sent, with its hash. A wording the vault has not seen before is stored as a new version on first sight, never refused. Where the wording names fewer channels than the post claims, both are kept as sent and shown side by side. To register a wording ahead of time:
 
 ```
 docker compose run --rm vault consentvault disclosure register \
@@ -105,15 +104,15 @@ everything else. See [deployment](docs/deployment.md).
 |---|---|
 | `consentvault migrate` | apply pending migrations as the owner role; refuses a changed, missing or out-of-order file |
 | `consentvault disclosure register` | store the exact consent wording and print its sha256 |
-| `consentvault capture` | record a checked consent box as a grant (unchecked is refused); `--verification otp` or `--verification inbound_keyword --inbound-message START` records that you verified the person controls the contact point, which a stop's release requires |
+| `consentvault capture` | record a consent box exactly as sent, ticked or not (an unticked box is recorded as the person's 'no', never as a consent); `--verification otp` or `--verification inbound_keyword --inbound-message START` records that you verified the person controls the contact point, which a stop's release requires |
 | `consentvault revoke` | record that a person withdrew consent (`--purpose '*'` withdraws every purpose) |
 | `consentvault verify-chain` | recompute the hash chain, check every anchor, report any break |
 | `consentvault anchor` | write the current chain head to `chain_head` and the external sink |
-| `consentvault may-contact` | ask what the record shows for a contact point, channel and purpose (exit 1 = the record does not support contact); a statement of the evidence, not a legal determination |
+| `consentvault may-contact` | ask what the record shows for a contact point, channel and purpose (exit 1 = nothing on file for it); a statement of the evidence, not a legal determination |
 | `consentvault seal` / `consentvault verify-seals` | timestamp events with the authority; re-verify every stored seal |
 | `consentvault proof` | full timeline for a contact: grants, stops, current recorded status, seal status |
 | `consentvault export` | write a self-verifying evidence bundle (verify it with `verify.py --cafile <root> --anchors <sink file>`) |
-| `consentvault classify` | classify an inbound message as stop, not stop, or needs review |
+| `consentvault classify` | keep an inbound message's exact words with the channel and the moment, as the person's stop when the person asked to stop |
 | `consentvault serve` | run the HTTP API |
 
 Run `consentvault --help` for the commands installed in your version.

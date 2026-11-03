@@ -25,8 +25,7 @@ constitutes legally sufficient consent, which exemptions apply, and whether a pr
 - The ledger is tamper-evident: a change after the fact is detectable, not impossible for someone with database
   administrator access. Outside timestamps and anchors are what make a change detectable.
 - A timestamp shows that a digest existed at a time. It does not show who ticked a box.
-- The gate reports what the record shows. When you connect it to a dialer or CRM, any action it triggers follows a
-  policy you configured, not a legal judgment by ConsentVault.
+- A read reports what the record holds. ConsentVault takes no action in a customer's systems. Anything a customer's own system does after reading a record is that customer's action.
 - If the capture surface is compromised before the vault sees the data, the vault records what it was told.
 - Which wording to use, how long to keep records and what a court or regulator will accept are your decisions.
   Involving qualified counsel is recommended as best practice; it is your decision.

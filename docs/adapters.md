@@ -26,7 +26,7 @@ class MessagingAdapter(Protocol):
   `allowed`, `reason`, optional `event_id`, `changed_at`) to a system of record. If it was not delivered it
   must raise `AdapterError`. Never return quietly on failure.
 - `pull_stop_messages` returns inbound messages that may be stop requests. Feed each `text` to
-  `consentvault classify` (or `consentvault.stopwords`); a `stop` becomes a suppress event, `needs_review` goes to a person.
+  `consentvault classify` (or `consentvault.stopwords`); the message's exact words are kept either way. When a person asks to stop, in any words, on any channel, their exact words, the channel and the moment are written to the record before the call ends, with the transcript span they came from. The record keeps the words as said; reading them is the sender's.
   A failed pull raises `AdapterError`.
 
 ## Included

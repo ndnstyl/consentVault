@@ -22,12 +22,12 @@ lawyer in your own jurisdiction.
 | `channels`, `purposes` | exactly what was agreed to or withdrawn |
 | `disclosure_sha256` | the hash of the wording the person saw; the wording itself is stored once, by hash |
 | `method`, `origin` | how it was given (checkbox, verbal, keyword...) and by whom (consumer, staff, import...) |
-| `captured_at`, `received_at`, `edge_received_at` | when the capture surface says it happened (evidence only, never used to order events, and refused if later than `received_at` plus five minutes); when the vault received it, read from the vault server's own clock (a database trigger refuses any other value); and when the capture edge says it received it (evidence only) |
+| `captured_at`, `received_at`, `edge_received_at` | when the capture surface says it happened (evidence only, never used to order events, and stored as sent even if later than `received_at`); when the vault received it, read from the vault server's own clock (a database trigger refuses any other value); and when the capture edge says it received it (evidence only) |
 | `page_url`, `session_ref` | where the person was, and a per-visit reference |
 | `client_ip`, `user_agent` | what the server observed about the connection |
 | `bot_check` | the result of any bot check the capture surface ran |
 | `payload_sha256` | the hash of the exact payload received |
-| `release_of_event_id`, `release_outcome`, `release_cause` | release events only: which grant was decided, the outcome, and the reason for a refusal |
+| `release_of_event_id`, `release_outcome`, `release_cause` | release rows only: which later consent a proof of control relates to and what it verified; they rank and refuse nothing |
 | `prev_hash`, `row_hash` | the chain: `row_hash` is the sha256 of `prev_hash` followed by the canonical JSON of the row's `contact_commit`, the sha256 of its `contact_salt` followed by its `subject_key` (`subject_commit`; salted too, because a default subject key is derived from the contact point), and the sha256 of the canonical JSON of every evidence column (`content_sha256`, ledger hash version 1) |
 
 ## Five layers of protection
@@ -111,39 +111,26 @@ still requires the anchors but skips the chain checks, because there is no salt 
 
 ## The wording is part of the record
 
-An operator registers each wording in the vault (`consentvault disclosure register`), together with the channels and
-purposes it covers. The capture surface hashes the text that is on the visitor's screen at submit time and
-sends only that hash; wording itself is never accepted from a client. The vault refuses a grant whose
-disclosure hash it does not hold, and a grant that names a channel or purpose its wording does not cover.
+The capture surface sends the wording on the screen at submit time, and the vault stores it as sent, with its hash.
+A wording the vault has not seen before is stored as a new version on first sight, never refused. Where the wording
+names fewer channels than the post claims, both are kept as sent and shown side by side.
 This avoids the classic gap where the record points to whatever the "current" copy of the wording is today,
-which may differ from what the person saw, and it stops a grant being stretched to a channel the person was
-never asked about. A registered wording and its scope never change.
+which may differ from what the person saw, and it shows a post that claims more channels than its wording names.
+A stored wording never changes.
 
 ## Stops are evidence too
 
-Revocations and suppressions are events in the same chain. The permission answer is decided by the order the
-vault received events (`seq`), never by the time a caller says something happened: a grant that claims to be
-newer cannot get ahead of a stop that arrived after it. A stop outranks a grant. A person's own later grant can
-release their own earlier stop for the channels it names, but only when the grant's `contact_verification` is `otp` or
-`inbound_keyword`; a stop recorded by staff, a regulator or an import
-is never released that way, and a release never lifts a stop that arrived after the grant it decides: the
-permission view ranks a release at the position of its grant, and the release rule refuses such a decision with
-the cause `stop_after_grant`. A release row is accepted only for an earlier consumer grant of the same contact
-point. The release rule runs automatically after every consumer grant recorded through the API or `consentvault capture`.
-A web form alone shows that a box was ticked, not who owns the number or address, so a grant with
-`contact_verification` of `none` never lifts a stop: the release rule writes a `refused` release with the cause
-`contact_control_unverified` and opens a pending `release` row in `review` for a person to look at, and the release
-insert trigger refuses a `released` row for such a grant even from a hand-written insert. Running the one-time code
-or reading the inbound START message is the integrator's job; the vault takes the integrator's word, recorded in a
-hashed column, so a false claim is on the integrator's record. The capture edge always sends `none`, and the HTTP
-API accepts another value only on a request signed with the separate verified-grant secret.
-Every release decision about a consumer grant is itself an event, written with explicit columns
-(`release_of_event_id`, `release_outcome` of `released` or `refused`, and `release_cause` for a refusal) that
-are part of the row hash.
+Revocations and suppressions are events in the same chain. Events are ordered by the order the vault received them
+(`seq`), never by the time a caller says something happened. A stop and a later consent are both kept, in the order
+they arrived, with every fact that shows who sent each: the contact point, the words, the times, and any proof the
+integrator gives that the person controls the contact point (`contact_verification` of `otp` or `inbound_keyword`;
+the vault takes the integrator's word, recorded in a hashed column, so a false claim is on the integrator's record,
+and the HTTP API accepts another value only on a request signed with the separate verified-grant secret). The record
+shows the person's own later consent beside their stop, and what verifies it; it never ranks, releases or refuses
+either one, and no staff member, operator or customer can lift a stop.
 
-Purposes are lower-cased and must be on the configured list, so a stop written `Marketing` stops `marketing`.
-A stop for the purpose `*` stops every purpose on its channels, including purposes never granted; only a
-release naming a specific purpose lifts it, for that purpose.
+Purposes are lower-cased, so a stop written `Marketing` stops `marketing`; a purpose not on the configured list is stored as sent and labelled.
+A stop for the purpose `*` covers every purpose on its channels, including purposes never granted.
 
 ## Erasure and key destruction (multi-tenant vaults)
 

@@ -1,7 +1,7 @@
 # ConsentVault.AI capture edge
 
 A dependency-free Cloudflare Worker plus an embeddable checkbox widget. The widget shows a disclosure,
-hashes the exact text on screen at submit time, and posts to the worker. The worker adds what only the
+sends the exact text on screen at submit time with its sha256, and posts to the worker. The worker adds what only the
 server knows (receipt time, client IP, user agent, optional Turnstile result, payload hash), signs the
 body and forwards it to the vault's `POST /v1/events`.
 
@@ -11,15 +11,13 @@ knows neither.
 ## What the worker does
 
 1. Accepts `POST /consent` only from origins listed in `ALLOWED_ORIGINS` (comma separated, exact match).
-2. Refuses anything that is not a valid shape. An unchecked box is refused with 422 and never forwarded.
-3. Accepts only the wording's hash, `disclosure_sha256`: the sha256 of the text the visitor had on screen at
-   submit time. The worker never accepts wording itself (a request carrying `disclosure_text` is refused with
-   400) and never substitutes a server-side copy. The operator registers the wording in the vault beforehand
-   with `consentvault disclosure register`; the vault refuses a grant whose hash it does not hold.
+2. Keeps every field of a submission as sent, in whatever shape it arrives. Every submission is recorded exactly as sent, ticked or not. An unticked box is recorded as the person's 'no', never as a consent.
+3. Forwards the wording the visitor had on screen at submit time, as sent, with its sha256, and never substitutes a
+   server-side copy. The vault stores it as sent, with its hash. A wording the vault has not seen before is stored as a new version on first sight, never refused. Where the wording names fewer channels than the post claims, both are kept as sent and shown side by side.
 4. Adds `edge_received_at` (its own receipt time, kept as evidence only; the vault stamps `received_at` itself), `client_ip` (from `CF-Connecting-IP`), `user_agent`, `bot_check`
-   (`none` or `turnstile:pass`; a failed check is refused) and `payload_sha256` (sha256 of the received body).
+   (`none`, `turnstile:pass` or the failed result, each stored as sent) and `payload_sha256` (sha256 of the received body).
 5. Signs `timestamp + "." + body` with HMAC-SHA256 (`X-ConsentVault-Timestamp`, `X-ConsentVault-Signature`) and posts to
-   `VAULT_URL/v1/events`. A vault refusal or outage is returned as 502 with `recorded: false`.
+   `VAULT_URL/v1/events`. A vault outage is returned as 502 with `recorded: false`.
 
 ## Deploy
 
@@ -42,9 +40,9 @@ knows neither.
 </script>
 ```
 
-The widget posts only the sha256 of the text shown; register the same text in the vault first
+The widget posts the text shown with its sha256. You may register the same text in the vault ahead of time
 (`consentvault disclosure register --body-file wording.txt ...`; the command trims leading and trailing whitespace, as the
-widget does before hashing) or every submission is refused. Use
+widget does before hashing); a text the vault has not seen is stored on first sight, never refused. Use
 `data-template="id"` to read the disclosure from a `<template>` instead. `submit(contact)` rejects on
 every failure and never reports success unless the worker answered `recorded: true`.
 

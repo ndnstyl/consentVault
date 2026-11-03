@@ -157,7 +157,7 @@ Environment wins over `consentvault.toml`.
 | `dsn` | `CONSENTVAULT_DSN` | connection string for the runtime role |
 | `owner_dsn` | `CONSENTVAULT_OWNER_DSN` | connection string for the migrator login (its default role is the NOLOGIN owner); `migrate` only |
 | `operator_dsn` | `CONSENTVAULT_OPERATOR_DSN` | connection string for the operator console login; the operator console and `erasure-resume` |
-| `purposes` | `CONSENTVAULT_PURPOSES` | the purposes consent may name (list, or comma separated); anything else is refused. `*` is reserved for stop-all |
+| `purposes` | `CONSENTVAULT_PURPOSES` | the purposes consent may name (list, or comma separated); a purpose not on the list is stored as sent and labelled. `*` is reserved for stop-all |
 | `anchor_sink` | `CONSENTVAULT_ANCHOR_SINK` | where `consentvault anchor` writes the chain head: a file path or an http(s) webhook URL |
 | `seal_max_delay_seconds` | `CONSENTVAULT_SEAL_MAX_DELAY_SECONDS` | longest a seal's signing time may come after the event was received (default 86400) |
 | `unsealed_grace_seconds` | `CONSENTVAULT_UNSEALED_GRACE_SECONDS` | longest an event may stay unsealed before `verify-seals` fails it (default 3600) |
@@ -169,7 +169,7 @@ Environment wins over `consentvault.toml`.
 | `[api] token` | `CONSENTVAULT_API_TOKEN` | bearer token for read endpoints |
 | `[api] verified_secret` | `CONSENTVAULT_API_VERIFIED_SECRET` | optional second signing secret; only a request signed with it may claim a verified contact point |
 | `[api] allowed_hosts` | `CONSENTVAULT_API_HOSTS` | accepted `Host` header values |
-| none | `CONSENTVAULT_RELEASE_REQUIRE_NO_CONTACT_SINCE_STOP` | when `1`, a later grant releases an earlier stop only if no contact was logged between them |
+| none | `CONSENTVAULT_RELEASE_REQUIRE_NO_CONTACT_SINCE_STOP` | when `1`, the record also shows whether any contact was logged between a stop and a later consent (shown, never used to rank or refuse) |
 | none | `CONSENTVAULT_OPENSSL` | path to the `openssl` binary used for timestamp requests and verification |
 | none | `CONSENTVAULT_TSA_CAFILE` | CA bundle used to verify timestamp tokens (default: the system bundle) |
 

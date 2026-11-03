@@ -53,28 +53,83 @@ class Downstream:
                 self._cv.wait(left)
 
 
+class _Chained:
+    """A reader that yields ``head`` first and then the rest of the original stream (the header block read ahead of the library)."""
+
+    def __init__(self, head: bytes, rest) -> None:
+        import io
+
+        self._head, self._rest = io.BytesIO(head), rest
+
+    def read(self, n: int = -1) -> bytes:
+        got = self._head.read(n)
+        if n is not None and 0 <= n and len(got) == n:
+            return got
+        more = self._rest.read(-1 if n is None or n < 0 else n - len(got))
+        return got + more
+
+    def readline(self, limit: int = -1) -> bytes:
+        got = self._head.readline(limit)
+        if got.endswith(b"\n") or (limit >= 0 and len(got) >= limit):
+            return got
+        return got + self._rest.readline(-1 if limit < 0 else limit - len(got))
+
+    def close(self) -> None:
+        self._rest.close()
+
+
+MAX_HEAD_LINES = 1_000_000
+MAX_LINE_BYTES = 256 * 1024 * 1024
+
+
+def _read_full_line(rfile, first: bytes) -> bytes:
+    """A line the library would have cut at 64 KiB, read to its end."""
+    out = bytearray(first)
+    while not out.endswith(b"\n") and len(out) < MAX_LINE_BYTES:
+        more = rfile.readline(65537)
+        if not more:
+            break
+        out += more
+    return bytes(out)
+
+
 class StoreRefusedRequests:
     """For a ``BaseHTTPRequestHandler``: the standard library refuses some requests before any handler runs (a request line over
     64 KiB, more than 100 headers, a line that does not parse, a version it does not speak, a method it has no ``do_`` for).
     On a capture path, and for anything that did not parse at all, those are stored as received instead and answered with the
-    receipt. A subclass names ``_capture`` (the storing method) and ``_is_capture_target`` (whether the path is a capture path)."""
+    receipt: the whole request line, every header line and the body are read off the socket first, so nothing the library would
+    have discarded is lost. A subclass names ``_capture`` (the storing method) and ``_is_capture_target`` (whether the path is a
+    capture path)."""
 
     _parsing = False
     _extra_facts: tuple = ()
 
     def handle_one_request(self):
-        import email.message
+        import email.parser
 
         try:
-            self.raw_requestline = self.rfile.readline(65537)
+            line = self.rfile.readline(65537)
             self._extra_facts = ()
-            if len(self.raw_requestline) > 65536:
-                self.requestline = self.request_version = self.command = ""
-                self.headers = email.message.Message()
-                self._store_refused(414)
-                return
-            if not self.raw_requestline:
+            if not line:
                 self.close_connection = True
+                return
+            overlong = len(line) > 65536
+            if overlong:
+                line = _read_full_line(self.rfile, line)
+            # read the header block ourselves, whole, before the library sees any of it
+            head = bytearray()
+            for _ in range(MAX_HEAD_LINES):
+                h = _read_full_line(self.rfile, self.rfile.readline(65537))
+                head += h
+                if h in (b"\r\n", b"\n", b""):
+                    break
+            self._original_rfile = self.rfile
+            self.rfile = _Chained(bytes(head), self.rfile)
+            self.raw_requestline = line[:65537] if not overlong else line
+            if overlong:
+                self.requestline = self.request_version = self.command = ""
+                self.headers = email.parser.BytesParser().parsebytes(bytes(head), headersonly=True)
+                self._store_refused(414, line)
                 return
             self._parsing = True
             try:
@@ -82,7 +137,7 @@ class StoreRefusedRequests:
             finally:
                 self._parsing = False
             if not parsed:
-                return  # send_error stored it
+                return  # send_error stored it, from the header block read above
             method = getattr(self, "do_" + self.command, None)
             if method is None:
                 if self._is_capture_target():
@@ -101,26 +156,44 @@ class StoreRefusedRequests:
     def send_error(self, code, message=None, explain=None):
         if self._parsing and code in (400, 414, 431, 501, 505):
             self._parsing = False
-            self._store_refused(code)
+            import email.parser
+
+            head = getattr(self.rfile, "_head", None)
+            raw_head = head.getvalue() if head is not None else b""
+            self.headers = email.parser.BytesParser().parsebytes(raw_head, headersonly=True)
+            self._store_refused(code, bytes(getattr(self, "raw_requestline", b"") or b""))
             return
         super().send_error(code, message, explain)
 
-    def _store_refused(self, code: int) -> None:
-        """Store a request the standard library refused before dispatch: the request line as received, the headers it managed
-        to read, and the body when it could be read; the refusal is a fact."""
+    def _store_refused(self, code: int, line: bytes) -> None:
+        """Store a request the standard library refused before dispatch: the whole request line, every header line it was sent,
+        and the body; the refusal is a fact."""
         import base64
-        import email.message
 
-        line = bytes(getattr(self, "raw_requestline", b"") or b"")
         tokens = line.decode("latin-1").split()
-        if getattr(self, "headers", None) is None:
-            self.headers = email.message.Message()
         self.command = (tokens[0] if tokens else "") or "UNKNOWN"
         self.path = tokens[1] if len(tokens) > 1 else ""
         self._extra_facts = (Fact("vault", "refused_by_the_http_server", {"status": code}),
-                             Fact("vault", "raw_request_line_b64", base64.b64encode(line[:65536]).decode("ascii")))
+                             Fact("vault", "raw_request_line_b64", base64.b64encode(line[:65536]).decode("ascii")),
+                             Fact("vault", "raw_request_line_bytes", len(line)))
         self.close_connection = True
+        self.rfile = self._original_rfile  # the whole header block is already read: what follows is the body
         self._capture()
+
+
+REQUEST_ID_HEADER = "x-consentvault-request-id"
+
+
+def request_key(headers, signature: str | None = None, edge_request_id: str | None = None) -> str | None:
+    """The identity of one request, for the permanent seen-request record: the id the edge minted for it, else the signature it
+    was signed with, else a request id header the sender (or the gateway) put on it. None when it carries none of them (a bearer
+    request with no id is not de-duplicated). Never derived from the body."""
+    if edge_request_id:
+        return "edge:" + edge_request_id
+    given = next((v for n, v in headers if n.lower() == REQUEST_ID_HEADER and v), None)
+    if given:
+        return "id:" + given
+    return "sig:" + signature if signature else None
 
 
 def is_capture_path(path: str, prefixes: tuple[str, ...]) -> bool:

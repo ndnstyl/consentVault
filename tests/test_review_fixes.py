@@ -28,32 +28,72 @@ def raw_exchange(base: str, data: bytes) -> bytes:
     return out
 
 
-# 1. a stale or already-seen signed request makes no consent event, for good --------------------------------------------------
+# 1. a stale or already-seen request makes no consent event, for good; a repeated message is not a repeated request -----------
 
-def test_an_old_signed_request_sent_again_stores_a_post_and_makes_no_grant_even_after_a_stop(server, disclosure, conn):
+def _signed(server, payload, ts):
+    """One signed request: its identity is its signature, so a different time is a different request."""
+    return _post(server, payload, ts=ts)
+
+
+def _permission(server, contact="%2B12125550101"):
+    s, perm, _ = _call(server + f"/v1/permission?contact={contact}&channel=sms&purpose=marketing",
+                       headers={"Authorization": "Bearer test-bearer-token"})
+    return perm
+
+
+STOP = {"contact": "+12125550101", "event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"], "method": "keyword"}
+
+
+def test_stop_then_start_then_a_byte_identical_stop_makes_a_second_stop(server, disclosure, conn):
+    now = int(time.time())
+    assert _signed(server, STOP, now - 30)[0] == 201
+    start = _grant(disclosure)
+    start["contact_verification"] = "inbound_keyword"
+    start.update(method="keyword", inbound_message="START")
+    from test_api import VERIFIED_SECRET
+    assert _post(server, start, secret=VERIFIED_SECRET, ts=now - 20)[0] == 201
+    assert _permission(server)["allowed"] is True
+    assert _signed(server, STOP, now - 10)[0] == 201  # byte for byte the same body as the first stop, a new request
+    assert _permission(server)["allowed"] is False
+    stops = conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE event_type = 'revoke'").fetchone()["n"]
+    assert stops == 2
+
+
+def test_a_web_grant_then_a_revoke_then_the_identical_grant_and_revoke_again_follow_the_person_each_time(server, disclosure, conn):
+    now = int(time.time())
+    grant = _grant(disclosure)
+    for i, body in enumerate((grant, STOP, grant, STOP)):
+        assert _signed(server, body, now - 40 + i * 5)[0] == 201
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE event_type IN ('grant', 'revoke')").fetchone()["n"] == 4
+    assert _permission(server)["allowed"] is False
+    assert [_facts(conn, p["post_id"]).get("event_derived") is not None for p in _posts(conn)] == [True] * 4
+
+
+def test_the_very_same_signed_request_sent_again_is_one_request_even_after_the_replay_guard_forgets_it(server, disclosure, conn):
     payload = _grant(disclosure)
-    assert _post(server, payload)[0] == 201
-    stop = {"contact": "+12125550101", "event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"], "method": "keyword"}
-    assert _post(server, stop)[0] == 201
-    n = conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"]
-    # the same body, freshly signed (the replay guard would let it through), and a copy signed long ago
-    assert _post(server, payload, ts=int(time.time()) - 7)[0] == 201
-    assert _post(server, payload, ts=int(time.time()) - 3600)[0] == 201
-    assert conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"] == n
-    facts = [_facts(conn, p["post_id"]).get("event_not_derived") for p in _posts(conn)]
-    assert facts[-2:] == ["payload_seen_before", "not_authenticated:stale_timestamp"]
-
-
-def test_the_seen_payload_record_does_not_expire_with_the_replay_guard(server, disclosure, conn):
-    payload = _grant(disclosure)
-    assert _post(server, payload)[0] == 201
+    body = json.dumps(payload).encode()
+    ts = str(int(time.time()))
+    h = {api.TIMESTAMP_HEADER: ts, api.SIGNATURE_HEADER: api.sign(SECRET, ts, body)}
+    assert _call(server + "/v1/events", "POST", body, h)[0] == 201
+    server.settle()
     from conftest import superuser_of
     with superuser_of(conn) as su:
         su.execute("DELETE FROM consentvault.replay_guard")  # as if ten minutes had passed
     before = conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"]
-    assert _post(server, payload)[0] == 201
+    assert _call(server + "/v1/events", "POST", body, h)[0] == 201
+    server.settle()
     assert conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"] == before
-    assert conn.execute("SELECT count(*) AS n FROM consentvault.seen_payload").fetchone()["n"] == 1
+    assert _facts(conn, _posts(conn)[-1]["post_id"])["event_not_derived"] == "request_seen_before"
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.seen_request").fetchone()["n"] == 1
+
+
+def test_an_old_signed_request_makes_no_event_and_a_request_id_header_makes_a_resend_one_request(server, disclosure, conn):
+    assert _post(server, _grant(disclosure), ts=int(time.time()) - 3600)[0] == 201
+    assert _facts(conn, _posts(conn)[0]["post_id"])["event_not_derived"] == "not_authenticated:stale_timestamp"
+    now = int(time.time())
+    for i in range(2):  # two different signatures, one request id: one request
+        assert _post(server, STOP, ts=now - 5 - i, headers={"X-ConsentVault-Request-Id": "r-1"})[0] == 201
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE event_type = 'revoke'").fetchone()["n"] == 1
 
 
 # 2. a large body is inside the chain ------------------------------------------------------------------------------------------
@@ -144,7 +184,19 @@ def test_requests_the_http_library_refuses_are_stored_as_received_and_answered_w
     assert methods[3:] == ["HEAD", "BREW"]
     assert bytes(posts[4]["body_ct"]) == b"abc"
     assert "refused_by_the_http_server" in _facts(conn, posts[0]["post_id"])
+    # nothing the library would have discarded is lost: all 150 headers and the body of the first, the whole line of the second
+    names = [n for n, _ in json.loads(bytes(posts[0]["headers_ct"]))]
+    assert len([n for n in names if n.startswith("X-")]) == 150 and bytes(posts[0]["body_ct"]) == b"{}"
+    assert bytes(posts[1]["path_ct"]) == b"/v1/events/" + b"a" * 70000
     assert rawpost.verify_raw_chain(conn) == []
+
+
+def test_an_overlong_request_line_keeps_the_headers_and_body_that_follow_it(server, conn):
+    out = raw_exchange(server, b"POST /v1/events/" + b"b" * 70000 + b" HTTP/1.1\r\nHost: localhost\r\nX-Keep: yes\r\nContent-Length: 5\r\n\r\nhello")
+    server.settle()
+    assert b" 201 " in out.split(b"\r\n", 1)[0] + b" "
+    post, = _posts(conn)
+    assert bytes(post["body_ct"]) == b"hello" and ["X-Keep", "yes"] in json.loads(bytes(post["headers_ct"]))
 
 
 def test_the_path_is_kept_as_the_exact_bytes_received(server, conn):
@@ -240,6 +292,9 @@ def test_a_file_part_whose_filename_is_checked_is_not_the_consent_box():
             b'--B\r\nContent-Disposition: form-data; name="checked"\r\n\r\non\r\n--B--\r\n')
     got = extract.multipart_occurrences(body, "multipart/form-data; boundary=B", ["checked", "upload"])
     assert got == {"checked": [b"on"], "upload": [b"file bytes"]}
+    part_type = (b'--B\r\nContent-Disposition: form-data; name="upload"\r\nContent-Type: text/plain; name="checked"\r\n\r\nx\r\n'
+                 b'--B\r\nContent-Disposition: form-data; name="checked"\r\n\r\non\r\n--B--\r\n')
+    assert extract.multipart_occurrences(part_type, "multipart/form-data; boundary=B", ["checked"]) == {"checked": [b"on"]}
     only_file = b'--B\r\nContent-Disposition: form-data; filename="checked"\r\n\r\nx\r\n--B--\r\n'
     assert extract.multipart_occurrences(only_file, "multipart/form-data; boundary=B", ["checked"]) == {"checked": []}
 

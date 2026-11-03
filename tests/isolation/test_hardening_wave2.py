@@ -198,6 +198,20 @@ def test_a_replayed_edge_capture_is_stored_again_with_the_fact_and_makes_one_eve
     assert len(_events_of(hw, a.org)) == before + 1
 
 
+def test_a_queued_request_delivered_again_under_its_request_id_is_recorded_once_though_signed_again(hw):
+    a = hw.cloud.a
+    key = _site_key(hw, a)
+    before = len(_events_of(hw, a.org))
+    first = _envelope(key, _edge_body(a, key), facts={"request_id": "req-42"})
+    again = _envelope(key, _edge_body(a, key), facts={"request_id": "req-42", "queued_at_edge": "x", "delivered_from_queue_at": "y"})
+    assert _edge_post(hw, first, ts=int(time.time()) - 3)[0] == 201
+    assert _edge_post(hw, again)[0] == 201  # a new signature, the same request
+    assert len(_events_of(hw, a.org)) == before + 1
+    assert _facts(hw, _posts_of(hw, a.org)[-1])["event_not_derived"] == "request_seen_before"
+    other = _envelope(key, _edge_body(a, key), facts={"request_id": "req-43"})  # the same words, a different request
+    assert _edge_post(hw, other)[0] == 201 and len(_events_of(hw, a.org)) == before + 2
+
+
 def test_a_retired_source_stores_the_capture_and_makes_no_event(hw):
     a = hw.cloud.a
     key = _site_key(hw, a, retire=True)

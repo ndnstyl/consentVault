@@ -51,7 +51,16 @@ _STR = re.compile(rb'"(?:[^"\\]|\\.)*"', re.DOTALL)
 _LIT = re.compile(rb"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null")
 _SKIP = re.compile(rb'"(?:[^"\\]|\\.)*"|[\[\]{}]', re.DOTALL)
 _MAX_DEPTH = 400
-_DISPOSITION_NAME = re.compile(rb'(?:^|[\r\n;]|[;\s])\s*name\s*=\s*"((?:[^"\\]|\\.)*)"', re.I)
+_DISPOSITION_NAME = re.compile(rb'(?:^|[;\s])name\s*=\s*"((?:[^"\\]|\\.)*)"', re.I)
+
+
+def _disposition_name(head: bytes):
+    """The ``name`` parameter of the part's Content-Disposition header, and of no other header or parameter: a part whose
+    content-type says name="checked", or whose filename is "checked", is not the field called checked."""
+    for line in head.split(b"\r\n"):
+        if line.lower().startswith(b"content-disposition:"):
+            return _DISPOSITION_NAME.search(line.split(b":", 1)[1])
+    return None
 
 
 def pointer_tokens(pointer: str) -> tuple[str, ...]:
@@ -196,7 +205,7 @@ def multipart_occurrences(body: bytes, content_type: str | None, names: Iterable
         head, sep, rest = chunk.partition(b"\r\n\r\n")
         if not sep:
             continue
-        nm = _DISPOSITION_NAME.search(head)  # only the name parameter: filename="checked" is not the field called checked
+        nm = _disposition_name(head)  # only the content-disposition line's name parameter names the field
         if nm is None:
             continue
         name = nm.group(1).decode("utf-8", "replace")

@@ -134,8 +134,8 @@ test("a vault that is down queues the request when the edge has a durable store,
   const none = deps(() => new Response("no", { status: 401 }), { alarm: (n) => alarms.push(n) });
   const lost = await handleConsent(req(good()), ENV, none.d);
   assert.equal(lost.status, 503);
-  assert.equal((await lost.json()).stored, false);
-  assert.deepEqual(alarms, ["capture.store_unavailable"]);
+  assert.equal((await lost.json()).stored, "unknown");
+  assert.deepEqual(alarms, ["capture.store_unknown"]);
 });
 
 test("bot check: the provider's answer is a fact exactly as given, and a failed or missing check changes nothing", async () => {

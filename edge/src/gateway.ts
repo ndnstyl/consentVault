@@ -158,17 +158,20 @@ async function forwardCapture(request: Request, env: GatewayEnv, deps: GatewayDe
   headers.set("cf-access-client-id", env.ACCESS_CLIENT_ID);
   headers.set("cf-access-client-secret", env.ACCESS_CLIENT_SECRET);
   headers.set(GATEWAY_FACTS_HEADER, JSON.stringify(facts));
+  // the request's own identity: the sender's, else minted here; the vault records a request once whatever number of times it arrives
+  const requestId = request.headers.get("x-consentvault-request-id") || crypto.randomUUID();
+  headers.set("x-consentvault-request-id", requestId);
   try {
     const res = await deps.fetch(clean(env.ORIGIN_URL) + url.pathname + url.search, { method: request.method, headers, body });
     return new Response(res.body, { status: res.status, headers: scrub(res.headers) });
   } catch (e) {
     // The vault did not answer, so it is not known whether it stored the request: the answer says so and gives the
-    // fingerprint of what was sent, which the receipt lookup finds if the vault did store it.
+    // fingerprint of what was sent and the request id to resend it under.
     const digest = await crypto.subtle.digest("SHA-256", body ?? new ArrayBuffer(0));
     const fingerprint = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
     (deps.alarm ?? ((n, d) => console.error(`consentvault gateway alarm ${n}: ${d}`)))("capture.store_unknown", `the vault did not answer a capture (${(e as Error).name}); it is not known whether it was stored`);
-    return new Response(JSON.stringify({ stored: "unknown", error: "store_unknown", body_sha256: fingerprint,
-      detail: "the vault did not answer; it is not known whether this request was stored; look its fingerprint up through the receipt lookup before sending it again" }), {
+    return new Response(JSON.stringify({ stored: "unknown", error: "store_unknown", body_sha256: fingerprint, request_id: requestId,
+      detail: "the vault did not answer; whether it was stored is unknown; resending the same request (with x-consentvault-request-id set to this request_id, or the same signed request) is safe because a request is recorded once" }), {
       status: 503, headers: { "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": request.headers.get("origin") || "*", vary: "origin" },
     });
   }

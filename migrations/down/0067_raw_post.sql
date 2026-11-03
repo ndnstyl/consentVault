@@ -16,7 +16,7 @@ BEGIN
 END
 $$;
 
-DROP TABLE consentvault.seen_payload;
+DROP TABLE consentvault.seen_request;
 DROP TABLE consentvault.event_source_post;
 DROP TABLE consentvault.raw_post_seal;
 DROP FUNCTION consentvault.raw_post_seal_guard();

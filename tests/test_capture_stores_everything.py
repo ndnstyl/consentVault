@@ -19,10 +19,17 @@ from test_api import SECRET, TOKEN, VERIFIED_SECRET, PURPOSES, _serve  # noqa: F
 CASES = json.loads((Path(__file__).parent / "fixtures" / "audit_cases.json").read_text())["cases"]
 
 
+def case_body(case: dict) -> bytes:
+    """A case's body; a very large one is generated here, not stored in the fixture file."""
+    if case.get("generate") == "pad_3mib":
+        return b'{"pad": "' + b"x" * (3 * 1024 * 1024) + b'"}'
+    return base64.b64decode(case["body_b64"])
+
+
 def send(base: str, case: dict, extra_headers: dict | None = None):
     host, port = base.replace("http://", "").split(":")
     conn = http.client.HTTPConnection(host, int(port), timeout=60)
-    body = base64.b64decode(case["body_b64"])
+    body = case_body(case)
     headers = {**case["headers"], **(extra_headers or {})}
     conn.request(case["method"], case["path"], body=body if case["method"] not in ("GET",) else None, headers=headers)
     res = conn.getresponse()

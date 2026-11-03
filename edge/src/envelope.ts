@@ -7,6 +7,7 @@
 // neither can be written the browser is told, in so many words, that nothing was stored.
 
 const enc = new TextEncoder();
+export const VAULT_TIMEOUT_MS = 10_000;
 
 export interface VaultTarget {
   VAULT_URL: string;
@@ -111,6 +112,13 @@ export function unavailable(extra: Record<string, string>): Response {
   return json(503, { stored: false, error: "store_unavailable", detail: "the record store could not be written; nothing was stored; send again" }, extra);
 }
 
+/** The vault did not answer, so it is not known whether it stored the request. Resending it with the same request id is safe:
+ *  the vault records a request once, whatever number of times it arrives. */
+export function unknown(extra: Record<string, string>, fingerprint: string, requestId: string): Response {
+  return json(503, { stored: "unknown", error: "store_unknown", request_id: requestId, body_sha256: fingerprint,
+    detail: "the vault did not answer; whether it stored this request is unknown; resending it with the same request id (x-consentvault-request-id) is safe because a request is recorded once" }, extra);
+}
+
 export interface Built {
   envelope: Record<string, unknown>;
   bodySha256: string;
@@ -145,7 +153,8 @@ async function post(target: VaultTarget, deps: CaptureDeps, envelope: Record<str
   };
   if (target.ACCESS_CLIENT_ID) headers["cf-access-client-id"] = target.ACCESS_CLIENT_ID;
   if (target.ACCESS_CLIENT_SECRET) headers["cf-access-client-secret"] = target.ACCESS_CLIENT_SECRET;
-  return deps.fetch(target.VAULT_URL.replace(/\/+$/, "") + "/v1/events", { method: "POST", headers, body: text });
+  const signal = typeof AbortSignal !== "undefined" && "timeout" in AbortSignal ? AbortSignal.timeout(VAULT_TIMEOUT_MS) : undefined;
+  return deps.fetch(target.VAULT_URL.replace(/\/+$/, "") + "/v1/events", { method: "POST", headers, body: text, signal });
 }
 
 function alarm(deps: CaptureDeps, name: string, detail: string): void {
@@ -167,7 +176,9 @@ export async function storeAndAnswer(request: Request, target: Partial<VaultTarg
   }
   const preflight = isPreflight(request);
   const edgeReceivedAt = deps.now().toISOString();
-  facts = { edge_received_at: edgeReceivedAt, origin_header: request.headers.get("origin"), ...addressFacts(request), ...facts };
+  // the request's own identity, minted here (or given by the sender): kept through every redelivery, so the vault records it once
+  const requestId = request.headers.get("x-consentvault-request-id") || crypto.randomUUID();
+  facts = { edge_received_at: edgeReceivedAt, origin_header: request.headers.get("origin"), ...addressFacts(request), ...facts, request_id: requestId };
   const have = !!(target.VAULT_URL && target.SIGNING_SECRET);
   if (!have) {
     alarm(deps, "capture.store_unavailable", "the edge has no vault address or signing secret; nothing was stored");
@@ -197,12 +208,12 @@ export async function storeAndAnswer(request: Request, target: Partial<VaultTarg
       if (preflight) return new Response(null, { status: 204, headers: cors });
       return json(202, { stored: false, queued: true, queue_id: queueId, body_sha256: built.bodySha256, body_bytes: built.bodyBytes, edge_received_at: edgeReceivedAt }, cors);
     } catch (e) {
-      alarm(deps, "capture.store_unavailable", `the vault and the edge's durable store both failed (${(e as Error).name}); nothing was stored`);
+      alarm(deps, "capture.store_unknown", `the vault did not answer and the edge's durable store failed (${(e as Error).name}); whether the vault stored it is unknown`);
     }
   } else {
-    alarm(deps, "capture.store_unavailable", "the vault did not answer and the edge has no durable store; nothing was stored");
+    alarm(deps, "capture.store_unknown", "the vault did not answer and the edge has no durable store; whether the vault stored it is unknown");
   }
-  return preflight ? new Response(null, { status: 204, headers: cors }) : unavailable(cors);
+  return preflight ? new Response(null, { status: 204, headers: cors }) : unknown(cors, built.bodySha256, requestId);
 }
 
 /**
@@ -247,16 +258,23 @@ export interface QueueMessage {
   ack(): void;
   retry(): void;
 }
-/** A request the queue gave up on (it reached the dead-letter queue): never silent, an alarm names each one. */
-export function alarmDeadLetters(messages: QueueMessage[], deps: CaptureDeps): void {
+/**
+ * A request the queue gave up on (it reached the dead-letter queue): the whole message, with the headers and edge facts it carries,
+ * is written to the body store first and only then acknowledged, and the alarm names where it is. A message that cannot be kept
+ * is not acknowledged: it stays in the queue and the alarm says so.
+ */
+export async function alarmDeadLetters(messages: QueueMessage[], env: { BODY_STORE?: R2Like }, deps: CaptureDeps): Promise<void> {
   for (const m of messages) {
-    let queuedAt = "unknown time";
+    const key = `dead-letter/${crypto.randomUUID()}`;
     try {
-      queuedAt = (JSON.parse(m.body) as QueuedMessage).queued_at;
-    } catch {
-      queuedAt = "unreadable message";
+      if (!env.BODY_STORE) throw new Error("no body store is bound");
+      await env.BODY_STORE.put(key, enc.encode(m.body));
+    } catch (e) {
+      alarm(deps, "capture.queue_dead_letter", `a request could not be delivered after every retry and could not be kept (${(e as Error).message}); it was not acknowledged`);
+      m.retry();
+      continue;
     }
-    alarm(deps, "capture.queue_dead_letter", `a request accepted at ${queuedAt} could not be delivered after every retry; its body is still in the store`);
+    alarm(deps, "capture.queue_dead_letter", `a request could not be delivered after every retry; the whole message is kept at ${key}`);
     m.ack();
   }
 }

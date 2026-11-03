@@ -118,7 +118,9 @@ test("an origin that does not answer a capture is reported as unknown whether st
   assert.equal(body.stored, "unknown");
   assert.equal(body.error, "store_unknown");
   assert.equal(body.body_sha256, "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a");
-  assert.match(body.detail, /not known whether/);
+  assert.match(body.detail, /unknown/);
+  assert.match(body.detail, /recorded once/);
+  assert.match((body as unknown as { request_id: string }).request_id, /^[0-9a-f-]{36}$/);
   assert.deepEqual(alarms, ["capture.store_unknown"]);
   const noSettings = await handleGateway(r("/v1/events", { method: "POST", body: "{}" }), { ...ENV, ORIGIN_URL: "" }, { ...d, alarm: (n) => alarms.push(n) });
   assert.equal(noSettings.status, 503);

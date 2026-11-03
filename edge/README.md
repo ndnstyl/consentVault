@@ -26,8 +26,9 @@ knows neither.
    forwards it to be stored as a labelled preflight.
 6. When the vault cannot be reached and the edge has a durable store (`BODY_STORE`, `CAPTURE_QUEUE`), it keeps the body
    there and answers `202 {"queued": true, ...}` with the body's fingerprint; the queue delivers in arrival order with
-   the facts `queued_at_edge` and `delivered_from_queue_at`. When it can store nowhere it answers `503 store_unavailable`
-   and says nothing was stored; that is the only answer that does.
+   the facts `queued_at_edge` and `delivered_from_queue_at`. When the vault did not answer and nothing could be kept, it answers `503 store_unknown`: it is not known whether the vault
+   stored the request, and resending it with the same request id is safe. `503 store_unavailable` (nothing stored) is given only
+   when the edge has no vault address or signing key.
 
 ## Deploy
 

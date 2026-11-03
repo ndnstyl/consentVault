@@ -15,6 +15,11 @@ import pytest
 
 from consentvault import db
 
+# Programs a test starts (the command line, the jobs) must import the code under test, never another checkout the virtualenv
+# was installed from: the branch's own src goes first on their import path.
+_SRC = str(Path(__file__).resolve().parents[1] / "src")
+os.environ["PYTHONPATH"] = _SRC + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else "")
+
 
 def _pg_bin() -> Path:
     env = os.environ.get("PG_BIN")

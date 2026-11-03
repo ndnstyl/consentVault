@@ -30,7 +30,7 @@ from .safelog import caller_detail, db_code, describe, refusal_code
 from . import config as config_mod
 from . import edge_envelope
 from .capture import capture_and_release, capture_verified
-from .capture_http import (StoreRefusedRequests, Downstream, cors_headers, is_capture_path, is_preflight, read_any_body, request_headers,
+from .capture_http import (StoreRefusedRequests, Downstream, request_key, cors_headers, is_capture_path, is_preflight, read_any_body, request_headers,
                            transport_credentials_removed, unavailable_answer)
 from . import dbclock
 from .db import connect
@@ -307,9 +307,9 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
                 self.end_headers()
             else:
                 self._send(201, stored.answer(), cors)
-            self._after_answer(stored, raw, body, reason, replay, by_verified_key, envelope)
+            self._after_answer(stored, raw, body, reason, replay, by_verified_key, envelope, sig if reason is None else None)
 
-    def _after_answer(self, stored, raw, body: bytes, reason, replay, by_verified_key, envelope=None) -> None:
+    def _after_answer(self, stored, raw, body: bytes, reason, replay, by_verified_key, envelope=None, sig_for_key=None) -> None:
         """Read the stored post and, for an authenticated event post, derive the transitional event. Never raises: the
         answer is given and the post is stored; a failure is logged loudly and left as a fact."""
         from . import intake
@@ -324,8 +324,9 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
                         outcome, event_id = "not_authenticated:" + reason, None
                     elif replay:
                         outcome, event_id = "replay", None
-                    elif not self.writer.claim_payload(conn, None, stored):
-                        outcome, event_id = "payload_seen_before", None
+                    elif (key := request_key(raw.headers, sig_for_key, envelope.edge_facts.get("request_id") if envelope else None)) \
+                            and not self.writer.claim_request(conn, None, stored, key):
+                        outcome, event_id = "request_seen_before", None
                     else:
                         outcome, event_id = self._derive_event(conn, body, by_verified_key, envelope)
                     self.writer.add_facts(conn, None, stored, [Fact("vault", "event_derived", event_id) if event_id else
@@ -1059,7 +1060,7 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
         from .rawpost import Fact
 
         out = {"claims": None, "intake": "api", "inner": None, "stale": False,
-               "envelope": False, "edge_received_at": None, "owner": None, "edge_facts": {}}
+               "envelope": False, "edge_received_at": None, "owner": None, "edge_facts": {}, "signature": None}
         auth = (self.headers.get("Authorization") or "").strip()
         signed = bool(self.headers.get(SIGNATURE_HEADER)) and not auth
         if auth:
@@ -1088,6 +1089,7 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
             facts.append(Fact("vault", "edge_envelope_signature", "failed" if secret else "no_edge_secret_configured"))
             return
         facts.append(Fact("vault", "edge_envelope_signature", "verified"))
+        out["signature"] = sig
         try:
             env = edge_envelope.unpack(body)
         except edge_envelope.EnvelopeUnreadable as exc:  # loud-failure-exempt: recorded as the fact edge_envelope_unreadable; the signed bytes are stored as received
@@ -1146,8 +1148,10 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                         and (inner is not None or raw.path == "/v1/events"):
                     if identity["stale"] or identity.get("replayed"):
                         outcome, event_id = ("stale_timestamp" if identity["stale"] else "replay"), None
-                    elif not self.writer.claim_payload(conn, enter, stored):
-                        outcome, event_id = "payload_seen_before", None
+                    elif (key := request_key(inner.headers if inner else raw.headers, identity.get("signature"),
+                                             identity["edge_facts"].get("request_id"))) \
+                            and not self.writer.claim_request(conn, enter, stored, key):
+                        outcome, event_id = "request_seen_before", None
                     else:
                         outcome, event_id = self._derive_event(conn, identity, raw)
                     self.writer.add_facts(conn, enter, stored, [Fact("vault", "event_derived", event_id) if event_id else

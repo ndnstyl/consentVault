@@ -87,7 +87,7 @@ export default {
   },
   async queue(batch: { queue?: string; messages: QueueMessage[] }, env: Env): Promise<void> {
     const deps = { fetch: (...a: Parameters<typeof fetch>) => fetch(...a), now: () => new Date() };
-    if (env.DEAD_LETTER_QUEUE && batch.queue === env.DEAD_LETTER_QUEUE) return alarmDeadLetters(batch.messages, deps);
+    if (env.DEAD_LETTER_QUEUE && batch.queue === env.DEAD_LETTER_QUEUE) return alarmDeadLetters(batch.messages, env, deps);
     await deliverBatch(batch.messages, env, deps);
   },
 };

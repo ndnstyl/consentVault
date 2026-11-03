@@ -336,13 +336,15 @@ class RawPostWriter:
                      (org, post_id, uuid.uuid4(), _db_text(fact.source), _db_text(fact.name),
                       self._seal(key, org, post_id, COL_FACT, raw)))
 
-    def claim_payload(self, conn: psycopg.Connection, enter: Callable, stored: StoredPost) -> bool:
-        """Record this post's body as seen, for good. True when it had not been seen before; False when an earlier post of the
-        organisation carried the identical body (the caller derives no consent event from it)."""
+    def claim_request(self, conn: psycopg.Connection, enter: Callable, stored: StoredPost, request_key: str) -> bool:
+        """Record this request's own identity as seen, for good. True when it had not been seen before; False when an earlier
+        post of the organisation came from the same request (the caller derives no consent event from it). The key is the
+        request's identity (the edge's request id, the signature it was signed with, or a request id header), never its
+        content: the same stop sent twice is two requests and both count."""
         ctx = enter(conn) if enter is not None else conn.transaction()
         with ctx:
-            cur = conn.execute("INSERT INTO consentvault.seen_payload (org_id, body_sha256, post_id) VALUES (%s, %s, %s)"
-                               " ON CONFLICT DO NOTHING", (uuid.UUID(stored.org_id), stored.body_sha256, uuid.UUID(stored.post_id)))
+            cur = conn.execute("INSERT INTO consentvault.seen_request (org_id, request_key, post_id) VALUES (%s, %s, %s)"
+                               " ON CONFLICT DO NOTHING", (uuid.UUID(stored.org_id), request_key, uuid.UUID(stored.post_id)))
             return cur.rowcount == 1
 
     def add_facts(self, conn: psycopg.Connection, enter: Callable, stored: StoredPost, facts: Iterable[Fact]) -> None:

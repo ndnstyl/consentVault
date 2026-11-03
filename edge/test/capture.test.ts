@@ -204,13 +204,38 @@ test("a vault answer that is not a receipt is treated as unavailable and the req
   assert.equal(durable.messages.length, 1);
 });
 
-test("the vault down and no durable store says in so many words that nothing was stored, with an alarm", async () => {
+test("the vault not answering and no durable store says it is unknown whether it was stored, with the request id to resend under", async () => {
   const alarms: string[] = [];
-  const { d } = mk({ vaultThrow: true, alarms });
+  const { d, calls } = mk({ vaultThrow: true, alarms });
   const res = await handleCapture(req(good()), ENV, d);
   assert.equal(res.status, 503);
-  assert.deepEqual(await res.json(), { stored: false, error: "store_unavailable", detail: "the record store could not be written; nothing was stored; send again" });
-  assert.deepEqual(alarms, ["capture.store_unavailable"]);
+  const b = (await res.json()) as { stored: string; error: string; request_id: string; detail: string };
+  assert.deepEqual([b.stored, b.error], ["unknown", "store_unknown"]);
+  assert.match(b.detail, /recorded once/);
+  assert.deepEqual(alarms, ["capture.store_unknown"]);
+  assert.equal(envelopeOf(vaultCalls(calls)[0]).edge_facts.request_id, b.request_id);
+});
+
+test("a vault timeout is the same unknown answer, never nothing-was-stored", async () => {
+  const { d } = mk({ vaultThrow: true });
+  const slow: CaptureDeps = { ...d, fetch: (async (u: string) => { if (String(u).includes("siteverify")) return new Response("{}"); const e = new Error("t"); e.name = "TimeoutError"; throw e; }) as unknown as typeof fetch };
+  const res = await handleCapture(req(good()), ENV, slow);
+  assert.equal(((await res.json()) as { error: string }).error, "store_unknown");
+});
+
+test("a queued request is redelivered under the request id it was first given, though it is signed again", async () => {
+  const r2 = new FakeR2();
+  const sent: string[] = [];
+  const first = mk({ vaultThrow: true, durable: queued(r2, sent) });
+  const asked = await handleCapture(req(JSON.stringify(good()), { "x-consentvault-request-id": "req-123" }), ENV, first.d);
+  assert.equal(asked.status, 202);
+  const later = mk();
+  await deliverBatch(sent.map(msg), { BODY_STORE: r2, ...target }, { ...later.d, now: () => new Date(NOW.getTime() + 60_000) });
+  const original = envelopeOf(vaultCalls(first.calls)[0]);
+  const again = envelopeOf(vaultCalls(later.calls)[0]);
+  assert.equal(original.edge_facts.request_id, "req-123");
+  assert.equal(again.edge_facts.request_id, "req-123");
+  assert.notEqual((vaultCalls(first.calls)[0].init.headers as Record<string, string>)["x-consentvault-signature"], (vaultCalls(later.calls)[0].init.headers as Record<string, string>)["x-consentvault-signature"]);
 });
 
 test("a durable store that fails too is the same 503 with an alarm", async () => {
@@ -218,7 +243,7 @@ test("a durable store that fails too is the same 503 with an alarm", async () =>
   const broken: Durable = { putBody: async () => { throw new Error("r2 down"); }, enqueue: async () => "q" };
   const { d } = mk({ vaultThrow: true, durable: broken, alarms });
   assert.equal((await handleCapture(req(good()), ENV, d)).status, 503);
-  assert.deepEqual(alarms, ["capture.store_unavailable"]);
+  assert.deepEqual(alarms, ["capture.store_unknown"]);
 });
 
 test("a missing signing key cannot store and says so", async () => {
@@ -317,11 +342,25 @@ test("a queued body that is missing from the store or a message that cannot be r
   assert.deepEqual(alarms, ["capture.queue_unreadable"]);
 });
 
-test("a message that reached the dead-letter queue raises an alarm and is acknowledged, never dropped quietly", async () => {
+test("a message that reached the dead-letter queue is written whole to the store first, then acknowledged, and the alarm names where", async () => {
   const alarms: string[] = [];
-  const m = msg(JSON.stringify({ body_key: "bodies/x", envelope: {}, queued_at: NOW.toISOString() }));
+  const r2 = new FakeR2();
+  const body = JSON.stringify({ body_key: "bodies/x", envelope: { headers: [["a", "b"]], edge_facts: { client_ip: "1.2.3.4" } }, queued_at: NOW.toISOString() });
+  const m = msg(body);
+  const details: string[] = [];
   const { alarmDeadLetters } = await import("../src/envelope.ts");
-  alarmDeadLetters([m, msg("not json")], { ...mk({ alarms }).d });
-  assert.deepEqual(alarms, ["capture.queue_dead_letter", "capture.queue_dead_letter"]);
+  await alarmDeadLetters([m], { BODY_STORE: r2 }, { ...mk({ alarms }).d, alarm: (n, d) => { alarms.push(n); details.push(d); } });
+  assert.deepEqual(alarms, ["capture.queue_dead_letter"]);
   assert.deepEqual(m.log, ["ack"]);
+  const key = details[0].match(/dead-letter\/[0-9a-f-]{36}/)![0];
+  assert.equal(Buffer.from(r2.objects.get(key)!).toString(), body); // the headers and edge facts survive
+});
+
+test("a dead letter that cannot be kept is not acknowledged", async () => {
+  const alarms: string[] = [];
+  const m = msg("{}");
+  const { alarmDeadLetters } = await import("../src/envelope.ts");
+  await alarmDeadLetters([m], {}, { ...mk({ alarms }).d });
+  assert.deepEqual(m.log, ["retry"]);
+  assert.deepEqual(alarms, ["capture.queue_dead_letter"]);
 });

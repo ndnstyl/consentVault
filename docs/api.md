@@ -32,6 +32,11 @@ Answers:
   `queued_at_edge` and `delivered_from_queue_at` and the same `body_sha256`.
 - `503` `{"stored": false, "error": "store_unavailable", ...}`: the one answer that says nothing was stored, given only when the
   vault could not write. It raises an alarm every time.
+- `503` `{"stored": "unknown", "error": "store_unknown", "request_id", "body_sha256"}` from the edge or gateway when the vault
+  did not answer, so it is not known whether it stored the request. Resending it (the same signed request, or the same
+  `X-ConsentVault-Request-Id`) is safe: a request is acted on once. The vault keeps the identity of every request it has acted
+  on for good (the edge's request id, else the request id header, else the signature) and derives no consent event from a request
+  it has already seen or whose signed time is not fresh. Identity is never the body: the same stop sent twice is two requests.
 - `204` to a browser permission check (`OPTIONS` with `Access-Control-Request-Method`) from any origin, with the origin echoed.
   It is stored as a post labelled `preflight`. Every capture answer carries the same permission headers so a browser can read it.
 

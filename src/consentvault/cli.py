@@ -78,11 +78,9 @@ def _capture_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--session-ref")
     p.add_argument("--page-url")
     p.add_argument("--source")
-    p.add_argument("--verification", choices=("otp", "inbound_keyword"),
+    p.add_argument("--verification", choices=("otp",),
                    help="how you verified that the person controls the contact point: 'otp' (you confirmed a one-time "
-                        "code; the code check is yours, the vault only records that you did it) or 'inbound_keyword' "
-                        "(the contact point sent a START-type message, passed with --inbound-message)")
-    p.add_argument("--inbound-message", help="the START, UNSTOP or YES message the contact point sent")
+                        "code; the code check is yours, the vault only records that you did it)")
 
 
 def _run_capture(args, cfg) -> int:
@@ -90,14 +88,10 @@ def _run_capture(args, cfg) -> int:
 
     extra = {}
     if args.verification:
-        call, extra = capture_verified, {"verification": args.verification, "inbound_message": args.inbound_message}
-    elif args.inbound_message is not None:
-        raise InvalidEventError("--inbound-message goes with --verification inbound_keyword")
+        call, extra = capture_verified, {"verification": args.verification}
     else:
         call = capture_and_release
     method = args.method
-    if args.verification == "inbound_keyword" and method == "checkbox":
-        method = "keyword"
     with _connect(cfg) as conn:
         ev, release, release_error = call(
             conn,

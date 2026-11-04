@@ -119,7 +119,7 @@ def test_a_capture_runs_the_release_rule_and_verify_chain_names_an_unchecked_web
     assert "sink_not_checked" not in json.loads(capsys.readouterr().out)
 
 
-def test_capture_with_an_inbound_keyword_lifts_a_stop_only_for_a_start_message(dsn, monkeypatch, capsys, conn):
+def test_a_start_text_through_the_command_line_writes_no_grant_and_leaves_the_check_stopped(dsn, monkeypatch, capsys, conn):
     from consentvault import cli, disclosure
 
     sha = disclosure.register(conn, WORDING, "cli-test", "en", ["sms"], ["marketing"])
@@ -127,12 +127,15 @@ def test_capture_with_an_inbound_keyword_lifts_a_stop_only_for_a_start_message(d
     monkeypatch.setenv("CONSENTVAULT_DEFAULT_REGION", "US")
     monkeypatch.setenv("CONSENTVAULT_PURPOSES", "marketing")
     assert cli.main(["revoke", "--contact", PHONE, "--channel", "sms", "--purpose", "marketing"]) == 0
+    grants = lambda: conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE event_type = 'grant'").fetchone()["n"]
     base = ["capture", "--contact", PHONE, "--checked", "--disclosure", sha, "--channel", "sms",
             "--purpose", "marketing", "--session-ref", "cli-4", "--verification", "inbound_keyword"]
     capsys.readouterr()
-    assert cli.main(base + ["--inbound-message", "who is this"]) != 0
+    for extra in (["--inbound-message", "START"], []):
+        try:
+            code = cli.main(base + extra)
+        except SystemExit as exc:
+            code = exc.code
+        assert code not in (0, None)
+    assert grants() == 0
     assert cli.main(["may-contact", "--contact", PHONE, "--channel", "sms", "--purpose", "marketing"]) == 1
-    capsys.readouterr()
-    assert cli.main(base + ["--inbound-message", "START"]) == 0
-    assert json.loads(capsys.readouterr().out)["release"]["released_channels"] == ["sms"]
-    assert cli.main(["may-contact", "--contact", PHONE, "--channel", "sms", "--purpose", "marketing"]) == 0

@@ -179,6 +179,9 @@ def parse_capture(payload: Any, body: bytes, scopes: tuple[str, ...]) -> Capture
         if need not in payload:
             raise ApiError("validation_failed", f"'{need}' is required", {need: "required"})
     f = dict(payload)
+    if f["event_type"] != "grant":  # a stop always records, whatever text came with it
+        f.pop("contact_verification", None)
+        f.pop("inbound_message", None)
     if f["event_type"] not in EVENT_TYPES:
         raise ApiError("validation_failed", "event_type must be grant, revoke or suppress",
                        {"event_type": "must be grant, revoke or suppress"})

@@ -119,3 +119,39 @@ def test_duplicate_resends_write_no_evidence_row_and_no_blob(cloud):
         cloud.call("/v1/events", body, token=tok, headers=h)
         cloud.server.drain(30)
     assert _evidence(cloud) == one
+
+
+def test_a_cloud_stop_carrying_the_text_is_recorded(cloud):
+    assert cloud.grant(cloud.a, X)[0] == 201
+    base = _events(cloud, "revoke")
+    for extra in ({"inbound_message": "STOP"}, {"contact_verification": "inbound_keyword", "inbound_message": "STOP"}):
+        assert _stop(cloud, **extra)[0] == 201
+        cloud.server.drain(30)
+    assert _events(cloud, "revoke") == base + 2
+    assert _allowed(cloud)["allowed"] is False
+
+
+def test_a_start_text_through_tenant_capture_writes_no_grant_and_leaves_the_check_stopped(cloud):
+    from consentvault.capture import tenant_capture
+    from consentvault.errors import InvalidEventError
+    from consentvault.tenancy.tokens import org_transaction
+
+    assert cloud.grant(cloud.a, X)[0] == 201
+    assert _stop(cloud)[0] == 201
+    base = _events(cloud, "grant")
+    with cloud.t.app() as app, pytest.raises(InvalidEventError):
+        with org_transaction(app, cloud.t.token(cloud.t.a, ("capture", "capture_verified"))):
+            tenant_capture(app, cloud.t.crypto, contact=X, event_type="grant", channels=["sms"], purposes=["marketing"],
+                           checked=True, disclosure_sha256=cloud.a.wording, contact_verification="inbound_keyword",
+                           inbound_message="START", method="keyword")
+    assert _events(cloud, "grant") == base
+    assert _allowed(cloud)["allowed"] is False
+
+
+def test_a_stop_through_parse_capture_and_tenant_capture_ignores_the_text():
+    from consentvault.tenancy.pipeline import parse_capture
+
+    body = {"contact": X, "event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"],
+            "contact_verification": "inbound_keyword", "inbound_message": "STOP"}
+    req = parse_capture(body, b"{}", ("capture",))
+    assert req.fields.get("contact_verification", "none") == "none" and "inbound_message" not in req.fields

@@ -75,28 +75,19 @@ def capture_verified(
 ) -> tuple[Event, dict | None, str | None]:
     """Record a grant whose contact point the integrator verified, then run the release rule.
 
-    ``verification`` is ``otp`` (the integrator confirmed a one-time code sent to the contact point) or
-    ``inbound_keyword`` (the contact point itself sent a START-type message, passed as ``inbound_message`` and
-    checked here with the stop-word classifier). The vault records that the integrator verified it; sending and
-    checking the code is the integrator's job and the vault cannot see it.
+    ``verification`` is ``otp`` (the integrator confirmed a one-time code sent to the contact point). The vault records
+    that the integrator verified it; sending and checking the code is the integrator's job and the vault cannot see it.
+    A START text (``inbound_keyword``) restores nothing: it is refused here, and the way back is a form.
     """
     from .errors import InvalidEventError
-    from .stopwords import START, classify
 
-    if verification not in ("otp", "inbound_keyword"):
-        raise InvalidEventError("verification must be 'otp' or 'inbound_keyword'")
-    if verification == "inbound_keyword":
-        if not inbound_message:
-            raise InvalidEventError("an inbound_keyword grant needs the inbound message (inbound_message)")
-        verdict = classify(inbound_message)
-        if verdict.verdict != START:
-            raise InvalidEventError(
-                f"the inbound message is not a START keyword (read as {verdict.verdict}: {verdict.reason})")
-    elif inbound_message is not None:
-        raise InvalidEventError("inbound_message belongs only to an inbound_keyword grant")
+    if verification == "inbound_keyword" or inbound_message is not None:
+        raise InvalidEventError("a START text restores nothing; the way back is a form (verification 'otp' or none)")
+    if verification != "otp":
+        raise InvalidEventError("verification must be 'otp'")
     if "checked" not in kwargs:
         raise InvalidEventError("a verified grant needs the consent box value the person sent (checked); it is never defaulted")
-    kwargs.setdefault("method", "keyword" if verification == "inbound_keyword" else "checkbox")
+    kwargs.setdefault("method", "checkbox")
     return capture_and_release(conn, contact_verification=verification, **kwargs)
 
 
@@ -120,13 +111,11 @@ def tenant_capture(
     """Record one event in the entered organisation's chain (hash version 2), with the core's capture rules.
 
     A grant needs the consent box checked, at least one channel and purpose, and wording; a verified grant needs the
-    one-time code confirmed by the integrator (``otp``) or an inbound START keyword (``inbound_keyword``, the message
-    is classified here). Stops carry no wording. The caller has entered the tenant (``tenancy.tokens.org_transaction``).
+    one-time code confirmed by the integrator (``otp``). A START text is refused. Stops carry no wording, and any verification
+    claim or text sent with one is ignored. The caller has entered the tenant (``tenancy.tokens.org_transaction``).
     """
     from .errors import InvalidEventError
     from .ledger import record_tenant_event
-    from .stopwords import START, classify
-
     if event_type == "grant":
         if checked is not True:
             raise UncheckedConsentError("the consent box was not checked; no grant recorded")
@@ -139,17 +128,10 @@ def tenant_capture(
         channels, purposes = chans, purps
     elif checked is not None:
         raise InvalidEventError("'checked' belongs only to a grant")
-    if contact_verification == "inbound_keyword":
-        if not inbound_message:
-            raise InvalidEventError("an inbound_keyword grant needs the inbound message (inbound_message)")
-        verdict = classify(inbound_message)
-        if verdict.verdict != START:
-            raise InvalidEventError(
-                f"the inbound message is not a START keyword (read as {verdict.verdict}: {verdict.reason})")
-        if method == "checkbox":
-            method = "keyword"
-    elif inbound_message is not None:
-        raise InvalidEventError("inbound_message belongs only to an inbound_keyword grant")
+    if event_type != "grant":
+        contact_verification, inbound_message = "none", None  # a stop always records, whatever text came with it
+    elif contact_verification == "inbound_keyword" or inbound_message is not None:
+        raise InvalidEventError("a START text restores nothing; the way back is a form")
     return record_tenant_event(
         conn, crypto, contact=contact, event_type=event_type, channels=channels, purposes=purposes, method=method,
         origin=origin, disclosure_sha256=disclosure_sha256 or None, contact_verification=contact_verification,

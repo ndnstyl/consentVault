@@ -37,15 +37,24 @@ def test_a_web_grant_after_the_contacts_own_stop_lifts_it_and_opens_no_review(co
     assert conn.execute("SELECT count(*) AS n FROM consentvault.review").fetchone()["n"] == 0
 
 
-@pytest.mark.parametrize("how, message", [("otp", None), ("inbound_keyword", "START")])
-def test_a_verified_grant_lifts_the_stop(conn, disclosure, how, message):
+def test_an_otp_verified_grant_lifts_the_stop(conn, disclosure):
     _stop(conn)
     _, release, err = capture_verified(
-        conn, verification=how, inbound_message=message, contact=P, disclosure_sha256=disclosure, checked=True,
+        conn, verification="otp", contact=P, disclosure_sha256=disclosure, checked=True,
         channels=["sms"], purposes=["marketing"], session_ref="s1")
     assert err is None and release["released_channels"] == ["sms"]
     assert may_contact(conn, P, "sms", "marketing").allowed
     assert conn.execute("SELECT count(*) AS n FROM consentvault.review").fetchone()["n"] == 0
+
+
+def test_a_start_text_through_the_library_writes_no_grant_and_leaves_the_check_stopped(conn, disclosure):
+    _stop(conn)
+    with pytest.raises(InvalidEventError):
+        capture_verified(conn, verification="inbound_keyword", inbound_message="START", contact=P,
+                         disclosure_sha256=disclosure, checked=True, channels=["sms"], purposes=["marketing"],
+                         session_ref="s1")
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE event_type = 'grant'").fetchone()["n"] == 0
+    assert not may_contact(conn, P, "sms", "marketing").allowed
 
 
 def test_the_database_still_refuses_a_released_row_for_a_grant_that_is_not_the_contacts_own_earlier_grant(conn, app_conn, disclosure):
@@ -164,7 +173,7 @@ def test_concurrent_first_events_for_one_contact_share_one_salt(app_dsn):
 
 def test_a_verified_grant_without_the_box_value_raises_and_never_records_true(conn, disclosure):
     base = dict(contact=P, disclosure_sha256=disclosure, channels=["sms"], purposes=["marketing"], session_ref="s")
-    for how, message in (("otp", None), ("inbound_keyword", "START")):
+    for how, message in (("otp", None),):
         with pytest.raises(InvalidEventError, match="never defaulted"):
             capture_verified(conn, verification=how, inbound_message=message, **base)
     assert conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"] == 0

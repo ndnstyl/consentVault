@@ -19,7 +19,7 @@ const ALL: Role[] = ['admin', 'developer', 'compliance_viewer'];
 
 export type RouteId =
   | 'sign-in' | 'callback' | 'invite' | 'choose-org' | 'plan' | 'billing-return'
-  | 'overview' | 'first-event' | 'brands' | 'sources' | 'source-detail' | 'credentials' | 'credential-new'
+  | 'overview' | 'first-event' | 'brands' | 'sources' | 'source-detail' | 'source-field-maps' | 'credentials' | 'credential-new'
   | 'wording' | 'wording-new' | 'wording-detail' | 'policies' | 'policy-new' | 'policy-detail' | 'policy-approve'
   | 'checklists' | 'checklist-detail' | 'evidence' | 'exports' | 'export-detail'
   | 'systems' | 'system-new' | 'system-detail' | 'retention' | 'members' | 'sso' | 'audit' | 'billing' | 'settings' | 'references'
@@ -27,7 +27,7 @@ export type RouteId =
 
 export const VIEW_ROLES: Record<RouteId, Role[]> = {
   'sign-in': ALL, callback: ALL, invite: ALL, 'choose-org': ALL, plan: A, 'billing-return': A,
-  overview: ALL, 'first-event': AD, brands: AD, sources: AD, 'source-detail': AD, credentials: AD, 'credential-new': AD,
+  overview: ALL, 'first-event': AD, brands: AD, sources: AD, 'source-detail': AD, 'source-field-maps': AD, credentials: AD, 'credential-new': AD,
   wording: ALL, 'wording-new': A, 'wording-detail': ALL, policies: ALL, 'policy-new': A, 'policy-detail': ALL, 'policy-approve': A,
   checklists: ALL, 'checklist-detail': ALL, evidence: AV, exports: AV, 'export-detail': AV,
   systems: ALL, 'system-new': AD, 'system-detail': ALL, retention: AV, members: A, sso: A, audit: AV, billing: A, settings: ALL, references: ALL,
@@ -35,13 +35,13 @@ export const VIEW_ROLES: Record<RouteId, Role[]> = {
 };
 
 export type Action =
-  | 'brand.create' | 'source.write' | 'credential.issue' | 'credential.issue.gate_read' | 'credential.issue.proof_read' | 'credential.revoke'
+  | 'brand.create' | 'source.write' | 'fieldmap.add' | 'credential.issue' | 'credential.issue.gate_read' | 'credential.issue.proof_read' | 'credential.revoke'
   | 'wording.register' | 'policy.write' | 'checklist.write' | 'evidence.erase' | 'export.build'
   | 'system.write' | 'system.redrive' | 'retention.set' | 'member.manage' | 'billing.manage' | 'offboarding.request' | 'first-event.send'
   | 'records.search' | 'records.reveal' | 'records.export' | 'records.person' | 'setup.skip' | 'confirmations.account' | 'confirmations.manage' | 'confirmations.replies';
 
 export const ACTION_ROLES: Record<Action, Role[]> = {
-  'brand.create': A, 'source.write': AD, 'credential.issue': AD, 'credential.issue.gate_read': A, 'credential.issue.proof_read': A,
+  'brand.create': A, 'source.write': AD, 'fieldmap.add': AD, 'credential.issue': AD, 'credential.issue.gate_read': A, 'credential.issue.proof_read': A,
   'credential.revoke': AD, 'wording.register': A, 'policy.write': A, 'checklist.write': A, 'evidence.erase': A, 'export.build': AV,
   'system.write': AD, 'system.redrive': AD, 'retention.set': A, 'member.manage': A, 'billing.manage': A, 'offboarding.request': A, 'first-event.send': AD,
   'records.search': AV, 'records.reveal': AV, 'records.export': AV, 'records.person': AV, 'setup.skip': AD, 'confirmations.account': AD, 'confirmations.manage': A, 'confirmations.replies': AV,

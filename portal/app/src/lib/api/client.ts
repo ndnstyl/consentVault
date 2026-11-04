@@ -142,6 +142,11 @@ export function createClient(opts: ClientOptions = {}) {
       get: (id: string) => get<T.Source>(`/v1/sources/${enc(id)}`),
       create: (b: { name: string; kind: 'site_key' | 'server'; brand_ids: string[]; allowed_origins: string[] }) => post<T.Source>('/v1/sources', b),
       update: (id: string, b: { name?: string; brand_ids?: string[]; allowed_origins?: string[]; status?: 'retired' }) => patch<T.Source>(`/v1/sources/${enc(id)}`, b),
+      // a field map is read and added to, never edited: each add is a new version
+      fieldMaps: {
+        list: (id: string) => get<T.FieldMapList>(`/v1/sources/${enc(id)}/field-maps`),
+        add: (id: string, b: T.FieldMapNew) => post<T.FieldMapVersion>(`/v1/sources/${enc(id)}/field-maps`, b),
+      },
     },
     credentials: {
       list: (q?: Paged & { source_id?: string; kind?: string; scope?: string; status?: string }) => get<T.Page<T.Credential>>('/v1/credentials', q),

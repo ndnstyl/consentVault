@@ -96,7 +96,8 @@ def test_a_closed_organisation_cannot_be_entered(vault):
 
 def test_a_tenant_token_for_another_org_or_expired_or_forged_is_unauthenticated(vault):
     org, boss = vault.org_with_admin("Acme", "boss@acme.example")
-    for bad in (boss.token[:-2] + "00", "v1.nope", "",
+    forged = boss.token[:-1] + ("0" if boss.token[-1] != "0" else "1")  # always a different token, never by chance the real one
+    for bad in (forged, "v1.nope", "",
                 mint_org_token(vault.key, org["org_id"], ["admin"], credential_id="member:" + boss.member_id,
                                now=time.time() - 4000)):
         r = vault.app.handle(Request("GET", "/v1/org", tenant_token=bad or None, request_id="r"))

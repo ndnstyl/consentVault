@@ -1,5 +1,5 @@
 """The multi-tenant path claims a request in the same transaction as the event it derives."""
-import json, threading, time, urllib.request, uuid
+import json, os, threading, time, urllib.request, uuid
 
 import pytest
 
@@ -12,6 +12,7 @@ X = "+15555550177"
 @pytest.fixture
 def cloud(tenancy, tmp_path):
     c = Cloud(tenancy, str(tmp_path / "evidence"))
+    c.evidence_dir = str(tmp_path / "evidence")
     yield c
     c.close()
 
@@ -53,7 +54,7 @@ def test_crash_at_the_claim_leaves_no_event_and_a_stop_is_not_lifted_by_a_resend
     def dies(self, *a, **k):
         n["c"] += 1
         if n["c"] == 1:
-            raise RuntimeError("process died after the event committed")  # stands in for a crash
+            raise RuntimeError("process died at the claim")  # stands in for a crash, before the event is written
         return real(self, *a, **k)
     base = _events(cloud, "grant")
     monkeypatch.setattr(RawPostWriter, "claim_request", dies)
@@ -71,6 +72,7 @@ def test_crash_at_the_claim_leaves_no_event_and_a_stop_is_not_lifted_by_a_resend
     assert _allowed(cloud)["allowed"] is False
     cloud.call("/v1/events", _grant_body(cloud, nonce), token=tok, headers=h)  # the documented safe resend after a stop
     cloud.server.drain(30)
+    assert _last_facts(cloud).get("event_not_derived") == "request_seen_before"
     assert _events(cloud, "grant") == base + 1
     assert _allowed(cloud)["allowed"] is False
 
@@ -96,3 +98,24 @@ def test_two_concurrent_copies_of_one_request_record_one_event(cloud, monkeypatc
     [t.start() for t in ts]; [t.join() for t in ts]
     cloud.server.drain(30)
     assert _events(cloud, "grant") == base + 1
+
+
+def _evidence(cloud):
+    with cloud.t.superuser() as su:
+        rows = su.execute("SELECT count(*) AS n FROM consentvault.evidence_object WHERE org_id=%s",
+                          (cloud.a.org.org_id,)).fetchone()["n"]
+    files = sum(len(fs) for _, _, fs in os.walk(cloud.evidence_dir))
+    return rows, files
+
+
+def test_duplicate_resends_write_no_evidence_row_and_no_blob(cloud):
+    tok = cloud.token(cloud.a, "capture")
+    h = {"X-ConsentVault-Request-Id": "form-3"}
+    body = _grant_body(cloud, str(uuid.uuid4()))
+    assert cloud.call("/v1/events", body, token=tok, headers=h)[0] == 201
+    cloud.server.drain(30)
+    one = _evidence(cloud)
+    for _ in range(3):
+        cloud.call("/v1/events", body, token=tok, headers=h)
+        cloud.server.drain(30)
+    assert _evidence(cloud) == one

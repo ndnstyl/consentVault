@@ -1155,10 +1155,12 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                         and (inner is not None or raw.path == "/v1/events"):
                     if identity["stale"] or identity.get("replayed"):
                         outcome, event_id = ("stale_timestamp" if identity["stale"] else "replay"), None
+                    elif (key := request_key(inner.headers if inner else raw.headers, identity.get("signature"),
+                                             identity["edge_facts"].get("request_id"),
+                                             bytes(raw.read_body if raw.read_body is not None else raw.body))) \
+                            and self.writer.request_seen(conn, enter, stored, key):  # the cheap first check: writes nothing
+                        outcome, event_id = "request_seen_before", None
                     else:
-                        key = request_key(inner.headers if inner else raw.headers, identity.get("signature"),
-                                          identity["edge_facts"].get("request_id"),
-                                          bytes(raw.read_body if raw.read_body is not None else raw.body))
                         # the claim is made inside the event's own tenant transaction, so the claim and the event stand or
                         # fall together: a crash leaves neither, and two copies of one request record one event
                         outcome, event_id = self._derive_event(conn, identity, raw, claim=(

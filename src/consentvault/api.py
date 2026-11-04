@@ -1155,15 +1155,14 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                         and (inner is not None or raw.path == "/v1/events"):
                     if identity["stale"] or identity.get("replayed"):
                         outcome, event_id = ("stale_timestamp" if identity["stale"] else "replay"), None
-                    elif (key := request_key(inner.headers if inner else raw.headers, identity.get("signature"),
-                                             identity["edge_facts"].get("request_id"),
-                                             bytes(raw.read_body if raw.read_body is not None else raw.body))) \
-                            and self.writer.request_seen(conn, enter, stored, key):
-                        outcome, event_id = "request_seen_before", None
                     else:
-                        outcome, event_id = self._derive_event(conn, identity, raw)
-                        if key and event_id:  # claimed only once the event stands, so a failed derive never burns the id
-                            self.writer.claim_request(conn, enter, stored, key)
+                        key = request_key(inner.headers if inner else raw.headers, identity.get("signature"),
+                                          identity["edge_facts"].get("request_id"),
+                                          bytes(raw.read_body if raw.read_body is not None else raw.body))
+                        # the claim is made inside the event's own tenant transaction, so the claim and the event stand or
+                        # fall together: a crash leaves neither, and two copies of one request record one event
+                        outcome, event_id = self._derive_event(conn, identity, raw, claim=(
+                            (lambda c: self.writer.claim_request(c, lambda cc: cc.transaction(), stored, key)) if key else None))
                     self.writer.add_facts(conn, enter, stored, [Fact("vault", "event_derived", event_id) if event_id else
                                                                 Fact("vault", "event_not_derived", outcome)])
                     if event_id:
@@ -1172,7 +1171,7 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
             _log.critical("the work after an answer failed; the post is stored", request_id=self.request_id,
                           error=type(exc).__name__)
 
-    def _derive_event(self, conn, identity: dict, raw) -> tuple[str, str | None]:
+    def _derive_event(self, conn, identity: dict, raw, claim=None) -> tuple[str, str | None]:
         """The transitional step: an identified post that carries the event's own fields (or the widget's) is also written as
         a ledger event, so the contact check keeps answering until it reads the posts. Whatever it cannot do is returned as
         the reason (stored as a fact); the post is never touched."""
@@ -1180,7 +1179,7 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                              UnknownPurposeError)
         from .release import release_after_tenant_grant
         from .tenancy.admin_base import ApiError
-        from .tenancy.pipeline import EvidenceStoreUnavailable, parse_capture
+        from .tenancy.pipeline import EvidenceStoreUnavailable, RequestSeenBefore, parse_capture
 
         claims, body = identity["claims"], bytes(raw.read_body if raw.read_body is not None else raw.body)
         try:
@@ -1202,7 +1201,7 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
         try:
             req = parse_capture(payload, body, claims.scopes)
             token = self._tenant_token(claims)
-            result = self.pipeline.capture(conn, self._enter(token), req, credential_id=claims.credential_id)
+            result = self.pipeline.capture(conn, self._enter(token), req, credential_id=claims.credential_id, claim=claim)
             if req.fields["event_type"] == "grant" and req.fields.get("origin", "consumer") == "consumer":
                 reader = self._tenant_token(claims, ("capture", "gate_read"))
                 try:
@@ -1214,6 +1213,8 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                     except ConsentVaultError as alarm_exc:  # the event stands; the missing alarm was logged critical by _release_alarm
                         _log.critical("the event is recorded but neither its release decision nor its alarm was written",
                                       event_id=result.event_id, request_id=self.request_id, error=type(alarm_exc).__name__)
+        except RequestSeenBefore:
+            return "request_seen_before", None
         except ApiError as exc:
             return exc.name, None
         except (UnknownDisclosureError, UnknownPurposeError, NormalizationError, InvalidEventError, ConsentRefusedError,

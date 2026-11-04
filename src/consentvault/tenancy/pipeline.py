@@ -353,6 +353,10 @@ def normalize(contact: Any, region: str | None) -> tuple[str, str]:
 
 # The pipeline -----------------------------------------------------------------------------------------------------------
 
+class RequestSeenBefore(TenancyError):
+    """The request was already claimed by an earlier post; no event is written."""
+
+
 class CapturePipeline:
     def __init__(self, *, store: EvidenceStore, crypto: TenantCrypto, receipts: ReceiptSigner,
                  default_retain_years: int, region: str | None = None,
@@ -369,9 +373,11 @@ class CapturePipeline:
         self.clock = clock
 
     def capture(self, conn: psycopg.Connection, enter: Callable, req: CaptureRequest, *,
-                credential_id: uuid.UUID) -> CaptureResult:
+                credential_id: uuid.UUID, claim: Callable | None = None) -> CaptureResult:
         """``enter(conn)`` is a context manager that opens a transaction inside the caller's tenant and yields its
-        org id (``tenancy.tokens.org_transaction`` bound to the caller's token)."""
+        org id (``tenancy.tokens.org_transaction`` bound to the caller's token). ``claim(conn)``, when given, claims the
+        request inside the transaction that writes the event (True when not seen before), so the claim and the event
+        stand or fall together; a request seen before raises ``RequestSeenBefore`` and writes no event."""
         from ..capture import tenant_capture
 
         f = dict(req.fields)
@@ -406,6 +412,8 @@ class CapturePipeline:
 
         try:
             with enter(conn):
+                if claim is not None and not claim(conn):
+                    raise RequestSeenBefore("an earlier post already claimed this request")
                 ev = tenant_capture(conn, self.crypto, payload=req.body, region=region,
                                     allowed_purposes=None, display=req.display, **f)
                 conn.execute("UPDATE consentvault.evidence_object SET status = 'committed', event_id = %s,"

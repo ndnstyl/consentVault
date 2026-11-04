@@ -37,6 +37,7 @@ ACTIONS: dict[str, str] = {
     "brand.created": "Brand added",
     "source.created": "Capture source added",
     "source.updated": "Capture source changed",
+    "field_map.added": "Field map version added",
     "credential.issued": "Credential issued",
     "credential.revoked": "Credential revoked",
     "retention.set": "Retention changed",

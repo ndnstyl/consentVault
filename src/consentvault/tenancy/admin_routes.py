@@ -104,6 +104,8 @@ ROUTES: tuple[Route, ...] = (
     _r("GET", "/v1/sources/{source_id}", "tenant", (A, D), 200, "sources_get"),
     _r("POST", "/v1/sources", "tenant", (A, D), 201, "sources_create"),
     _r("PATCH", "/v1/sources/{source_id}", "tenant", (A, D), 200, "sources_update"),
+    _r("GET", "/v1/sources/{source_id}/field-maps", "tenant", (A, D), 200, "field_maps_list"),
+    _r("POST", "/v1/sources/{source_id}/field-maps", "tenant", (A, D), 201, "field_maps_add"),
     _r("GET", "/v1/credentials", "tenant", (A, D), 200, "credentials_list"),
     _r("POST", "/v1/credentials", "tenant", (A, D), 201, "credentials_issue"),
     _r("POST", "/v1/credentials/{credential_id}:revoke", "tenant", (A, D), 200, "credentials_revoke"),
@@ -437,6 +439,12 @@ class AdminApp:
 
     def h_sources_update(self, ctx, p, q, b):
         return admin.update_source(ctx, p["source_id"], b)
+
+    def h_field_maps_list(self, ctx, p, q, b):
+        return admin.list_field_maps(ctx, p["source_id"])
+
+    def h_field_maps_add(self, ctx, p, q, b):
+        return admin.add_field_map(ctx, p["source_id"], b)
 
     def h_credentials_list(self, ctx, p, q, b):
         return admin.list_credentials(ctx, source_id=q.get("source_id"), kind=q.get("kind"), scope=q.get("scope"),

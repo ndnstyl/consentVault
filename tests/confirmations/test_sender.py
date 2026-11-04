@@ -379,6 +379,7 @@ def test_status_changes_update_the_record_list_and_a_delivery_report_marks_deliv
     stack.run()
     rec = o.boss.ok("GET", "/v1/records", {})["items"][0]
     assert rec["confirmation"]["last_status"] == "sent" and rec["confirmation"]["channel"] == "sms"
+    stack.clock.set(datetime.now(timezone.utc))   # the rows below are stamped by the database's real clock; the fake one starts on a fixed day
     with world._get().vault.superuser() as su:   # four hours pass by the database's clock: the send stands four hours back
         su.execute("UPDATE consentvault.confirmation_send_intent SET last_attempt_at = clock_timestamp() - interval '4 hours'"
                    " WHERE org_id = %s AND channel = 'sms'", (o.org_id,))

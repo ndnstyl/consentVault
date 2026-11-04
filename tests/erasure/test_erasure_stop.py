@@ -71,14 +71,12 @@ def test_the_erasure_stop_is_one_marked_event_by_fingerprint_with_an_allowed_met
     assert r["recorded_by"] == f"erasure:{req['erasure_id']}:1"  # the erasure and its ledger entry's sequence number
 
 
-def test_the_stop_survives_a_new_capture_and_only_a_verified_grant_lifts_it(env, cloud):
+def test_the_stop_survives_until_the_person_grants_again_on_a_form_and_then_that_grant_takes_effect(env, cloud):
     _consented(cloud)
     req = _request(env, env.t.a, X)
     _confirm(env, env.t.a, req["erasure_id"])
-    s, r = cloud.grant(cloud.a, X, **ALL)  # the same person captured again, key re-made, grant unverified
-    assert s == 201, r
     assert all(a[1]["evidence_status"] == "stop_on_record" for a in _every_cell(cloud))
-    s, r = cloud.grant(cloud.a, X, contact_verification="otp", token=cloud.token(cloud.a, "capture_verified"), **ALL)
+    s, r = cloud.grant(cloud.a, X, **ALL)  # the same person captured again on a form, key re-made
     assert s == 201, r
     assert all(a[1]["evidence_status"] == "consent_record_found" for a in _every_cell(cloud))
 

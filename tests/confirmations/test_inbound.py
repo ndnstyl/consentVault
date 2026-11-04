@@ -1,6 +1,7 @@
 """confirmations.md sections 7 and 9: inbound webhook checks, classification, stops, START, HELP, our replies, public pages."""
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -277,7 +278,7 @@ def test_an_unread_reply_for_24_hours_raises_the_alarm_and_counts_show_in_settin
     text_in(armed, "don't stop", sender=P)
     c = o.boss.ok("GET", "/v1/confirmations/settings")["counts"]
     assert c["to_read"] == 1 and c["to_read_oldest_at"]
-    stack.clock.advance(hours=25)
+    stack.clock.set(datetime.now(timezone.utc) + timedelta(hours=25))  # received_at is the database's real clock; the fake one starts on a fixed day
     assert "replies_unread_24h" not in stack.alarms(o.boss)
     stack.service.run_alarm_checks(now=stack.clock())
     assert "replies_unread_24h" in stack.alarms(o.boss)
@@ -443,6 +444,7 @@ def test_an_opt_out_reply_that_cannot_go_in_five_minutes_is_dead_and_alarms(worl
     world.capture(o, P)
     stack.twilio.script = [("retry", 503)] * 10
     text_in(armed, "STOP", sender=P)
+    stack.clock.set(datetime.now(timezone.utc))  # the send's own time is the database's real clock; the fake one starts on a fixed day
     stack.run(minutes=6)
     assert "optout_reply_dead" in stack.alarms(o.boss) and any(s["status"] == "dead" for s in sends(o.boss, channel="sms"))
 

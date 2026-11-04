@@ -324,11 +324,14 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
                         outcome, event_id = "not_authenticated:" + reason, None
                     elif replay:
                         outcome, event_id = "replay", None
-                    elif (key := request_key(raw.headers, sig_for_key, envelope.edge_facts.get("request_id") if envelope else None)) \
-                            and not self.writer.claim_request(conn, None, stored, key):
-                        outcome, event_id = "request_seen_before", None
                     else:
-                        outcome, event_id = self._derive_event(conn, body, by_verified_key, envelope)
+                        key = request_key(raw.headers, sig_for_key, envelope.edge_facts.get("request_id") if envelope else None,
+                                          envelope.body if envelope is not None else body)
+                        with conn.transaction():  # the claim and the event stand or fall together
+                            if key and not self.writer.claim_request(conn, None, stored, key):
+                                outcome, event_id = "request_seen_before", None
+                            else:
+                                outcome, event_id = self._derive_event(conn, body, by_verified_key, envelope)
                     self.writer.add_facts(conn, None, stored, [Fact("vault", "event_derived", event_id) if event_id else
                                                                Fact("vault", "event_not_derived", outcome)])
                     if event_id:
@@ -354,7 +357,9 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
             payload.pop("brand_ids", None)
             payload["payload_sha256"] = hashlib.sha256(body).hexdigest()
         fields = {k: payload[k] for k in _EVENT_FIELDS if k in payload}
-        if fields.get("contact_verification") == "inbound_keyword" or "inbound_message" in payload:
+        if fields.get("event_type") != "grant":
+            fields.pop("contact_verification", None)  # a stop always records, whatever text came with it
+        elif fields.get("contact_verification") == "inbound_keyword" or "inbound_message" in payload:
             return "a_text_is_not_consent", None  # a START (or any text) restores nothing; the way back is a form
         for required in ("contact", "event_type", "channels", "purposes"):
             if required not in fields:
@@ -1151,11 +1156,14 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                     if identity["stale"] or identity.get("replayed"):
                         outcome, event_id = ("stale_timestamp" if identity["stale"] else "replay"), None
                     elif (key := request_key(inner.headers if inner else raw.headers, identity.get("signature"),
-                                             identity["edge_facts"].get("request_id"))) \
-                            and not self.writer.claim_request(conn, enter, stored, key):
+                                             identity["edge_facts"].get("request_id"),
+                                             bytes(raw.read_body if raw.read_body is not None else raw.body))) \
+                            and self.writer.request_seen(conn, enter, stored, key):
                         outcome, event_id = "request_seen_before", None
                     else:
                         outcome, event_id = self._derive_event(conn, identity, raw)
+                        if key and event_id:  # claimed only once the event stands, so a failed derive never burns the id
+                            self.writer.claim_request(conn, enter, stored, key)
                     self.writer.add_facts(conn, enter, stored, [Fact("vault", "event_derived", event_id) if event_id else
                                                                 Fact("vault", "event_not_derived", outcome)])
                     if event_id:
@@ -1188,7 +1196,8 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                                                  brand_ids=owner.brand_ids if owner else None, source="site_key")
         else:
             payload = {k: v for k, v in payload.items() if k in _CAPTURE_KEYS}
-        if payload.get("contact_verification") == "inbound_keyword" or "inbound_message" in payload:
+        if payload.get("event_type") == "grant" and (
+                payload.get("contact_verification") == "inbound_keyword" or "inbound_message" in payload):
             return "a_text_is_not_consent", None  # a START (or any text) restores nothing; the way back is a form
         try:
             req = parse_capture(payload, body, claims.scopes)

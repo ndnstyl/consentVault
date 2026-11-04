@@ -211,7 +211,7 @@ test("the vault not answering and no durable store says it is unknown whether it
   assert.equal(res.status, 503);
   const b = (await res.json()) as { stored: string; error: string; request_id: string; detail: string };
   assert.deepEqual([b.stored, b.error], ["unknown", "store_unknown"]);
-  assert.match(b.detail, /recorded once/);
+  assert.match(b.detail, /never one lost/);
   assert.deepEqual(alarms, ["capture.store_unknown"]);
   assert.equal(envelopeOf(vaultCalls(calls)[0]).edge_facts.request_id, b.request_id);
 });
@@ -223,7 +223,7 @@ test("a vault timeout is the same unknown answer, never nothing-was-stored", asy
   assert.equal(((await res.json()) as { error: string }).error, "store_unknown");
 });
 
-test("a queued request is redelivered under the request id it was first given, though it is signed again", async () => {
+test("a queued request is redelivered under the request id the edge minted for it, never one the browser chose, though it is signed again", async () => {
   const r2 = new FakeR2();
   const sent: string[] = [];
   const first = mk({ vaultThrow: true, durable: queued(r2, sent) });
@@ -233,8 +233,9 @@ test("a queued request is redelivered under the request id it was first given, t
   await deliverBatch(sent.map(msg), { BODY_STORE: r2, ...target }, { ...later.d, now: () => new Date(NOW.getTime() + 60_000) });
   const original = envelopeOf(vaultCalls(first.calls)[0]);
   const again = envelopeOf(vaultCalls(later.calls)[0]);
-  assert.equal(original.edge_facts.request_id, "req-123");
-  assert.equal(again.edge_facts.request_id, "req-123");
+  assert.notEqual(original.edge_facts.request_id, "req-123");
+  assert.match(String(original.edge_facts.request_id), /^[0-9a-f-]{36}$/);
+  assert.equal(again.edge_facts.request_id, original.edge_facts.request_id);
   assert.notEqual((vaultCalls(first.calls)[0].init.headers as Record<string, string>)["x-consentvault-signature"], (vaultCalls(later.calls)[0].init.headers as Record<string, string>)["x-consentvault-signature"]);
 });
 

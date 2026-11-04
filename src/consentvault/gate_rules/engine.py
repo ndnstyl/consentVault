@@ -43,7 +43,7 @@ REASON_POLICY_CELL_MISSING = "policy_cell_missing"
 
 RULE_KINDS = ("require_channel_scope", "internal_suppression_list", "time_window", "require_verified_contact",
               "max_age_of_consent")
-VERIFIED = ("otp", "inbound_keyword")
+VERIFIED = ("otp",)
 _HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _FP = re.compile(r"^[0-9a-f]{64}$")
 

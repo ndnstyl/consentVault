@@ -116,7 +116,7 @@ export function unavailable(extra: Record<string, string>): Response {
  *  the vault records a request once, whatever number of times it arrives. */
 export function unknown(extra: Record<string, string>, fingerprint: string, requestId: string): Response {
   return json(503, { stored: "unknown", error: "store_unknown", request_id: requestId, body_sha256: fingerprint,
-    detail: "the vault did not answer; whether it stored this request is unknown; resending it with the same request id (x-consentvault-request-id) is safe because a request is recorded once" }, extra);
+    detail: "the vault did not answer; whether it stored this request is unknown; resending it is safe: the worst outcome is the same message stored twice, never one lost" }, extra);
 }
 
 export interface Built {
@@ -176,8 +176,8 @@ export async function storeAndAnswer(request: Request, target: Partial<VaultTarg
   }
   const preflight = isPreflight(request);
   const edgeReceivedAt = deps.now().toISOString();
-  // the request's own identity, minted here (or given by the sender): kept through every redelivery, so the vault records it once
-  const requestId = request.headers.get("x-consentvault-request-id") || crypto.randomUUID();
+  // the request's own identity, minted here and never taken from the browser: kept through every redelivery, so the vault records it once
+  const requestId = crypto.randomUUID();
   facts = { edge_received_at: edgeReceivedAt, origin_header: request.headers.get("origin"), ...addressFacts(request), ...facts, request_id: requestId };
   const have = !!(target.VAULT_URL && target.SIGNING_SECRET);
   if (!have) {

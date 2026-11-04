@@ -56,10 +56,18 @@ class Downstream:
 class _Chained:
     """A reader that yields ``head`` first and then the rest of the original stream (the header block read ahead of the library)."""
 
-    def __init__(self, head: bytes, rest) -> None:
+    def __init__(self, head, rest) -> None:
         import io
 
-        self._head, self._rest = io.BytesIO(head), rest
+        self._head, self._rest = (io.BytesIO(head) if isinstance(head, (bytes, bytearray)) else head), rest
+        self._head.seek(0)
+
+    def head_bytes(self) -> bytes:
+        pos = self._head.tell()
+        self._head.seek(0)
+        data = self._head.read()
+        self._head.seek(pos)
+        return data
 
     def read(self, n: int = -1) -> bytes:
         got = self._head.read(n)
@@ -79,6 +87,9 @@ class _Chained:
 
 
 MAX_HEAD_LINES = 1_000_000
+MAX_HEAD_BYTES = 32 * 1024 * 1024
+HEAD_IN_MEMORY_BYTES = 1024 * 1024
+READ_TIMEOUT_SECONDS = 60
 MAX_LINE_BYTES = 256 * 1024 * 1024
 
 
@@ -103,6 +114,7 @@ class StoreRefusedRequests:
 
     _parsing = False
     _extra_facts: tuple = ()
+    timeout = READ_TIMEOUT_SECONDS  # a socket that goes quiet is closed, never held for good
 
     def handle_one_request(self):
         import email.parser
@@ -117,18 +129,22 @@ class StoreRefusedRequests:
             if overlong:
                 line = _read_full_line(self.rfile, line)
             # read the header block ourselves, whole, before the library sees any of it
-            head = bytearray()
+            import tempfile
+
+            head = tempfile.SpooledTemporaryFile(max_size=HEAD_IN_MEMORY_BYTES)  # past 1 MiB it streams to disk, not memory
+            head_bytes = 0
             for _ in range(MAX_HEAD_LINES):
                 h = _read_full_line(self.rfile, self.rfile.readline(65537))
-                head += h
-                if h in (b"\r\n", b"\n", b""):
+                head.write(h)
+                head_bytes += len(h)
+                if h in (b"\r\n", b"\n", b"") or head_bytes > MAX_HEAD_BYTES:
                     break
             self._original_rfile = self.rfile
-            self.rfile = _Chained(bytes(head), self.rfile)
+            self.rfile = _Chained(head, self.rfile)
             self.raw_requestline = line[:65537] if not overlong else line
             if overlong:
                 self.requestline = self.request_version = self.command = ""
-                self.headers = email.parser.BytesParser().parsebytes(bytes(head), headersonly=True)
+                self.headers = email.parser.BytesParser().parsebytes(self.rfile.head_bytes(), headersonly=True)
                 self._store_refused(414, line)
                 return
             self._parsing = True
@@ -158,8 +174,8 @@ class StoreRefusedRequests:
             self._parsing = False
             import email.parser
 
-            head = getattr(self.rfile, "_head", None)
-            raw_head = head.getvalue() if head is not None else b""
+            chained = self.rfile if isinstance(self.rfile, _Chained) else None
+            raw_head = chained.head_bytes() if chained is not None else b""
             self.headers = email.parser.BytesParser().parsebytes(raw_head, headersonly=True)
             self._store_refused(code, bytes(getattr(self, "raw_requestline", b"") or b""))
             return
@@ -184,15 +200,20 @@ class StoreRefusedRequests:
 REQUEST_ID_HEADER = "x-consentvault-request-id"
 
 
-def request_key(headers, signature: str | None = None, edge_request_id: str | None = None) -> str | None:
-    """The identity of one request, for the permanent seen-request record: the id the edge minted for it, else the signature it
-    was signed with, else a request id header the sender (or the gateway) put on it. None when it carries none of them (a bearer
-    request with no id is not de-duplicated). Never derived from the body."""
+def request_key(headers, signature: str | None = None, edge_request_id: str | None = None,
+                body: bytes | None = None) -> str | None:
+    """The identity of one request, for the permanent seen-request record: the id the edge minted for it, else a request id
+    header the sender (or the gateway) put on it, each joined to the hash of the body it came with, else the signature the
+    request was signed with. A sender-chosen id never outranks the body: the same id on a different message is a different
+    request. None when it carries none of them (a bearer request with no id is not de-duplicated)."""
+    import hashlib
+
+    digest = hashlib.sha256(body).hexdigest() if body is not None else ""
     if edge_request_id:
-        return "edge:" + edge_request_id
+        return f"edge:{edge_request_id}:{digest}"
     given = next((v for n, v in headers if n.lower() == REQUEST_ID_HEADER and v), None)
     if given:
-        return "id:" + given
+        return f"id:{given}:{digest}"
     return "sig:" + signature if signature else None
 
 

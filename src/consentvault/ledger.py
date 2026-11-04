@@ -39,7 +39,7 @@ ORIGINS = ("consumer", "staff", "regulatory", "import")
 CHANNELS = ("voice", "artificial_voice", "sms", "email")
 RELEASE_OUTCOMES = ("released", "refused")
 CONTACT_VERIFICATIONS = ("none", "otp", "inbound_keyword")
-VERIFIED = ("otp", "inbound_keyword")
+VERIFIED = ("otp",)
 
 # hash_version -> the evidence columns digested into row_hash (prev_hash is prefixed, row_hash excluded).
 # A column added later gets a new version in a new migration; old rows verify under their own version forever.

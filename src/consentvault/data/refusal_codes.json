@@ -263,31 +263,22 @@
    "defined_in": "0001_init.sql"
   },
   {
-   "code": "db_check_release_ref_tkwxmg",
+   "code": "db_check_release_ref_tnxghq",
    "function": "consentvault.check_release_ref",
    "signature": "",
-   "line": 21,
-   "template": "consentvault release: a release must decide an earlier consumer grant of the same contact point",
-   "meaning": "consentvault release: a release must decide an earlier consumer grant of the same contact point",
-   "defined_in": "0002_tenancy.sql"
-  },
-  {
-   "code": "db_check_release_ref_tqsztm",
-   "function": "consentvault.check_release_ref",
-   "signature": "",
-   "line": 25,
+   "line": 24,
    "template": "consentvault release: a release may name only the channels and purposes of the grant it decides",
    "meaning": "consentvault release: a release may name only the channels and purposes of the grant it decides",
-   "defined_in": "0002_tenancy.sql"
+   "defined_in": "0068_release_needs_no_verification.sql"
   },
   {
-   "code": "db_check_release_ref_wtphqt",
+   "code": "db_check_release_ref_zkmvqg",
    "function": "consentvault.check_release_ref",
    "signature": "",
-   "line": 30,
-   "template": "consentvault release: only a grant whose contact point was verified (one-time code or inbound keyword) can lift a stop",
-   "meaning": "consentvault release: only a grant whose contact point was verified (one-time code or inbound keyword) can lift a stop",
-   "defined_in": "0002_tenancy.sql"
+   "line": 20,
+   "template": "consentvault release: a release must decide an earlier consumer grant of the same contact point",
+   "meaning": "consentvault release: a release must decide an earlier consumer grant of the same contact point",
+   "defined_in": "0068_release_needs_no_verification.sql"
   },
   {
    "code": "db_check_verified_claim_pznnzr",

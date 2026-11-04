@@ -5,10 +5,8 @@ disclosure names and no others. Never staff, regulatory or imported stops, never
 method outside keyword/checkbox/written. A release needs a held disclosure and a session
 reference; optionally it also needs that nobody contacted the person on that channel since the stop.
 
-A grant lifts a stop only when its ``contact_verification`` is ``otp`` or ``inbound_keyword``: a web form alone does not
-show that the person ticking the box controls the number or address, so such a grant is refused with cause
-``contact_control_unverified`` and a pending ``release`` review row is opened for a person to look at. The release insert
-trigger enforces the same rule.
+A form grant from the person after their own stop takes effect: the rule asks for no verification of the contact point and
+opens no review row. A text never lifts a stop.
 
 The quiet window ignores the contact-log rows the confirmation service wrote (``recorded_by = 'confirmations'``): its opt-out, HELP and
 START replies each answer the person's own message, so none of them is contact since the stop (confirmations.md, core change C2).
@@ -35,7 +33,7 @@ import psycopg
 
 from .safelog import describe
 from .errors import ConsentVaultError, InvalidEventError
-from .ledger import VERIFIED, record_event
+from .ledger import record_event
 
 ENV_REQUIRE_NO_CONTACT = "CONSENTVAULT_RELEASE_REQUIRE_NO_CONTACT_SINCE_STOP"
 RELEASABLE_STOP_METHODS = ("keyword", "checkbox", "written")
@@ -50,7 +48,6 @@ CAUSE_NOT_IN_DISCLOSURE = "channel_not_in_disclosure"
 CAUSE_NO_PURPOSE_OVERLAP = "purpose_not_in_disclosure"
 CAUSE_CONTACT_SINCE_STOP = "contact_since_stop"
 CAUSE_STOP_AFTER_GRANT = "stop_after_grant"
-CAUSE_CONTACT_UNVERIFIED = "contact_control_unverified"
 LEDGER_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext('consentvault.ledger'))"
 
 
@@ -166,13 +163,6 @@ def _decide(conn, grant_event_id, require_no_contact_since_stop) -> ReleaseResul
         if grant["origin"] != "consumer":
             continue  # the ledger accepts a release row only for a consumer grant; the refusal is returned, not stored
         write(refused[cause], list(grant["purposes"]), "refused", cause)
-    if CAUSE_CONTACT_UNVERIFIED in refused and grant["origin"] == "consumer":
-        conn.execute(
-            "INSERT INTO consentvault.review (kind, contact_kind, contact_norm, message, event_id)"
-            " VALUES ('release', %s, %s, %s, %s::uuid)",
-            (grant["contact_kind"], grant["contact_norm"],
-             "a grant over the contact's own stop was not lifted: nothing shows the person controls this "
-             "contact point (channels: " + ", ".join(refused[CAUSE_CONTACT_UNVERIFIED]) + ")", gid))
     return ReleaseResult(
         released_channels=tuple(released),
         refusals={c: tuple(v) for c, v in refused.items()},
@@ -215,8 +205,6 @@ def _judge(grant: dict, stops: list[dict], stopped_after: bool, disclosure: dict
             refuse(CAUSE_NOT_IN_DISCLOSURE, channel)
         elif not (set(grant["purposes"]) & set(disclosure["purposes"])):
             refuse(CAUSE_NO_PURPOSE_OVERLAP, channel)
-        elif grant["contact_verification"] not in VERIFIED:
-            refuse(CAUSE_CONTACT_UNVERIFIED, channel)
         elif quiet_broken is not None and quiet_broken(channel, channel_stops):
             refuse(CAUSE_CONTACT_SINCE_STOP, channel)
         else:
@@ -347,13 +335,4 @@ def _decide_tenant(conn, crypto, grant_event_id, require_quiet: bool) -> Release
         write(released, released_purposes, "released")
     for cause in sorted(refused):
         write(refused[cause], list(grant["purposes"]), "refused", cause)
-    if CAUSE_CONTACT_UNVERIFIED in refused:
-        rid = str(_uuid.uuid4())
-        message = ("a grant over the contact's own stop was not lifted: nothing shows the person controls this "
-                   "contact point (channels: " + ", ".join(refused[CAUSE_CONTACT_UNVERIFIED]) + ")")
-        conn.execute(
-            "INSERT INTO consentvault.review (review_uuid, kind, contact_kind, contact_fp, contact_ct, message_ct,"
-            " event_id) VALUES (%s, 'release', %s, %s, %s, %s, %s::uuid)",
-            (rid, grant["contact_kind"], fp, tc.encrypt_field(dk, org, rid, "contact_norm", norm),
-             tc.encrypt_field(dk, org, rid, "message", message), gid))
     return ReleaseResult(tuple(released), {c: tuple(v) for c, v in refused.items()}, tuple(ids))

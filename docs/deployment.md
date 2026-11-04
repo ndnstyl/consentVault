@@ -224,12 +224,11 @@ or with your own script. When the sink is a webhook, `verify-chain` prints `sink
 
 ### Verified-grant secret
 
-A grant that claims the person's control of the contact point was verified (`contact_verification` of `otp` or
-`inbound_keyword`) is the only kind that can lift a stop. Set `CONSENTVAULT_API_VERIFIED_SECRET` (or
-`verified_secret` under `[api]`) to a second secret and give it only to the server-side integrator that sends or
-checks the one-time codes or reads inbound START messages. Never give it to the capture edge. Without it, the API
-refuses every such claim; `consentvault capture --verification otp|inbound_keyword` records one directly for the
-command-line integrator.
+A grant may claim that the person's control of the contact point was verified (`contact_verification` of `otp`). The claim
+is recorded and used by a policy rule that requires a verified contact; it is not needed to lift the person's own earlier stop.
+Set `CONSENTVAULT_API_VERIFIED_SECRET` (or `verified_secret` under `[api]`) to a second secret and give it only to the
+server-side integrator that checks one-time codes. Never give it to the capture edge. Without it, the API refuses every
+such claim; `consentvault capture --verification otp` records one directly for the command-line integrator.
 
 `verify-seals` fails a seal whose signing time precedes the event's `received_at`, or comes more than
 `seal_max_delay_seconds` after it, or runs backwards against `seq` (a later event stamped earlier than an

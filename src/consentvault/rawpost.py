@@ -347,6 +347,13 @@ class RawPostWriter:
                                " ON CONFLICT DO NOTHING", (uuid.UUID(stored.org_id), request_key, uuid.UUID(stored.post_id)))
             return cur.rowcount == 1
 
+    def request_seen(self, conn: psycopg.Connection, enter: Callable, stored: StoredPost, request_key: str) -> bool:
+        """True when an earlier post of the organisation already claimed this request key (a read; claims nothing)."""
+        ctx = enter(conn) if enter is not None else conn.transaction()
+        with ctx:
+            return conn.execute("SELECT 1 FROM consentvault.seen_request WHERE org_id = %s AND request_key = %s",
+                                (uuid.UUID(stored.org_id), request_key)).fetchone() is not None
+
     def add_facts(self, conn: psycopg.Connection, enter: Callable, stored: StoredPost, facts: Iterable[Fact]) -> None:
         """Facts learned after the post committed (appended; never changes the post)."""
         ctx = enter(conn) if enter is not None else conn.transaction()

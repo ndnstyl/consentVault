@@ -93,6 +93,8 @@ class InboundMixin:
         org, account_id = hit["org_id"], hit["account_id"]
         pending: list[uuid.UUID] = []
         try:
+            with self.tx(org) as raw_conn:  # the text, as received, is committed on its own first: a later failure never takes it back
+                self._store_raw(raw_conn, org, account_id, headers, body or b"")
             with self.tx(org) as conn:
                 answer = self._inbound(conn, org, account_id, headers, body or b"", self._when(conn), pending)
         except RECORD_ERRORS as exc:
@@ -124,7 +126,6 @@ class InboundMixin:
         RawPostWriter(crypto=self.crypto).write(conn, lambda c: c.transaction(), req)
 
     def _inbound(self, conn, org, account_id, headers: dict, body: bytes, now: datetime, pending: list) -> Reply:
-        self._store_raw(conn, org, account_id, headers, body)
         acct = conn.execute("SELECT org_id, account_id, status, provider, sender_ct, inbound_url, provider_replies, inbound_verified_at,"
                             " disconnected_at FROM consentvault.sending_account WHERE org_id = %s AND account_id = %s",
                             (org, account_id)).fetchone()

@@ -36,11 +36,11 @@ def test_every_event_row_hash_and_existing_seal_is_identical_before_and_after_th
     before_dir = tmp_path / "up_to_0066"
     before_dir.mkdir()
     for p in MIGRATIONS.glob("*.sql"):
-        if not p.name.startswith("0067"):
+        if not p.name.startswith(("0067", "0068")):
             shutil.copy(p, before_dir / p.name)
     with db.connect(raw_dsn) as m:
         applied = db.migrate(m, before_dir)
-    assert applied and not any(n.startswith("0067") for n in applied)
+    assert applied and not any(n.startswith(("0067", "0068")) for n in applied)
     pin_as_superuser(raw_dsn)
     t = build_tenancy(raw_dsn, pg_server["port"])  # populated: events, a revoke, contact keys, a synthetic seal per organisation
     with t.superuser() as su:
@@ -52,9 +52,18 @@ def test_every_event_row_hash_and_existing_seal_is_identical_before_and_after_th
             with org_transaction(app, t.admin_token(org.org_id)):
                 assert verify_chain(app, crypto=t.crypto) == []
 
+    through_0067 = tmp_path / "up_to_0067"
+    through_0067.mkdir()
+    for p in MIGRATIONS.glob("*.sql"):
+        if not p.name.startswith("0068"):
+            shutil.copy(p, through_0067 / p.name)
     with db.connect(raw_dsn) as m:
-        assert db.migrate(m) == ["0067_raw_post.sql"]
+        assert db.migrate(m, through_0067) == ["0067_raw_post.sql"]
     pin_as_superuser(raw_dsn)
+    # 0068 changes a pinned guard function, so it runs as the superuser (the documented break-glass) and is re-pinned
+    with db.connect(super_dsn) as m:
+        assert db.migrate(m) == ["0068_release_needs_no_verification.sql"]
+        m.execute("SELECT consentvault_guard.repin()")
 
     with t.superuser() as su:
         after, cols_after = _snapshot(su), _columns(su)

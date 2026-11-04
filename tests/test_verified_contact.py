@@ -1,4 +1,4 @@
-"""A web-form grant shows that a box was ticked, not who owns the contact point, so it cannot lift a stop."""
+"""A form grant from the person after their own stop takes effect, with no verification and no review hand-off."""
 import threading
 import uuid
 
@@ -25,23 +25,16 @@ def _web_grant(conn, sha, **kw):
                                purposes=["marketing"], session_ref="s1", **kw)
 
 
-def test_a_web_grant_cannot_lift_the_contacts_own_stop(conn, disclosure):
+def test_a_web_grant_after_the_contacts_own_stop_lifts_it_and_opens_no_review(conn, disclosure):
     _stop(conn)
     grant, release, err = _web_grant(conn, disclosure)
     assert err is None
-    assert release == {"released_channels": [], "refusals": {"contact_control_unverified": ["sms"]}}
-    assert not may_contact(conn, P, "sms", "marketing").allowed
+    assert release == {"released_channels": ["sms"], "refusals": {}}
+    assert may_contact(conn, P, "sms", "marketing").allowed
     row = conn.execute("SELECT release_outcome, release_cause FROM consentvault.event WHERE event_type = 'release'"
                        ).fetchone()
-    assert (row["release_outcome"], row["release_cause"]) == ("refused", "contact_control_unverified")
-
-
-def test_a_refused_release_opens_exactly_one_pending_review(conn, disclosure):
-    _stop(conn)
-    grant, _, _ = _web_grant(conn, disclosure)
-    release_after_grant(conn, grant.event_id)  # deciding again changes nothing
-    rows = conn.execute("SELECT kind, status, event_id::text AS event_id FROM consentvault.review").fetchall()
-    assert [(r["kind"], r["status"], r["event_id"]) for r in rows] == [("release", "pending", grant.event_id)]
+    assert (row["release_outcome"], row["release_cause"]) == ("released", None)
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.review").fetchone()["n"] == 0
 
 
 @pytest.mark.parametrize("how, message", [("otp", None), ("inbound_keyword", "START")])
@@ -55,12 +48,11 @@ def test_a_verified_grant_lifts_the_stop(conn, disclosure, how, message):
     assert conn.execute("SELECT count(*) AS n FROM consentvault.review").fetchone()["n"] == 0
 
 
-def test_the_database_refuses_a_released_row_for_an_unverified_grant(conn, app_conn, disclosure):
+def test_the_database_still_refuses_a_released_row_for_a_grant_that_is_not_the_contacts_own_earlier_grant(conn, app_conn, disclosure):
     _stop(conn)
     grant, _, _ = _web_grant(conn, disclosure)
-    row = dict(_forged_release(app_conn, grant.event_id))
-    assert row["error"], "the release insert trigger must refuse a lift on an unverified grant"
-    assert not may_contact(conn, P, "sms", "marketing").allowed
+    row = dict(_forged_release(app_conn, "00000000-0000-0000-0000-000000000000"))
+    assert row["error"], "the release insert trigger must refuse a release that decides no earlier grant"
 
 
 def _forged_release(c, grant_event_id):

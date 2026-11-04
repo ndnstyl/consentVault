@@ -126,19 +126,16 @@ never asked about. A registered wording and its scope never change.
 Revocations and suppressions are events in the same chain. The permission answer is decided by the order the
 vault received events (`seq`), never by the time a caller says something happened: a grant that claims to be
 newer cannot get ahead of a stop that arrived after it. A stop outranks a grant. A person's own later grant can
-release their own earlier stop for the channels it names, but only when the grant's `contact_verification` is `otp` or
-`inbound_keyword`; a stop recorded by staff, a regulator or an import
+release their own earlier stop for the channels it names, with no verification of the contact point; a stop recorded by staff, a regulator or an import
 is never released that way, and a release never lifts a stop that arrived after the grant it decides: the
 permission view ranks a release at the position of its grant, and the release rule refuses such a decision with
 the cause `stop_after_grant`. A release row is accepted only for an earlier consumer grant of the same contact
 point. The release rule runs automatically after every consumer grant recorded through the API or `consentvault capture`.
-A web form alone shows that a box was ticked, not who owns the number or address, so a grant with
-`contact_verification` of `none` never lifts a stop: the release rule writes a `refused` release with the cause
-`contact_control_unverified` and opens a pending `release` row in `review` for a person to look at, and the release
-insert trigger refuses a `released` row for such a grant even from a hand-written insert. Running the one-time code
-or reading the inbound START message is the integrator's job; the vault takes the integrator's word, recorded in a
-hashed column, so a false claim is on the integrator's record. The capture edge always sends `none`, and the HTTP
-API accepts another value only on a request signed with the separate verified-grant secret.
+A form grant from the person after their own stop takes effect: the release rule asks for no one-time code, no inbound
+message and no staff review, and opens no review row. A text never lifts a stop. `contact_verification` is still recorded
+when an integrator sends it, in a hashed column, but nothing depends on it. Changing the release insert trigger needed the
+superuser's break-glass step (the trigger is a pinned guard): the migration that removed the verification condition runs as
+the superuser, then `SELECT consentvault_guard.repin()`.
 Every release decision about a consumer grant is itself an event, written with explicit columns
 (`release_of_event_id`, `release_outcome` of `released` or `refused`, and `release_cause` for a refusal) that
 are part of the row hash.

@@ -331,7 +331,7 @@ def _own_stop(conn):
                  method="keyword", origin="consumer")
 
 
-def test_a_web_grant_does_not_lift_the_contacts_own_stop_and_opens_a_review(server, conn, disclosure):
+def test_a_web_grant_after_the_contacts_own_stop_lifts_it_and_opens_no_review(server, conn, disclosure):
     _own_stop(conn)
     payload = _grant(disclosure)
     payload["contact_verification"] = "none"
@@ -339,9 +339,8 @@ def test_a_web_grant_does_not_lift_the_contacts_own_stop_and_opens_a_review(serv
     _stored(status, body)
     row = conn.execute("SELECT release_outcome, release_cause FROM consentvault.event WHERE event_type = 'release'"
                        ).fetchone()
-    assert (row["release_outcome"], row["release_cause"]) == ("refused", "contact_control_unverified")
-    review = conn.execute("SELECT kind, status, contact_norm FROM consentvault.review").fetchall()
-    assert [(r["kind"], r["status"], r["contact_norm"]) for r in review] == [("release", "pending", "+12125550101")]
+    assert (row["release_outcome"], row["release_cause"]) == ("released", None)
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.review").fetchone()["n"] == 0
 
 
 def test_an_otp_confirmed_grant_lifts_the_stop(server, conn, disclosure):

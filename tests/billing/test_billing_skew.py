@@ -22,7 +22,7 @@ def _skew_process_clock(monkeypatch, by):
 
 
 def _setup(tenancy, stripe, start):
-    day = start.date() - timedelta(days=1)
+    day = start.astimezone(timezone.utc).date() - timedelta(days=1)  # the usage day is a UTC day; the database's own zone can be on the other side of midnight
     backdate_events(tenancy, tenancy.a, day, 2)
     cus, sub = subscribed(stripe, tenancy.a)
     link_period(tenancy, tenancy.a, cus, sub, start)

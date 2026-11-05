@@ -650,7 +650,7 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
         else:
             outcome = project_view(writer, conn, enter, backend, view)
         if outcome.halts and r["age_s"] >= HALT_CAP_SECONDS:
-            _log.error("a stored post has not been projectable for a long time; the posts behind it go ahead", post_age_s=int(r["age_s"]))
+            _log.error("a stored post has not been projectable for a long time; the posts behind it go ahead", elapsed_s=int(r["age_s"]))
             outcome = replace(outcome, halts=False)
         out.append(outcome)
         if outcome.halts:   # a passing fault: nothing later is projected ahead of this post, the next run repeats it first

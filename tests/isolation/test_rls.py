@@ -51,7 +51,9 @@ def test_every_tenant_table_forces_row_level_security_bound_to_the_verified_tena
                           "raw_post", "raw_post_key", "raw_post_chain_head", "raw_post_fact", "raw_post_field",
                           "raw_post_match", "raw_post_seal", "event_source_post",
                           # a stop and the post that lifted it (migration 0069)
-                          "stop_lift"}
+                          "stop_lift",
+                          # the attempts the projection made on a post that did not project (migration 0077)
+                          "projection_attempt"}
         audit = {p["tablename"] for p in policies if p["policyname"].endswith("_read_scope")
                  and p["permissive"] == "RESTRICTIVE" and p["cmd"] == "SELECT" and "may_read_audit" in p["qual"]}
         assert audit == {"audit_event"}

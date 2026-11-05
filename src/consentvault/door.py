@@ -468,6 +468,7 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
     except Exception as exc:  # loud-failure-exempt: no error is final; it is logged, handed on, and the post is projected again on the next run
         reason = reason_of(exc)
         _log.error("the event of a stored post could not be written; the projection will run again for it", error=reason)
+        _attempt(conn, enter, view.org_id, view.post_id, reason)
         if raise_errors:
             raise
         return Outcome(view.post_id, reason=reason, retry=True, halts=True)
@@ -562,6 +563,18 @@ def _record(writer, conn, enter, view: PostView, outcome: Outcome) -> Outcome:
     return outcome
 
 
+def _attempt(conn, enter, org_id: str, post_id: str, error_class: str) -> None:
+    """Record, beside the post, that the projection ran and met an error: the code version, the class of the error and the time
+    (the database's clock). It is a fact about the post and never a reason it produced no event: the post stays unfinished and is
+    projected again on the next run."""
+    try:
+        with _ctx(conn, enter):
+            conn.execute("INSERT INTO consentvault.projection_attempt (org_id, post_id, code_version, error_class)"
+                         " VALUES (%s, %s, %s, %s)", (uuid.UUID(org_id), uuid.UUID(post_id), CODE_VERSION, error_class))
+    except Exception as exc:  # loud-failure-exempt: logged; the post stays unfinished, is reported by name, and the attempt is recorded on the next run
+        _log.error("the attempt on a stored post could not be recorded beside it", error=type(exc).__name__)
+
+
 def project_post(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, backend: Any, view: PostView, *,
                  field_map: Any = None, raise_errors: bool = False, catch_up: Callable | bool = False,
                  intakes: tuple[str, ...] | None = None) -> Outcome:
@@ -606,15 +619,14 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
             "   AND NOT EXISTS (SELECT 1 FROM consentvault.raw_post_fact f WHERE f.org_id = p.org_id"
             "                   AND f.post_id = p.post_id AND f.name = 'event_not_derived')"
             " ORDER BY p.seq", (through_seq, through_seq, intakes and list(intakes), intakes and list(intakes))).fetchall()
+    rows = [r for r in rows if _backend_for(backend, r["intake"]) is not None]
     out: list[Outcome] = []
-    for r in rows:
-        if _backend_for(backend, r["intake"]) is None:
-            continue
+    for n, r in enumerate(rows):
         try:
             with _ctx(conn, enter):
                 view = read_view(writer, conn, r["org"], r["post_id"], r["seq"], r["intake"], r["method"], r["path"], r["arrived"])
         except Exception as exc:  # loud-failure-exempt: logged and handed on as the post's outcome; no error is final
-            outcome = _unreadable_post(r, exc)
+            outcome = _unreadable_post(conn, enter, r, exc)
         else:
             outcome = project_view(writer, conn, enter, backend, view)
         if outcome.halts and r["age_s"] >= HALT_CAP_SECONDS:
@@ -622,14 +634,16 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
             outcome = replace(outcome, halts=False)
         out.append(outcome)
         if outcome.halts:   # a faulted post: nothing later is projected ahead of this post, the next run repeats it first
+            out.extend(Outcome(w["post_id"], reason="waiting_for_an_earlier_post", retry=True) for w in rows[n + 1:])
             break
     return out
 
 
-def _unreadable_post(row, exc: BaseException) -> Outcome:
+def _unreadable_post(conn, enter, row, exc: BaseException) -> Outcome:
     """A stored post whose bytes or facts could not be read: no error is final, so it is projected again on the next run."""
     reason = reason_of(exc)
     _log.error("a stored post could not be read; the projection will run again for it", error=reason)
+    _attempt(conn, enter, row["org"], row["post_id"], reason)
     return Outcome(row["post_id"], reason=reason, retry=True, halts=True)
 
 

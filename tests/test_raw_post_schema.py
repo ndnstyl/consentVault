@@ -178,7 +178,9 @@ def test_the_0067_down_migration_leaves_nothing_behind_on_an_empty_vault(dsn, su
     down = (MIGRATIONS / "down" / "0067_raw_post.sql").read_text()
     down_0069 = (MIGRATIONS / "down" / "0071_stop_lift.sql").read_text()  # the stop lift table depends on the raw post table
     down_0073 = (MIGRATIONS / "down" / "0073_one_door_projection.sql").read_text()  # the link table's columns depend on it too
+    down_0077 = (MIGRATIONS / "down" / "0077_projection_attempts.sql").read_text()  # the recorded attempts depend on it too
     with psycopg.connect(super_dsn, autocommit=True) as su:
+        su.execute(down_0077)
         su.execute(down_0073)
         su.execute(down_0069)
         su.execute(down)

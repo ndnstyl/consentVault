@@ -4,9 +4,10 @@ A crash between a post's answer and its event, a database fault while the projec
 for its intake all leave a stored post with no outcome. This command finds them and projects them with the settings stored
 beside each post. Run it from the scheduler (for example every 10 minutes); running it twice changes nothing.
 
-It prints counts only: the posts it projected, the events it appended, the reasons it stored, and the posts it could not finish.
-Exit 2 names how many posts it could not finish (a passing fault: they stay pending and the next run repeats them); nothing is
-ever stored as refused for a fault that may pass. In multi-tenant mode it needs the same settings as ``serve-cloud``.
+It prints counts and the names of the posts it could not finish (the post's id and the class of the error that stopped it, never
+the error's text): the posts it projected, the events it appended, the reasons it stored, and every unfinished post. Exit 2 names
+how many posts it could not finish; no error is ever a final reason, so each stays unfinished, carries a recorded attempt, and is
+projected again on every run. In multi-tenant mode it needs the same settings as ``serve-cloud``.
 """
 
 from __future__ import annotations
@@ -17,11 +18,16 @@ import os
 from .cli import EXIT_ERROR, EXIT_OK, _connect, register
 
 
+UNFINISHED_LISTED = 100
+
+
 def _summary(mode: str, outcomes, failed) -> dict:
     waiting = ("awaiting_authentication", "no_writer_for_intake")
     return {"mode": mode, "projected": len(outcomes), "events": sum(1 for o in outcomes if o.event_id is not None),
             "reasons_stored": sum(1 for o in outcomes if o.event_id is None and not o.retry and o.reason not in waiting),
-            "awaiting": sum(1 for o in outcomes if o.reason in waiting), "unfinished": len(failed)}
+            "awaiting": sum(1 for o in outcomes if o.reason in waiting), "unfinished": len(failed),
+            "unfinished_posts": [{"post": o.post_id, "error": o.reason} for o in failed[:UNFINISHED_LISTED]],
+            "unfinished_not_listed": max(0, len(failed) - UNFINISHED_LISTED)}
 
 
 def _run(args, cfg) -> int:
@@ -76,8 +82,8 @@ def _already_running() -> int:
 def _unfinished(n: int) -> int:
     import sys
 
-    print(f"consentvault: {n} stored post(s) could not be projected now (a passing fault); they stay pending and the next run "
-          "repeats them", file=sys.stderr)
+    print(f"consentvault: {n} stored post(s) are unfinished (each is named in the summary with the class of the error that stopped "
+          "it); every attempt is recorded on the post and the next run projects them again", file=sys.stderr)
     return EXIT_ERROR
 
 

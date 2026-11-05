@@ -3,7 +3,7 @@ no longer remove a capture (task T039; rows F13 to F15 of the audit)."""
 
 import pytest
 
-from isolation.cloud_harness import Cloud, facts_of, raw_posts
+from isolation.cloud_harness import Cloud, attempts_of, facts_of, raw_posts
 
 from isolation.harness import build_tenancy
 
@@ -45,7 +45,8 @@ def test_a_failure_after_the_post_cannot_remove_it(cloud, monkeypatch, where, na
     assert s == 201 and r["stored"] is True and "event_id" not in r
     posts = raw_posts(cloud.t, cloud.a.org.org_id)
     assert len(posts) == 1 and str(posts[0]["post_id"]) == r["post_id"]
-    assert facts_of(cloud.t, posts[0])["event_not_derived"]
+    assert "event_not_derived" not in facts_of(cloud.t, posts[0])   # no error is final: the post is unfinished, with the attempt recorded
+    assert attempts_of(cloud.t, posts[0])
     with cloud.t.superuser() as su:  # and the ledger holds no half-written event for it
         assert su.execute("SELECT count(*) AS n FROM consentvault.event WHERE org_id = %s AND session_ref = 's-1'",
                           (cloud.a.org.org_id,)).fetchone()["n"] == 0

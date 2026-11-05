@@ -273,6 +273,7 @@ def test_every_adapter_gives_the_reference_history_for_a_random_sequence(adapter
 
     # 2, 3, 5: a text creates nothing, a stop counts, a duplicate changes nothing: the history is the reference history
     from consentvault import door
+    monkeypatch.setattr(door, "HALT_CAP_SECONDS", 0)   # the history is compared once nothing waits behind an unfinished post (the halt is tested apart)
     door.rebuild(conn)  # 6. a crash, then a re-run of the projection: the same history; and a second re-run changes nothing
     assert history(conn) == want, f"{adapter_name}: history differs from the reference fold"
     door.rebuild(conn)

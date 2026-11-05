@@ -61,3 +61,40 @@ def test_a_post_that_always_meets_an_error_stays_unfinished_on_every_run_and_is_
         outcomes = door.rebuild(conn)
         assert [(o.retry, o.reason) for o in outcomes] == [(True, "QueryCanceled")]
     assert conn.execute("SELECT count(*) AS n FROM consentvault.raw_post_fact WHERE name = 'event_not_derived'").fetchone()["n"] == 0
+
+
+def test_every_attempt_is_a_fact_on_the_post_with_the_code_version_the_error_class_and_the_databases_time(conn, monkeypatch):
+    def apply(self, c, enter, fields, link):
+        raise psycopg.errors.LockNotAvailable("x")
+
+    monkeypatch.setattr(door.SingleBackend, "apply", apply)
+    with pytest.raises(Exception):
+        door.submit(conn, intake="system_stop", region="US", allowed_purposes=None, payload=dict(STOP, contact="+12125550193"))
+    door.rebuild(conn)
+    rows = conn.execute("SELECT a.code_version, a.error_class, a.attempted_at >= p.received_at AS after_arrival"
+                        " FROM consentvault.projection_attempt a JOIN consentvault.raw_post p USING (org_id, post_id)"
+                        " ORDER BY a.attempted_at").fetchall()
+    assert [(r["code_version"], r["error_class"], r["after_arrival"]) for r in rows] == \
+        [(door.CODE_VERSION, "LockNotAvailable", True)] * 2
+
+
+def test_a_post_whose_bytes_cannot_be_read_is_unfinished_with_an_attempt_and_never_final(conn, monkeypatch):
+    def crash(*a, **k):
+        raise RuntimeError("crash between the answer and the projection")
+
+    with monkeypatch.context() as m:
+        m.setattr(door, "project_post", crash)
+        with pytest.raises(RuntimeError):
+            door.submit(conn, intake="system_stop", region="US", allowed_purposes=None, payload=dict(STOP, contact="+12125550195"))
+    real_read = door.read_view
+
+    def unreadable(*a, **k):
+        raise OSError("the key store did not answer")
+
+    monkeypatch.setattr(door, "read_view", unreadable)
+    assert [(o.retry, o.reason) for o in door.rebuild(conn)] == [(True, "OSError")]
+    assert [r["error_class"] for r in conn.execute("SELECT error_class FROM consentvault.projection_attempt").fetchall()] == ["OSError"]
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.raw_post_fact WHERE name = 'event_not_derived'").fetchone()["n"] == 0
+    monkeypatch.setattr(door, "read_view", real_read)
+    assert [o.retry for o in door.rebuild(conn)] == [False]
+    assert _events(conn, "+12125550195") == 1

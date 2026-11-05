@@ -229,6 +229,14 @@ def facts_of(t: Tenancy, row) -> dict:
             for f in found}
 
 
+def attempts_of(t: Tenancy, row) -> list:
+    """The error class of each attempt the projection recorded on a raw post, oldest first (an out-of-band read)."""
+    with t.superuser() as su:
+        return [r["error_class"] for r in su.execute(
+            "SELECT error_class FROM consentvault.projection_attempt WHERE org_id = %s AND post_id = %s ORDER BY attempted_at",
+            (row["org_id"], row["post_id"])).fetchall()]
+
+
 def inner_body(t: Tenancy, row) -> bytes:
     """The browser's own bytes inside a stored edge envelope (the post itself holds the signed envelope, exactly as received)."""
     import base64

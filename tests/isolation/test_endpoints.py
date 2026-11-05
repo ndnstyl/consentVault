@@ -96,6 +96,14 @@ def _last_post(cloud, org):
     return raw_posts(cloud.t, org.org_id)[-1]
 
 
+def _first_attempt_of_last(cloud, org):
+    """The class of the first error the projection met on the organisation's newest post; such a post has no final reason."""
+    from .cloud_harness import attempts_of, facts_of
+    post = _last_post(cloud, org)
+    assert "event_not_derived" not in facts_of(cloud.t, post)
+    return attempts_of(cloud.t, post)[0]
+
+
 def _facts_of_last(cloud, org):
     from .cloud_harness import facts_of
     return facts_of(cloud.t, _last_post(cloud, org))
@@ -115,8 +123,10 @@ def test_capture_answers_a_receipt_with_the_fingerprint_and_the_receipt_verifies
     assert not verify_post_receipt({**r, "body_sha256": "0" * 64}, cloud.receipts.public_key, "rcpt-test")
 
 
-def test_capture_stores_another_orgs_source_brand_and_wording_exactly_like_ones_that_do_not_exist(cloud):
+def test_capture_stores_another_orgs_source_brand_and_wording_exactly_like_ones_that_do_not_exist(cloud, monkeypatch):
     import uuid
+    from consentvault import door
+    monkeypatch.setattr(door, "HALT_CAP_SECONDS", 0)   # each post is tried on its own; the halt behind an unfinished post is tested apart
     a, b = cloud.a, cloud.b
     cases = [
         ({"source_id": str(b.org.source_id)}, {"source_id": str(uuid.uuid4())}, "source_not_allowed"),
@@ -125,12 +135,12 @@ def test_capture_stores_another_orgs_source_brand_and_wording_exactly_like_ones_
     ]
     for theirs, nobodys, name in cases:
         s1, r1 = cloud.grant(a, X, **theirs)
-        f1 = _facts_of_last(cloud, a.org)
+        f1 = _first_attempt_of_last(cloud, a.org)
         s2, r2 = cloud.grant(a, X, **nobodys)
-        f2 = _facts_of_last(cloud, a.org)
+        f2 = _first_attempt_of_last(cloud, a.org)
         # the sender is told the same thing either way (stored); the operator's record names the same reason either way
         assert s1 == s2 == 201 and r1["stored"] is r2["stored"] is True
-        assert f1["event_not_derived"] == f2["event_not_derived"] == name
+        assert f1 == f2 == name
     s, r = cloud.call("/v1/events", {"contact": X, "event_type": "revoke", "channels": ["sms"],
                                      "purposes": ["marketing"], "org_id": str(b.org.org_id)},
                       token=cloud.token(a, "capture"))
@@ -150,13 +160,15 @@ def test_only_capture_verified_may_claim_a_verified_contact(cloud):
                           ).fetchone()["contact_verification"] == "otp"
 
 
-def test_an_unknown_purpose_or_channel_is_stored_and_the_reason_is_a_fact(cloud):
+def test_an_unknown_purpose_or_channel_is_stored_and_the_reason_is_a_fact(cloud, monkeypatch):
+    from consentvault import door
+    monkeypatch.setattr(door, "HALT_CAP_SECONDS", 0)   # each post is tried on its own; the halt behind an unfinished post is tested apart
     s, r = cloud.grant(cloud.a, X, purposes=["surveys"])
     assert s == 201 and r["stored"] is True and "event_id" not in r
-    assert _facts_of_last(cloud, cloud.a.org)["event_not_derived"] == "UnknownPurposeError"
+    assert _first_attempt_of_last(cloud, cloud.a.org) == "UnknownPurposeError"
     s, r = cloud.grant(cloud.a, X, channels=["fax"])
     assert s == 201 and r["stored"] is True and "event_id" not in r
-    assert _facts_of_last(cloud, cloud.a.org)["event_not_derived"] == "invalid_channel"
+    assert _first_attempt_of_last(cloud, cloud.a.org) == "invalid_channel"
 
 
 def test_scopes_are_held_to_their_endpoints_and_a_capture_with_the_wrong_scope_is_stored_on_the_platform_intake(cloud):

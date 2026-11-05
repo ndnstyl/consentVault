@@ -85,6 +85,16 @@ def _facts(conn, post_id):
         "SELECT name, value_ct FROM consentvault.raw_post_fact WHERE post_id = %s", (post_id,)).fetchall()}
 
 
+def _attempts(conn, post_id):
+    """The error class of each attempt the projection recorded on a post, oldest first (no error is final: the post stays unfinished)."""
+    return [r["error_class"] for r in conn.execute(
+        "SELECT error_class FROM consentvault.projection_attempt WHERE post_id = %s ORDER BY attempted_at", (post_id,)).fetchall()]
+
+
+def _unfinished_with(conn, post_id, error_class):
+    return _attempts(conn, post_id)[:1] == [error_class] and "event_not_derived" not in _facts(conn, post_id)
+
+
 def _events(conn):
     return conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"]
 
@@ -321,7 +331,7 @@ def test_a_captured_at_far_ahead_of_the_vaults_clock_is_stored_and_makes_no_even
     _stored(status, body)
     post, = _posts(conn)
     assert json.loads(bytes(post["body_ct"]))["captured_at"] == payload["captured_at"]
-    assert _facts(conn, post["post_id"])["event_not_derived"] == "ClockSkewError" and _events(conn) == 0
+    assert _unfinished_with(conn, post["post_id"], "ClockSkewError") and _events(conn) == 0
     assert conn.execute("SELECT decision_time_parsed FROM consentvault.raw_post_field WHERE field = 'decision_time'"
                         ).fetchone()["decision_time_parsed"].year >= 2035
 
@@ -392,7 +402,7 @@ def test_wording_on_the_wire_is_stored_exactly_as_sent_and_the_registered_wordin
 def test_a_hash_the_operator_never_registered_is_stored_and_makes_no_event(server, conn):
     status, body, _ = _post(server, _grant("cd" * 32))
     _stored(status, body)
-    assert _events(conn) == 0 and _facts(conn, _posts(conn)[0]["post_id"])["event_not_derived"] == "UnknownDisclosureError"
+    assert _events(conn) == 0 and _unfinished_with(conn, _posts(conn)[0]["post_id"], "UnknownDisclosureError")
     assert conn.execute("SELECT count(*) AS n FROM consentvault.disclosure").fetchone()["n"] == 0
 
 
@@ -401,7 +411,7 @@ def test_a_grant_beyond_its_disclosure_is_stored_and_makes_no_event(server, conn
     payload["channels"] = ["sms", "artificial_voice"]
     status, body, _ = _post(server, payload)
     _stored(status, body)
-    assert _events(conn) == 0 and _facts(conn, _posts(conn)[0]["post_id"])["event_not_derived"] == "GrantScopeError"
+    assert _events(conn) == 0 and _unfinished_with(conn, _posts(conn)[0]["post_id"], "GrantScopeError")
 
 
 def test_purposes_are_lower_cased_in_the_event_and_kept_as_sent_in_the_post(server, conn, disclosure):
@@ -414,7 +424,7 @@ def test_purposes_are_lower_cased_in_the_event_and_kept_as_sent_in_the_post(serv
     payload["purposes"] = ["lottery"]
     status, body, _ = _post(server, payload)
     _stored(status, body)
-    assert _events(conn) == 1 and _facts(conn, _posts(conn)[1]["post_id"])["event_not_derived"] == "UnknownPurposeError"
+    assert _events(conn) == 1 and _unfinished_with(conn, _posts(conn)[1]["post_id"], "UnknownPurposeError")
 
 
 def test_the_contact_check_lists_the_grant_then_the_stop_for_every_purpose(server, conn, disclosure):

@@ -74,6 +74,7 @@ def test_the_multi_tenant_server_gives_the_reference_history_for_a_random_sequen
     assert len(raw_posts(cloud.t, co.org.org_id)) == len(ops)
 
     # 6. a crash, then the rebuild job: the same history; run twice, it changes nothing the second time
+    monkeypatch.setattr(door, "HALT_CAP_SECONDS", 0)   # the history is compared once nothing waits behind an unfinished post (the halt is tested apart)
     api.rebuild_cloud(cloud.settings, [co.org.org_id])
     assert _history(cloud) == want
     api.rebuild_cloud(cloud.settings, [co.org.org_id])

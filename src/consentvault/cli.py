@@ -87,6 +87,7 @@ def _capture_args(p: argparse.ArgumentParser) -> None:
 
 def _run_capture(args, cfg) -> int:
     from .capture import capture, capture_verified
+    from .door import StoredWaiting
 
     extra = {}
     if args.verification:
@@ -112,7 +113,7 @@ def _run_capture(args, cfg) -> int:
             source=args.source,
             **({"inbound_message": args.inbound_message} if args.inbound_message is not None else {}),
         )
-    print(json.dumps({"event_id": ev.event_id, "seq": ev.seq, "row_hash": ev.row_hash}))
+    print(json.dumps(ev.as_dict() if isinstance(ev, StoredWaiting) else {"event_id": ev.event_id, "seq": ev.seq, "row_hash": ev.row_hash}))
     return EXIT_OK
 
 

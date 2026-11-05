@@ -366,6 +366,24 @@ class Outcome:
     halts: bool = False   # unfinished: no later post is projected before this one until the halt bound passes, so arrival order holds
 
 
+WAITING = "waiting_for_an_earlier_post"
+
+
+@dataclass(frozen=True)
+class StoredWaiting:
+    """The library's and the command line's answer when the post is stored whole and an earlier stored post is unfinished: this
+    post is projected after it, in arrival order, by the next run. It is neither an event nor an invalid request."""
+
+    post_id: str
+    seq: int
+    stored: bool = True
+    waiting: bool = True
+    reason: str = WAITING
+
+    def as_dict(self) -> dict:
+        return {"stored": self.stored, "waiting": self.waiting, "post_id": self.post_id, "seq": self.seq, "reason": self.reason}
+
+
 def store_raw(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, req: RawRequest) -> StoredPost:
     """The one thing an entry point calls to take a request in: the whole request is stored first. Parses nothing."""
     return writer.write(conn, enter, req)
@@ -586,10 +604,7 @@ def project_post(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
         earlier = project_pending(writer, conn, None if catch_up is True else catch_up, backend, through_seq=view.seq - 1,
                                   intakes=intakes)
         if any(o.halts for o in earlier):   # an earlier post could not be projected yet: this one waits behind it, in arrival order
-            if raise_errors:
-                raise InvalidEventError("an earlier stored post could not be projected yet ; this post is "
-                                        "stored and is projected after it, in arrival order")
-            return Outcome(view.post_id, reason="waiting_for_an_earlier_post", retry=True)
+            return Outcome(view.post_id, reason=WAITING, retry=True)
     return project_view(writer, conn, enter, backend, view, field_map=field_map, raise_errors=raise_errors)
 
 
@@ -639,7 +654,7 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
             outcome = replace(outcome, halts=False)
         out.append(outcome)
         if outcome.halts:   # a faulted post: nothing later is projected ahead of this post, the next run repeats it first
-            out.extend(Outcome(w["post_id"], reason="waiting_for_an_earlier_post", retry=True) for w in rows[n + 1:])
+            out.extend(Outcome(w["post_id"], reason=WAITING, retry=True) for w in rows[n + 1:])
             break
     return out
 
@@ -829,10 +844,11 @@ def _json_default(v: Any) -> Any:
 # ---- the library and command line adapters' way in -----------------------------------------------------------------------
 
 def submit(conn: psycopg.Connection, *, intake: str, payload: Mapping[str, Any], region: str | None = None,
-           allowed_purposes=None, verified: bool = True, writer: RawPostWriter | None = None) -> Event:
+           allowed_purposes=None, verified: bool = True, writer: RawPostWriter | None = None) -> Event | StoredWaiting:
     """A caller in this process (the library, the command line) hands its request to the door. The request is stored whole as
     JSON, then projected; the event is returned, or the error that names why none was written is raised, after the post is
-    stored either way."""
+    stored either way. When an earlier stored post is unfinished the answer is ``StoredWaiting``: stored, not yet projected,
+    projected after the earlier post in arrival order. It is never an invalid-request error."""
     writer = writer or RawPostWriter()
     body = json.dumps(dict(payload), default=_json_default, sort_keys=True).encode("utf-8")
     facts = (Fact("vault", "request_signature", "valid"), Fact("vault", "replay", "fresh"),
@@ -844,9 +860,10 @@ def submit(conn: psycopg.Connection, *, intake: str, payload: Mapping[str, Any],
     all_facts = {("vault", f.name): f.value for f in facts}
     all_facts[("__key__", "data_key")] = stored.data_key
     view = PostView(stored.org_id, stored.post_id, stored.seq, intake, body, all_facts)
-    event_id = project_post(writer, conn, None, SingleBackend(region, allowed_purposes), view, raise_errors=True,
-                           catch_up=True).event_id
-    return event_by_id(conn, event_id)
+    outcome = project_post(writer, conn, None, SingleBackend(region, allowed_purposes), view, raise_errors=True, catch_up=True)
+    if outcome.event_id is None and outcome.reason == WAITING:
+        return StoredWaiting(stored.post_id, stored.seq)
+    return event_by_id(conn, outcome.event_id)
 
 
 def event_by_id(conn: psycopg.Connection, event_id: str) -> Event:

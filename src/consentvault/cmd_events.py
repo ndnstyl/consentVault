@@ -57,7 +57,7 @@ def _run_revoke(args, cfg) -> int:
             conn, intake="cli", region=cfg.default_region, allowed_purposes=cfg.require_purposes(),
             payload={"contact": args.contact, "event_type": "revoke", "channels": args.channels, "purposes": args.purposes,
                      "method": args.method, "origin": args.origin, "source": args.source, "session_ref": args.session_ref})
-    print(json.dumps({"event_id": ev.event_id, "seq": ev.seq, "row_hash": ev.row_hash}))
+    print(json.dumps(ev.as_dict() if isinstance(ev, door.StoredWaiting) else {"event_id": ev.event_id, "seq": ev.seq, "row_hash": ev.row_hash}))
     return EXIT_OK
 
 

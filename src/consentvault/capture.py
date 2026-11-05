@@ -6,6 +6,7 @@ from typing import Iterable
 
 import psycopg
 
+from .door import StoredWaiting
 from .ledger import Event
 
 
@@ -22,9 +23,10 @@ def capture(
     region: str | None = None,
     allowed_purposes=None,
     **fields,
-) -> Event:
+) -> "Event | StoredWaiting":
     """A caller in this process hands a submitted consent box to the one door: the request is stored whole as a post, and the
-    post's event is returned. A box not checked, no channel or purpose, or no wording hash stores the post and raises the
+    post's event is returned (or, when an earlier stored post is unfinished, the answer
+    ``StoredWaiting``: stored, projected after it). A box not checked, no channel or purpose, or no wording hash stores the post and raises the
     error that names which, with no event written."""
     from . import door
 
@@ -46,7 +48,7 @@ def revoke(
     region: str | None = None,
     allowed_purposes=None,
     **fields,
-) -> Event:
+) -> "Event | StoredWaiting":
     """A caller in this process hands a person's stop to the one door: stored whole as a post, then its event is returned. A stop
     always counts, whatever text came with it."""
     from . import door
@@ -63,7 +65,7 @@ def capture_verified(
     verification: str,
     inbound_message: str | None = None,
     **kwargs,
-) -> Event:
+) -> "Event | StoredWaiting":
     """A grant whose contact point the integrator verified (``verification`` is ``otp``: the integrator confirmed a one-time
     code; the vault records that they did). A START text (``inbound_keyword`` or an ``inbound_message``) is stored as a post
     and restores nothing: this raises, and the way back is a form."""

@@ -75,6 +75,13 @@ _LINE_COLUMNS = ("seq, event_id::text AS event_id, event_type, origin, method, s
                  " release_of_event_id::text AS release_of_event_id, release_outcome, release_cause")
 
 
+# A person's history is read in the order the posts arrived, never the order the projection happened to write their events (a
+# crash can project an earlier post after a later one). An event that cites no post is placed by its own receipt time.
+_ARRIVAL_ORDER = ("coalesce((SELECT p.received_at FROM consentvault.event_source_post s JOIN consentvault.raw_post p"
+                  " ON p.org_id = s.org_id AND p.post_id = s.post_id WHERE s.org_id = event.org_id AND s.event_id = event.event_id"
+                  " AND s.role = 'trigger' LIMIT 1), received_at), seq")
+
+
 def _line(row) -> dict:
     out = {
         "event_id": row["event_id"], "seq": row["seq"], "event_type": row["event_type"], "origin": row["origin"],
@@ -112,7 +119,7 @@ def contact_facts(conn: psycopg.Connection, contact: str, region: str | None = N
     kind, norm = normalize_contact(contact, None, region)
     try:
         rows = conn.execute(
-            f"SELECT {_LINE_COLUMNS} FROM consentvault.event WHERE contact_kind = %s AND contact_norm = %s ORDER BY seq",
+            f"SELECT {_LINE_COLUMNS} FROM consentvault.event WHERE contact_kind = %s AND contact_norm = %s ORDER BY " + _ARRIVAL_ORDER,
             (kind, norm)).fetchall()
     except Exception as exc:  # the answer is "unavailable" with the named cause, never a guess
         return unavailable(f"{REASON_DB_DOWN}:{type(exc).__name__}")
@@ -211,7 +218,7 @@ def tenant_facts(conn: psycopg.Connection, kind: str, fp: str) -> ContactFacts:
     them, and the stop lifts. Reads only; the caller holds a read scope."""
     rows = conn.execute(
         f"SELECT {_LINE_COLUMNS} FROM consentvault.event WHERE org_id = consentvault.current_org()"
-        " AND contact_kind = %s AND contact_fp = %s ORDER BY seq", (kind, fp)).fetchall()
+        " AND contact_kind = %s AND contact_fp = %s ORDER BY " + _ARRIVAL_ORDER, (kind, fp)).fetchall()
     posts: dict[str, list[str]] = {}
     for r in conn.execute(
             "SELECT s.event_id::text AS event_id, s.post_id::text AS post_id FROM consentvault.event_source_post s"

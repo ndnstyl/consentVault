@@ -67,7 +67,10 @@ def lift_stops_for_post(conn: psycopg.Connection, writer: RawPostWriter, *, org:
             "   WHERE l.org_id = e.org_id AND l.stop_event_id = e.event_id AND l.lifting_post_id = %s) AS done"
             " FROM consentvault.event e WHERE e.org_id = %s AND e.contact_kind = %s AND e.contact_fp = %s"
             " AND e.event_type IN ('revoke', 'suppress')"
-            " AND e.received_at < (SELECT p.received_at FROM consentvault.raw_post p WHERE p.org_id = %s AND p.post_id = %s)"
+            " AND coalesce((SELECT sp.received_at FROM consentvault.event_source_post s JOIN consentvault.raw_post sp"
+            "               ON sp.org_id = s.org_id AND sp.post_id = s.post_id WHERE s.org_id = e.org_id AND s.event_id = e.event_id"
+            "               AND s.role = 'trigger' LIMIT 1), e.received_at)"
+            "     < (SELECT p.received_at FROM consentvault.raw_post p WHERE p.org_id = %s AND p.post_id = %s)"
             " ORDER BY e.seq", (post_id, org, m["contact_kind"], m["contact_fp"], org, post_id)).fetchall()
         for stop in stops:
             if stop["done"]:

@@ -20,6 +20,7 @@ anything at intake.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import re
@@ -51,6 +52,7 @@ CAPTURE_KEYS = frozenset({
     "contact", "event_type", "channels", "purposes", "method", "origin", "disclosure_sha256", "subject_key", "captured_at",
     "page_url", "client_ip", "user_agent", "session_ref", "bot_check", "source", "edge_received_at", "contact_verification",
     "checked", "inbound_message", "source_id", "brand_ids", "attribution", "display"})
+PROVIDER_INTAKES = ("sms_reply",)
 SYSTEM_INTAKES = ("system_stop", "signal", "stop_page", "restore", "erasure", "provider_refusal", "staff_marked")
 SYSTEM_FIELDS = (*EVENT_FIELDS, "source_id", "brand_ids", "attribution", "source_system_id")
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
@@ -188,6 +190,34 @@ def decide(reading: Reading, auth: Auth, seen_keys: Callable[[str], bool] | set)
     return None
 
 
+class Backends:
+    """The writers one process owns, by intake. The projection of a post uses the writer of its intake; a post of an intake this
+    process has no writer for is left for the process that has one (it is never refused and never recorded as not derived)."""
+
+    def __init__(self, by_intake: Mapping[str, Any]) -> None:
+        self.by_intake = dict(by_intake)
+
+    def get(self, intake: str) -> Any:
+        return self.by_intake.get(intake) or self.by_intake.get("*")
+
+
+def _backend_for(backend: Any, intake: str) -> Any:
+    return backend.get(intake) if isinstance(backend, Backends) else backend
+
+
+def settings_fact(*, region: str | None = None, allowed_purposes=None, defaults: Mapping[str, Any] | None = None) -> Fact:
+    """The settings a post is projected with, stored beside the post when it is taken in: whichever process projects it later
+    (the server, the rebuild job, the command line) reads these and never its own."""
+    return Fact("vault", "projection_settings", {
+        "region": region, "allowed_purposes": sorted(allowed_purposes) if allowed_purposes is not None else None,
+        "defaults": {k: str(v) if isinstance(v, uuid.UUID) else v for k, v in (defaults or {}).items()}})
+
+
+def _stored_settings(facts: Mapping[tuple[str, str], Any]) -> dict | None:
+    value = facts.get(("vault", "projection_settings"))
+    return value if isinstance(value, dict) else None
+
+
 # ---- the single-company backend: typed fields and the ledger's one append ------------------------------------------------
 
 def _list(value: Any) -> list[str]:
@@ -200,6 +230,12 @@ class SingleBackend:
 
     def __init__(self, region: str | None = None, allowed_purposes=None) -> None:
         self.region, self.allowed_purposes = region, allowed_purposes
+
+    def for_post(self, facts: Mapping[tuple[str, str], Any]) -> "SingleBackend":
+        stored = _stored_settings(facts)
+        if stored is None:
+            return self
+        return SingleBackend(stored.get("region"), stored.get("allowed_purposes"))
 
     def prepare(self, conn, payload: Mapping[str, Any], body: bytes, auth: Auth) -> dict | str:
         """The typed fields of the event, or the plain reason this post produces none."""
@@ -343,6 +379,13 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
     """Append the event one post produces, if it produces one, and record the plain reason when it does not. Idempotent: a post
     already projected, or a request already counted, appends nothing. Never judges the sender. A caller in this process
     (``raise_errors``) is also given the error that names why no event was written, after the reason is stored."""
+    backend = _backend_for(backend, view.intake)
+    if backend is None:
+        return Outcome(view.post_id, reason="no_writer_for_intake")
+    if view.intake in PROVIDER_INTAKES and view.facts.get(("vault", "request_signature")) is None:
+        return Outcome(view.post_id, reason="awaiting_authentication")   # not yet judged by its intake: neither refused nor counted
+    if hasattr(backend, "for_post"):
+        backend = backend.for_post(view.facts)
     reading = read_post(view.body, field_map, CODE_VERSION, intake=view.intake, context=_view_context(view))
     auth = replace(auth_from_facts(view.facts), org_id=view.org_id)
     org = uuid.UUID(view.org_id)
@@ -429,9 +472,9 @@ def project_post(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
                  field_map: Any = None, raise_errors: bool = False, catch_up: Callable | bool = False,
                  intakes: tuple[str, ...] | None = None) -> Outcome:
     """Project one post just stored. When the caller can read its own posts (``catch_up``: True for the single-company vault, or
-    the tenant entry that holds a read scope), every earlier post that has no outcome is brought up to date first, in arrival
-    order, so a crash before this call never changes which of two copies of one request counts or the order of a person's
-    history."""
+    the tenant entry that holds a read scope), every earlier post of every intake that has no outcome is brought up to date
+    first, in arrival order (a ``Backends`` holds the writer of each intake this process owns), so a crash before this call never
+    changes which of two copies of one request counts or the order of a person's history."""
     if catch_up:
         project_pending(writer, conn, None if catch_up is True else catch_up, backend, through_seq=view.seq - 1,
                         intakes=intakes)
@@ -459,7 +502,7 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
             "                   AND f.post_id = p.post_id AND f.name = 'event_not_derived')"
             " ORDER BY p.seq", (through_seq, through_seq, intakes and list(intakes), intakes and list(intakes))).fetchall()
         views = [read_view(writer, conn, r["org"], r["post_id"], r["seq"], r["intake"], r["method"], r["path"]) for r in rows]
-    return [project_view(writer, conn, enter, backend, v) for v in views]
+    return [project_view(writer, conn, enter, backend, v) for v in views if _backend_for(backend, v.intake) is not None]
 
 
 def rebuild(conn: psycopg.Connection, *, backend: Any = None, writer: RawPostWriter | None = None,
@@ -474,8 +517,16 @@ class TenantLedgerBackend:
     the stops and the system events whose evidence is the post itself). ``defaults`` fill fields the post does not carry."""
 
     def __init__(self, crypto: Any, *, defaults: Mapping[str, Any] | None = None, region: str | None = None,
-                 allowed_purposes=None) -> None:
+                 allowed_purposes=None, enter_for_org: Callable[[str], Callable] | None = None) -> None:
         self.crypto, self.defaults, self.region, self.allowed_purposes = crypto, dict(defaults or {}), region, allowed_purposes
+        self.enter_for_org = enter_for_org
+
+    def for_post(self, facts: Mapping[tuple[str, str], Any]) -> "TenantLedgerBackend":
+        stored = _stored_settings(facts)
+        if stored is None:
+            return self
+        return TenantLedgerBackend(self.crypto, defaults=stored.get("defaults") or {}, region=stored.get("region"),
+                                   allowed_purposes=stored.get("allowed_purposes"), enter_for_org=self.enter_for_org)
 
     def prepare(self, conn, payload: Mapping[str, Any], body: bytes, auth: Auth) -> dict | str:
         fields = {**self.defaults, **{k: v for k, v in payload.items() if v is not None}}
@@ -491,12 +542,16 @@ class TenantLedgerBackend:
         fields.setdefault("method", "checkbox")
         fields.setdefault("origin", "consumer")
         fields["region"], fields["allowed_purposes"] = self.region, self.allowed_purposes
+        if self.enter_for_org is not None:
+            fields["_org"] = auth.org_id
         return fields
 
     def apply(self, conn, enter, fields: dict, link: Callable) -> str:
-        with conn.transaction():
-            event = record_tenant_event(conn, self.crypto, **fields)
-            link(conn, event.event_id)
+        org = fields.pop("_org", None)
+        with (self.enter_for_org(org)(conn) if org and self.enter_for_org is not None else contextlib.nullcontext()):
+            with conn.transaction():
+                event = record_tenant_event(conn, self.crypto, **fields)
+                link(conn, event.event_id)
         return event.event_id
 
 
@@ -536,11 +591,12 @@ def write_system_event(conn: psycopg.Connection, crypto: Any, **fields) -> Event
 
 
 def authenticate_text(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, stored: StoredPost,
-                      request_key: str) -> None:
+                      request_key: str, *, defaults: Mapping[str, Any] | None = None, region: str | None = None) -> None:
     """Record, beside a stored reply, that the provider's signature checked out. Written on its own connection and committed
     before anything is projected, so the rebuild can project the reply after a crash."""
     facts = (Fact("vault", "request_signature", "valid"), Fact("vault", "replay", "fresh"),
-             Fact("vault", "authenticated_by", "provider"), Fact("vault", "request_key", request_key))
+             Fact("vault", "authenticated_by", "provider"), Fact("vault", "request_key", request_key),
+             settings_fact(region=region, defaults=defaults))
     writer.append_facts(conn, enter, stored.org_id, stored.post_id, stored.data_key, facts)
 
 
@@ -573,6 +629,7 @@ def record_observed(conn: psycopg.Connection, crypto: Any, *, intake: str, field
              Fact("vault", "authenticated_by", "system")]
     if request_key:
         facts.append(Fact("vault", "request_key", request_key))
+    facts.append(settings_fact(region=region, allowed_purposes=allowed_purposes))
     req = RawRequest(intake=intake, method="POST", path="/v1/events", query="", headers=(("content-type", "application/json"),),
                      body=body, headers_presented_by="local-process", facts=tuple(facts))
     stored = store_raw(writer, conn, enter, req)
@@ -601,7 +658,8 @@ def submit(conn: psycopg.Connection, *, intake: str, payload: Mapping[str, Any],
     writer = writer or RawPostWriter()
     body = json.dumps(dict(payload), default=_json_default, sort_keys=True).encode("utf-8")
     facts = (Fact("vault", "request_signature", "valid"), Fact("vault", "replay", "fresh"),
-             Fact("vault", "authenticated_by", "local" if verified else "shared_secret"))
+             Fact("vault", "authenticated_by", "local" if verified else "shared_secret"),
+             settings_fact(region=region, allowed_purposes=allowed_purposes))
     req = RawRequest(intake=intake, method="POST", path="/v1/events", query="", headers=(("content-type", "application/json"),),
                      body=body, headers_presented_by="local-process", facts=facts)
     stored = store_raw(writer, conn, None, req)

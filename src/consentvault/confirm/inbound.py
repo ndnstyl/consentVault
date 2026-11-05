@@ -225,12 +225,15 @@ class InboundMixin:
 
             writer = RawPostWriter(crypto=self.crypto)
             with self.tx(org) as auth_conn:  # committed on its own first: a later failure never takes the check back
-                door.authenticate_text(writer, auth_conn, lambda c: c.transaction(), stored, f"twilio:{sid}")
+                # the settings the stop is projected with are stored beside the post, so the source they name is made here, in
+                # this committed transaction, and not in the one a failure may roll back
+                defaults = {"channels": self._stop_channels(auth_conn), "source_id": self._system_source(auth_conn, SYSTEM_REPLIES),
+                            "recorded_by": RECORDED_BY}
+                door.authenticate_text(writer, auth_conn, lambda c: c.transaction(), stored, f"twilio:{sid}",
+                                       defaults=defaults, region="US")
             outcome = door.project_text_reply(
                 writer, conn, lambda c: c.transaction(), self.crypto, stored, bytes(body),
-                request_key=f"twilio:{sid}", region="US",
-                defaults={"channels": self._stop_channels(conn), "source_id": self._system_source(conn, SYSTEM_REPLIES),
-                          "recorded_by": RECORDED_BY})
+                request_key=f"twilio:{sid}", region="US", defaults=defaults)
             state, event_id = "stop", uuid.UUID(outcome.event_id)
             if settings:
                 queued.append(("optout_reply", texts.optout_reply(settings["organization_name"])))

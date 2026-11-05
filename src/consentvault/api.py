@@ -225,6 +225,7 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
         """Any request under a capture prefix: store it whole, answer with the receipt, then read it. Nothing about the
         request is checked first; what the checks found is a fact beside the post. A request the capture edge signed and
         forwarded is stored as the browser sent it, with the edge's facts beside it."""
+        from . import door
         from .rawpost import Fact, RawRequest, StoreUnavailable
 
         body, facts = read_any_body(self)
@@ -240,6 +241,7 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
         if transport_credentials_removed(self):
             facts.append(Fact("vault", "gateway_service_credentials_not_stored", True))
         facts += list(self._extra_facts)
+        facts.append(door.settings_fact(region=self.settings.default_region, allowed_purposes=self.settings.purposes))
         envelope = None
         if reason is None and not by_verified_key and edge_envelope.looks_like_envelope(body):
             try:
@@ -1054,12 +1056,11 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                     view = door.PostView(stored.org_id, stored.post_id, stored.seq, raw.intake, bytes(raw.body),
                                          {**{(f.source, f.name): f.value for f in raw.facts},
                                           ("__key__", "data_key"): stored.data_key}, raw.method, raw.path)
-                    backend = door.TenantBackend(self.pipeline, _credential_enter(self.settings))
+                    backend = cloud_backends(self.settings, self.pipeline)
                     from .tenancy.tokens import mint_org_token, org_transaction
 
                     read = mint_org_token(self.settings.token_key, stored.org_id, ("gate_read",), credential_id=None, ttl_seconds=60)
-                    door.project_post(self.writer, conn, enter, backend, view,
-                                      catch_up=lambda c: org_transaction(c, read), intakes=("api", "edge_site_key"))
+                    door.project_post(self.writer, conn, enter, backend, view, catch_up=lambda c: org_transaction(c, read))
         except Exception as exc:  # loud-failure-exempt: logged critical below; the answer is given and the post is stored
             _log.critical("the work after an answer failed; the post is stored", request_id=self.request_id,
                           error=type(exc).__name__)
@@ -1285,6 +1286,23 @@ def _credential_enter(settings: CloudApiSettings):
     return factory
 
 
+def cloud_backends(settings: CloudApiSettings, pipeline):
+    """The writers the multi-tenant process owns, one per intake: the capture pipeline for the API and the edge, the ledger's
+    tenant append (entered under a capture scope) for text replies and the vault's own observations. Each reads the settings
+    stored beside the post it projects."""
+    from . import door
+    from .tenancy.tokens import mint_org_token, org_transaction
+
+    def enter_for_org(org_id):
+        token = mint_org_token(settings.token_key, org_id, ("capture",), credential_id=None, ttl_seconds=60)
+        return lambda conn: org_transaction(conn, token)
+
+    ledger_backend = door.TenantLedgerBackend(settings.crypto, enter_for_org=enter_for_org)
+    tenant_backend = door.TenantBackend(pipeline, _credential_enter(settings))
+    return door.Backends({"api": tenant_backend, "edge_site_key": tenant_backend,
+                          **{i: ledger_backend for i in (*door.PROVIDER_INTAKES, *door.SYSTEM_INTAKES)}})
+
+
 def rebuild_cloud(settings: CloudApiSettings, org_ids) -> int:
     """The rebuild job for the multi-tenant vault: for each organisation, find every stored post that has no outcome and project
     it, in arrival order, with the credential the post was stored under. Safe to run twice and to run beside the live server.
@@ -1299,8 +1317,7 @@ def rebuild_cloud(settings: CloudApiSettings, org_ids) -> int:
 
         with connect(settings.dsn) as conn:
             done += len(door.project_pending(writer, conn, lambda c: org_transaction(c, read),
-                                             door.TenantBackend(pipeline, _credential_enter(settings)),
-                                             intakes=("api", "edge_site_key")))
+                                             cloud_backends(settings, pipeline)))
     return done
 
 

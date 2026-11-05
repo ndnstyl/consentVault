@@ -39,7 +39,7 @@ def test_a_stop_whose_site_key_lookup_failed_counts_after_the_rebuild_repeats_th
         _down(m)
         outcomes: list = []
         api.rebuild_cloud(hw.cloud.settings, orgs, outcomes=outcomes)
-        assert [o.reason for o in outcomes if o.retry] == ["site_key_lookup_failed"]
+        assert [o.reason for o in outcomes if o.retry] == ["SiteKeyLookupError"]
         assert len(_events_of(hw, a.org)) == before
     outcomes = []
     api.rebuild_cloud(hw.cloud.settings, orgs, outcomes=outcomes)   # the lookup answers: the stop counts

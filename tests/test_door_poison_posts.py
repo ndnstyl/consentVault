@@ -16,7 +16,8 @@ def _revokes(conn, contact):
 
 STOP = {"contact": "+12125550171", "event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"], "method": "keyword", "origin": "consumer"}
 
-def _run(app_dsn, conn, poison):
+def _run(app_dsn, conn, poison, monkeypatch):
+    monkeypatch.setattr(door, "HALT_CAP_SECONDS", 0)
     gen = _serve(_settings(app_dsn)); base = next(gen)
     s1, _, _ = _call(base + "/v1/events", "POST", *_signed(poison)); base.settle()
     s2, _, _ = _call(base + "/v1/events", "POST", *_signed(STOP)); base.settle()
@@ -32,11 +33,11 @@ def _run(app_dsn, conn, poison):
     print("R2", s1, s2, "later stop revokes:", n, errs)
     return n
 
-def test_type_poison_stalls_later_stop(app_dsn, conn, disclosure):
+def test_type_poison_stalls_later_stop(app_dsn, conn, disclosure, monkeypatch):
     poison = {"contact": "+12125550170", "event_type": "grant", "channels": 5, "purposes": ["marketing"], "method": "checkbox",
               "origin": "consumer", "checked": True, "disclosure_sha256": disclosure}
-    assert _run(app_dsn, conn, poison) == 1
+    assert _run(app_dsn, conn, poison, monkeypatch) == 1
 
-def test_index_size_poison_halts_later_stop(app_dsn, conn):
+def test_index_size_poison_halts_later_stop(app_dsn, conn, monkeypatch):
     poison = dict(STOP, contact="+12125550172", subject_key=secrets.token_hex(6000))
-    assert _run(app_dsn, conn, poison) == 1
+    assert _run(app_dsn, conn, poison, monkeypatch) == 1

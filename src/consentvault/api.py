@@ -34,7 +34,7 @@ from .capture_http import (StoreRefusedRequests, Downstream, request_key, cors_h
                            transport_credentials_removed, unavailable_answer)
 from . import dbclock
 from .db import connect
-from .errors import ConfigError, ConsentVaultError, NormalizationError
+from .errors import ConfigError, ConsentVaultError, LedgerError, NormalizationError
 from .gate import REASON_DB_DOWN, may_contact
 from .ledger import record_event
 from .proof import lookup
@@ -327,11 +327,14 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
                     else:
                         key = request_key(raw.headers, sig_for_key, envelope.edge_facts.get("request_id") if envelope else None,
                                           envelope.body if envelope is not None else body)
-                        with conn.transaction():  # the claim and the event stand or fall together
-                            if key and not self.writer.claim_request(conn, None, stored, key):
-                                outcome, event_id = "request_seen_before", None
-                            else:
-                                outcome, event_id = self._derive_event(conn, body, by_verified_key, envelope)
+                        try:
+                            with conn.transaction():  # the claim and the event stand or fall together
+                                if key and not self.writer.claim_request(conn, None, stored, key):
+                                    outcome, event_id = "request_seen_before", None
+                                else:
+                                    outcome, event_id = self._derive_event(conn, body, by_verified_key, envelope)
+                        except LedgerError as exc:  # the transaction rolled back, so the claim went with the event
+                            outcome, event_id = "LedgerError" + (":" + type(exc.__cause__).__name__ if exc.__cause__ else ""), None
                     self.writer.add_facts(conn, None, stored, [Fact("vault", "event_derived", event_id) if event_id else
                                                                Fact("vault", "event_not_derived", outcome)])
                     if event_id:
@@ -393,6 +396,8 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
                                           inbound_message=payload.get("inbound_message"), **fields)[0]
             else:
                 ev = record_event(conn, **fields)
+        except LedgerError:
+            raise  # a ledger failure is not a verdict on the request: the caller rolls the claim back with the event
         except ConsentVaultError as exc:
             return type(exc).__name__, None
         return "derived", ev.event_id

@@ -264,7 +264,10 @@ def raw_dsn(pg_server):
     ensure_roles(port)
     name = "t_" + uuid.uuid4().hex[:12]
     create_vault_database(port, name)
-    return _dsn(port, name, MIGRATOR_ROLE)
+    yield _dsn(port, name, MIGRATOR_ROLE)
+    # One database per test adds up to tens of gigabytes over the suite, past the size-capped disk of a test container.
+    with psycopg.connect(_dsn(port, "postgres"), autocommit=True) as admin:
+        admin.execute(f'DROP DATABASE "{name}" WITH (FORCE)')
 
 
 @pytest.fixture

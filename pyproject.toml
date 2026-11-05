@@ -43,6 +43,7 @@ testpaths = ["tests"]
 # (or `pytest -o addopts="" tests/selfhost`), where a missing stack fails loudly.
 addopts = "--ignore=tests/selfhost -m 'not contract_pending'"
 pythonpath = ["src"]
-markers = ["contract_pending: executable contract for records, confirmations and setup, written before the implementation; excluded from the default run, run with -m contract_pending until the build starts",
+markers = ["console_script: needs the console script installed beside the interpreter (a real install); the cluster test box deselects it",
+           "contract_pending: executable contract for records, confirmations and setup, written before the implementation; excluded from the default run, run with -m contract_pending until the build starts",
            "network: needs outbound network access (for example a live timestamp authority); deselect with -m \"not network\"",
            "migration_login_check: the start check also refuses the suite's own migration login (every other test keeps it, to act as the owner)"]

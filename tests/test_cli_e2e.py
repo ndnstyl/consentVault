@@ -39,6 +39,7 @@ def tsa_authority():
         root.rmdir()
 
 
+@pytest.mark.console_script
 def test_full_lifecycle_through_the_console_script(cli_dsns, tsa_authority, tmp_path):
     exe = Path(sys.executable).parent / "consentvault"
     assert exe.is_file(), f"console script not installed next to the interpreter: {exe}"

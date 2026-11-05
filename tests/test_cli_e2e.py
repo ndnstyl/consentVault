@@ -74,12 +74,12 @@ def test_full_lifecycle_through_the_console_script(cli_dsns, tsa_authority, tmp_
     assert "allowed" not in stopped
 
     sealed = run("seal")
-    assert sealed["sealed"] == 2 and sealed["unsealed_remaining"] == 0
+    assert sealed["sealed"] == 4 and sealed["unsealed_remaining"] == 0  # two events and the two posts they came from
     checked = run("verify-seals")
-    assert checked["ok"] is True and checked["checked"] == 2
+    assert checked["ok"] is True and checked["checked"] == 4
     assert run("verify-chain")["ok"] is True
     anchored = run("anchor")
-    assert anchored["seq"] == 2 and json.loads(anchor_file.read_text().splitlines()[-1])["row_hash"] == anchored["row_hash"]
+    assert anchored["seq"] == 2 and [json.loads(x) for x in anchor_file.read_text().splitlines() if json.loads(x).get("chain") != "raw_post"][-1]["row_hash"] == anchored["row_hash"]
     assert run("verify-chain")["ok"] is True
 
     bundle = tmp_path / "bundle"

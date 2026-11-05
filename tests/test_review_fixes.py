@@ -111,7 +111,7 @@ def test_the_very_same_signed_request_sent_again_is_one_request_even_after_the_r
     server.settle()
     assert conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"] == before
     assert _facts(conn, _posts(conn)[-1]["post_id"])["event_not_derived"] == "request_seen_before"
-    assert conn.execute("SELECT count(*) AS n FROM consentvault.seen_request").fetchone()["n"] == 1
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.event_source_post WHERE request_key IS NOT NULL").fetchone()["n"] == 1
 
 
 def test_an_old_signed_request_makes_no_event_and_a_request_id_header_makes_a_resend_one_request(server, disclosure, conn):

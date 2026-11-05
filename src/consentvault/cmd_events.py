@@ -50,14 +50,13 @@ def _revoke_args(p: argparse.ArgumentParser) -> None:
 
 
 def _run_revoke(args, cfg) -> int:
-    from .ledger import record_event
+    from . import door
 
     with _connect(cfg) as conn:
-        ev = record_event(
-            conn, contact=args.contact, event_type="revoke", channels=args.channels, purposes=args.purposes,
-            method=args.method, origin=args.origin, region=cfg.default_region, source=args.source,
-            session_ref=args.session_ref, allowed_purposes=cfg.require_purposes(),
-        )
+        ev = door.submit(
+            conn, intake="cli", region=cfg.default_region, allowed_purposes=cfg.require_purposes(),
+            payload={"contact": args.contact, "event_type": "revoke", "channels": args.channels, "purposes": args.purposes,
+                     "method": args.method, "origin": args.origin, "source": args.source, "session_ref": args.session_ref})
     print(json.dumps({"event_id": ev.event_id, "seq": ev.seq, "row_hash": ev.row_hash}))
     return EXIT_OK
 

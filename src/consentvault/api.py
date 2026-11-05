@@ -264,6 +264,7 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
         replay = self._claim_signature(sig) if reason is None else None
         facts += [Fact("vault", "host_on_list", self._host_ok()), Fact("vault", "origin_header", self.headers.get("Origin")),
                   Fact("vault", "request_signature", reason or "valid"), Fact("vault", "replay", replay or "fresh"),
+                  Fact("vault", "authenticated_by", "verified_key" if by_verified_key else "shared_secret"),
                   Fact("vault", "peer_address", self.client_address[0])]
         if transport_credentials_removed(self):
             facts.append(Fact("vault", "gateway_service_credentials_not_stored", True))
@@ -281,6 +282,11 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
         preflight = is_preflight(self)
         inner_preflight = envelope is not None and envelope.method.upper() == "OPTIONS" and any(
             n.lower() == "access-control-request-method" for n, _ in envelope.headers)
+        key = request_key(request_headers(self), sig if reason is None else None,
+                          envelope.edge_facts.get("request_id") if envelope else None,
+                          envelope.body if envelope is not None else body)
+        if key:
+            facts.append(Fact("vault", "request_key", key))
         # what is stored is what was received: for an edge post, the signed envelope bytes exactly
         raw = RawRequest(intake="edge_single" if envelope is not None else "api_single", method=self.command, path=url.path,
                          query=url.query, headers=request_headers(self), body=body,
@@ -307,95 +313,24 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
                 self.end_headers()
             else:
                 self._send(201, stored.answer(), cors)
-            self._after_answer(stored, raw, body, reason, replay, by_verified_key, envelope, sig if reason is None else None)
+            self._after_answer(stored, raw)
 
-    def _after_answer(self, stored, raw, body: bytes, reason, replay, by_verified_key, envelope=None, sig_for_key=None) -> None:
-        """Read the stored post and, for an authenticated event post, derive the transitional event. Never raises: the
-        answer is given and the post is stored; a failure is logged loudly and left as a fact."""
-        from . import intake
-        from .rawpost import Fact
+    def _after_answer(self, stored, raw) -> None:
+        """Read the stored post, then hand it to the one door's projection. Never raises: the answer is given and the post is
+        stored; a failure is logged loudly and the projection is run again for it."""
+        from . import door, intake
 
         try:
             with connect(self.settings.dsn) as conn:
                 intake.read_after_commit(self.writer, conn, None, stored, raw)
-                if raw.kind == "post" and (envelope.method if envelope is not None else raw.method) == "POST" \
-                        and (envelope is not None or raw.path == "/v1/events"):
-                    if reason:
-                        outcome, event_id = "not_authenticated:" + reason, None
-                    elif replay:
-                        outcome, event_id = "replay", None
-                    else:
-                        key = request_key(raw.headers, sig_for_key, envelope.edge_facts.get("request_id") if envelope else None,
-                                          envelope.body if envelope is not None else body)
-                        with conn.transaction():  # the claim and the event stand or fall together
-                            if key and not self.writer.claim_request(conn, None, stored, key):
-                                outcome, event_id = "request_seen_before", None
-                            else:
-                                outcome, event_id = self._derive_event(conn, body, by_verified_key, envelope)
-                    self.writer.add_facts(conn, None, stored, [Fact("vault", "event_derived", event_id) if event_id else
-                                                               Fact("vault", "event_not_derived", outcome)])
-                    if event_id:
-                        self.writer.link_event(conn, None, stored, event_id)
+                if raw.kind == "post":
+                    view = door.PostView(stored.org_id, stored.post_id, stored.seq, raw.intake, bytes(raw.body),
+                                         {**{(f.source, f.name): f.value for f in raw.facts},
+                                          ("__can_read__", "catch_up"): True, ("__key__", "data_key"): stored.data_key},
+                                         raw.method, raw.path)
+                    door.project_post(self.writer, conn, None, door.SingleBackend(self.settings.default_region, self.settings.purposes), view)
         except Exception as exc:  # loud-failure-exempt: logged critical below; the answer is given and the post is stored
             _log.critical("the work after an answer failed; the post is stored", error=type(exc).__name__)
-
-    def _derive_event(self, conn, body: bytes, by_verified_key: bool, envelope=None) -> tuple[str, str | None]:
-        """The transitional step: an authenticated post that names a contact point and the event's own fields is also
-        written as a ledger event, so the contact check keeps answering until it reads the posts. Whatever it cannot do is
-        returned as the reason (stored as a fact); the post is never touched."""
-        if envelope is not None:
-            body = envelope.body
-        try:
-            payload = json.loads(body.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):  # loud-failure-exempt: returned as the stored reason not_json
-            return "not_json", None
-        if not isinstance(payload, dict):
-            return "not_a_json_object", None
-        if envelope is not None:
-            payload = edge_envelope.widget_event(payload, envelope.headers, envelope.edge_facts)
-            payload.pop("source_id", None)
-            payload.pop("brand_ids", None)
-            payload["payload_sha256"] = hashlib.sha256(body).hexdigest()
-        fields = {k: payload[k] for k in _EVENT_FIELDS if k in payload}
-        if fields.get("event_type") != "grant":
-            fields.pop("contact_verification", None)  # a stop always records, whatever text came with it
-        elif fields.get("contact_verification") == "inbound_keyword" or "inbound_message" in payload:
-            return "a_text_is_not_consent", None  # a START (or any text) restores nothing; the way back is a form
-        for required in ("contact", "event_type", "channels", "purposes"):
-            if required not in fields:
-                return f"missing_field:{required}", None
-        if fields.get("contact_verification", "none") != "none" and not by_verified_key:
-            return "verification_key_required", None
-        fields.setdefault("method", "checkbox")
-        fields.setdefault("origin", "consumer")
-        for name in ("captured_at", "edge_received_at"):
-            if fields.get(name) is not None:
-                try:
-                    fields[name] = datetime.fromisoformat(str(fields[name]).replace("Z", "+00:00"))
-                except ValueError:  # loud-failure-exempt: returned as the stored reason bad_<field>
-                    return f"bad_{name}", None
-        if fields.get("payload_sha256") is not None and not _SHA256_HEX.match(str(fields["payload_sha256"])):
-            fields.pop("payload_sha256")
-        fields.setdefault("payload_sha256", hashlib.sha256(body).hexdigest())
-        fields["region"] = self.settings.default_region
-        fields["allowed_purposes"] = self.settings.purposes
-        try:
-            if fields["event_type"] == "grant":
-                fields.pop("event_type")
-                fields.setdefault("disclosure_sha256", "")
-                verification = fields.pop("contact_verification", "none")
-                if verification == "none":
-                    if "inbound_message" in payload:
-                        return "bad_inbound_message", None
-                    ev = capture(conn, checked=payload.get("checked") is True, **fields)
-                else:
-                    ev = capture_verified(conn, verification=verification, checked=payload.get("checked") is True,
-                                          inbound_message=payload.get("inbound_message"), **fields)
-            else:
-                ev = record_event(conn, **fields)
-        except ConsentVaultError as exc:
-            return type(exc).__name__, None
-        return "derived", ev.event_id
 
     def do_GET(self):
         if self._capturing():

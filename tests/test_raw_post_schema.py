@@ -176,8 +176,10 @@ def test_the_0067_down_migration_refuses_while_posts_exist_and_round_trips_when_
 
 def test_the_0067_down_migration_leaves_nothing_behind_on_an_empty_vault(dsn, super_dsn, conn):
     down = (MIGRATIONS / "down" / "0067_raw_post.sql").read_text()
-    down_0069 = (MIGRATIONS / "down" / "0069_stop_lift.sql").read_text()  # the stop lift table depends on the raw post table
+    down_0069 = (MIGRATIONS / "down" / "0071_stop_lift.sql").read_text()  # the stop lift table depends on the raw post table
+    down_0073 = (MIGRATIONS / "down" / "0073_one_door_projection.sql").read_text()  # the link table's columns depend on it too
     with psycopg.connect(super_dsn, autocommit=True) as su:
+        su.execute(down_0073)
         su.execute(down_0069)
         su.execute(down)
         assert su.execute("SELECT to_regclass('consentvault.raw_post')").fetchone()[0] is None

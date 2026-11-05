@@ -355,7 +355,8 @@ def test_a_bundle_exported_after_the_tail_was_cut_fails_against_the_anchor(conn,
         su.execute("ALTER TABLE consentvault.event ENABLE TRIGGER USER")
     out = tmp_path / "bundle"
     export(conn, PHONE_A, out)
-    sink_line = json.loads((tmp_path / "anchors.jsonl").read_text().splitlines()[-1])
+    lines = [json.loads(x) for x in (tmp_path / "anchors.jsonl").read_text().splitlines()]
+    sink_line = next(x for x in reversed(lines) if x.get("chain") != "raw_post")  # the event head, not the raw post head
     proc = _verify(out, ca, "--anchor", "%d:%s" % (sink_line["seq"], sink_line["row_hash"]))
     assert proc.returncode != 0
     assert "FAIL the chain path reaches supplied anchor seq 2 with the same hash" in proc.stdout

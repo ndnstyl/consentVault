@@ -36,11 +36,11 @@ def test_every_event_row_hash_and_existing_seal_is_identical_before_and_after_th
     before_dir = tmp_path / "up_to_0066"
     before_dir.mkdir()
     for p in MIGRATIONS.glob("*.sql"):
-        if not p.name.startswith(("0067", "0068", "0069", "0070", "0071", "0072")):
+        if not p.name.startswith(("0067", "0068", "0069", "0070", "0071", "0072", "0073")):
             shutil.copy(p, before_dir / p.name)
     with db.connect(raw_dsn) as m:
         applied = db.migrate(m, before_dir)
-    assert applied and not any(n.startswith(("0067", "0068", "0069", "0070", "0071", "0072")) for n in applied)
+    assert applied and not any(n.startswith(("0067", "0068", "0069", "0070", "0071", "0072", "0073")) for n in applied)
     pin_as_superuser(raw_dsn)
     t = build_tenancy(raw_dsn, pg_server["port"])  # populated: events, a revoke, contact keys, a synthetic seal per organisation
     with t.superuser() as su:
@@ -55,14 +55,14 @@ def test_every_event_row_hash_and_existing_seal_is_identical_before_and_after_th
     through_0067 = tmp_path / "up_to_0067"
     through_0067.mkdir()
     for p in MIGRATIONS.glob("*.sql"):
-        if not p.name.startswith(("0068", "0069", "0070", "0071", "0072")):
+        if not p.name.startswith(("0068", "0069", "0070", "0071", "0072", "0073")):
             shutil.copy(p, through_0067 / p.name)
     with db.connect(raw_dsn) as m:
         assert db.migrate(m, through_0067) == ["0067_raw_post.sql"]
     pin_as_superuser(raw_dsn)
     # 0068 and 0069 change a pinned guard function, so they run as the superuser (the documented break-glass) and is re-pinned
     with db.connect(super_dsn) as m:
-        assert db.migrate(m) == ["0068_release_needs_no_verification.sql", "0069_match_lookup.sql", "0070_single_fingerprint_secret.sql", "0071_stop_lift.sql", "0072_field_map_runtime_insert.sql"]
+        assert db.migrate(m) == ["0068_release_needs_no_verification.sql", "0069_match_lookup.sql", "0070_single_fingerprint_secret.sql", "0071_stop_lift.sql", "0072_field_map_runtime_insert.sql", "0073_one_door_projection.sql"]
         m.execute("SELECT consentvault_guard.repin()")
 
     with t.superuser() as su:

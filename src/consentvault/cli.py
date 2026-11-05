@@ -78,6 +78,8 @@ def _capture_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--session-ref")
     p.add_argument("--page-url")
     p.add_argument("--source")
+    p.add_argument("--inbound-message", dest="inbound_message",
+                   help="a text the person sent: it is stored as received and creates no consent")
     p.add_argument("--verification", choices=("otp",),
                    help="how you verified that the person controls the contact point: 'otp' (you confirmed a one-time "
                         "code; the code check is yours, the vault only records that you did it)")
@@ -108,6 +110,7 @@ def _run_capture(args, cfg) -> int:
             session_ref=args.session_ref,
             page_url=args.page_url,
             source=args.source,
+            **({"inbound_message": args.inbound_message} if args.inbound_message is not None else {}),
         )
     print(json.dumps({"event_id": ev.event_id, "seq": ev.seq, "row_hash": ev.row_hash}))
     return EXIT_OK

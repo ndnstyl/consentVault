@@ -43,7 +43,7 @@ ENC_WRAPPED = "wrapped_post_key"
 ENC_NONE = "none"
 RECEIPT_FIELDS = {"org_id", "post_id", "seq", "row_hash", "received_at", "body_sha256", "signature"}
 INTAKES = ("edge_site_key", "edge_single", "gateway", "api", "api_single", "signal", "twenty", "sms_reply", "stop_page",
-           "restore", "site_form")
+           "restore", "site_form", "library", "cli")
 
 COL_BODY, COL_HEADERS, COL_QUERY, COL_FACT = "raw_post.body", "raw_post.headers", "raw_post.query", "raw_post_fact.value"
 COL_PATH = "raw_post.path"
@@ -336,31 +336,30 @@ class RawPostWriter:
                      (org, post_id, uuid.uuid4(), _db_text(fact.source), _db_text(fact.name),
                       self._seal(key, org, post_id, COL_FACT, raw)))
 
-    def claim_request(self, conn: psycopg.Connection, enter: Callable, stored: StoredPost, request_key: str) -> bool:
-        """Record this request's own identity as seen, for good. True when it had not been seen before; False when an earlier
-        post of the organisation came from the same request (the caller derives no consent event from it). The key is the
-        request's identity (the edge's request id, the signature it was signed with, or a request id header), never its
-        content: the same stop sent twice is two requests and both count."""
-        ctx = enter(conn) if enter is not None else conn.transaction()
-        with ctx:
-            cur = conn.execute("INSERT INTO consentvault.seen_request (org_id, request_key, post_id) VALUES (%s, %s, %s)"
-                               " ON CONFLICT DO NOTHING", (uuid.UUID(stored.org_id), request_key, uuid.UUID(stored.post_id)))
-            return cur.rowcount == 1
-
-    def request_seen(self, conn: psycopg.Connection, enter: Callable, stored: StoredPost, request_key: str) -> bool:
-        """True when an earlier post of the organisation already claimed this request key (a read; claims nothing)."""
-        ctx = enter(conn) if enter is not None else conn.transaction()
-        with ctx:
-            return conn.execute("SELECT 1 FROM consentvault.seen_request WHERE org_id = %s AND request_key = %s",
-                                (uuid.UUID(stored.org_id), request_key)).fetchone() is not None
-
     def add_facts(self, conn: psycopg.Connection, enter: Callable, stored: StoredPost, facts: Iterable[Fact]) -> None:
         """Facts learned after the post committed (appended; never changes the post)."""
+        self.append_facts(conn, enter, stored.org_id, stored.post_id, stored.data_key, facts)
+
+    def append_facts(self, conn: psycopg.Connection, enter: Callable | None, org_id: str, post_id: str,
+                     data_key: bytes | None, facts: Iterable[Fact]) -> None:
         ctx = enter(conn) if enter is not None else conn.transaction()
         with ctx:
-            org = uuid.UUID(stored.org_id)
+            org = uuid.UUID(str(org_id))
             for fact in facts:
-                self._insert_fact(conn, org, uuid.UUID(stored.post_id), stored.data_key, fact)
+                self._insert_fact(conn, org, uuid.UUID(str(post_id)), data_key, fact)
+
+    def read_facts(self, conn: psycopg.Connection, org: uuid.UUID, post_id: uuid.UUID | str) -> dict[tuple[str, str], Any]:
+        """The facts beside one post as {(source, name): value}; a fact appended later replaces an earlier one of the same name."""
+        key = self.open_key(conn, org, post_id)
+        out: dict[tuple[str, str], Any] = {}
+        for r in conn.execute("SELECT source, name, value_ct FROM consentvault.raw_post_fact WHERE org_id = %s AND post_id = %s"
+                              " ORDER BY recorded_at, fact_id", (org, uuid.UUID(str(post_id)))).fetchall():
+            blob = bytes(r["value_ct"])
+            if key is not None:
+                from .tenancy import crypto as tc
+                blob = tc.decrypt_field(key, org, str(post_id), COL_FACT, blob)
+            out[(r["source"], r["name"])] = json.loads(blob.decode("utf-8"))
+        return out
 
     def link_event(self, conn: psycopg.Connection, enter: Callable, stored: StoredPost, event_id: str | uuid.UUID,
                    role: str = "trigger") -> None:

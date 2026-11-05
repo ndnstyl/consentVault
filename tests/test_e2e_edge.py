@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from consentvault import api, disclosure
-from consentvault.gate import may_contact
+from consentvault.gate import contact_facts
 
 HARNESS = Path(__file__).parent / "support" / "edge_harness.mjs"
 SECRET = "e2e-shared-secret"
@@ -103,8 +103,8 @@ def test_the_edge_stores_both_posts_and_only_the_checked_box_becomes_a_grant(liv
     held = conn.execute("SELECT body FROM consentvault.disclosure WHERE sha256 = %s", (SHA,)).fetchone()
     assert held["body"] == TEXT
 
-    assert may_contact(conn, PHONE, "sms", "marketing", region="US").allowed
-    assert not may_contact(conn, "+15555550101", "sms", "marketing", region="US").allowed
+    assert [line["event_type"] for line in contact_facts(conn, PHONE, region="US").history] == ["grant"]
+    assert contact_facts(conn, "+15555550101", region="US").status == "no_record_found"
 
 
 def test_wording_text_and_an_unregistered_hash_are_stored_and_make_no_grant(live, conn):

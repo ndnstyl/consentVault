@@ -1,4 +1,4 @@
-"""A form grant from the person after their own stop takes effect, with no verification and no review hand-off."""
+"""A grant after a stop is a later history line; the verified-contact claim is recorded as sent; no release can be written."""
 import threading
 import uuid
 
@@ -6,11 +6,10 @@ import psycopg
 import pytest
 
 from consentvault import db
-from consentvault.capture import capture_and_release, capture_verified
+from consentvault.capture import capture, capture_verified
 from consentvault.errors import InvalidEventError
-from consentvault.gate import may_contact
+from consentvault.gate import contact_facts
 from consentvault.ledger import (compute_row_hash, contact_commitment, record_event, verify_chain)
-from consentvault.release import release_after_grant
 
 P = "+12125550101"
 
@@ -21,38 +20,41 @@ def _stop(conn, who=P):
 
 
 def _web_grant(conn, sha, **kw):
-    return capture_and_release(conn, contact=P, checked=True, disclosure_sha256=sha, channels=["sms"],
-                               purposes=["marketing"], session_ref="s1", **kw)
+    return capture(conn, contact=P, checked=True, disclosure_sha256=sha, channels=["sms"],
+                   purposes=["marketing"], session_ref="s1", **kw)
 
 
-def test_a_web_grant_after_the_contacts_own_stop_lifts_it_and_opens_no_review(conn, disclosure):
-    _stop(conn)
-    grant, release, err = _web_grant(conn, disclosure)
-    assert err is None
-    assert release == {"released_channels": ["sms"], "refusals": {}}
-    assert may_contact(conn, P, "sms", "marketing").allowed
-    row = conn.execute("SELECT release_outcome, release_cause FROM consentvault.event WHERE event_type = 'release'"
-                       ).fetchone()
-    assert (row["release_outcome"], row["release_cause"]) == ("released", None)
+def _event_types(conn):
+    return [line["event_type"] for line in contact_facts(conn, P).history]
+
+
+def test_a_web_grant_after_the_contacts_own_stop_is_the_next_history_line_and_lifts_nothing(conn, disclosure):
+    stop = _stop(conn)
+    grant = _web_grant(conn, disclosure)
+    facts = contact_facts(conn, P)
+    assert _event_types(conn) == ["revoke", "grant"] and facts.event_ids == (stop.event_id, grant.event_id)
+    assert facts.stops[0]["lifted_by_post_ids"] == [] and facts.lifts == ()
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE event_type = 'release'").fetchone()["n"] == 0
     assert conn.execute("SELECT count(*) AS n FROM consentvault.review").fetchone()["n"] == 0
 
 
 @pytest.mark.parametrize("how, message", [("otp", None), ("inbound_keyword", "START")])
-def test_a_verified_grant_lifts_the_stop(conn, disclosure, how, message):
+def test_a_verified_grant_is_recorded_with_its_verification_and_lifts_nothing(conn, disclosure, how, message):
     _stop(conn)
-    _, release, err = capture_verified(
+    ev = capture_verified(
         conn, verification=how, inbound_message=message, contact=P, disclosure_sha256=disclosure, checked=True,
         channels=["sms"], purposes=["marketing"], session_ref="s1")
-    assert err is None and release["released_channels"] == ["sms"]
-    assert may_contact(conn, P, "sms", "marketing").allowed
+    facts = contact_facts(conn, P)
+    assert facts.history[-1]["event_id"] == ev.event_id and facts.history[-1]["contact_verification"] == how
+    assert facts.stops[0]["lifted_by_post_ids"] == [] and facts.lifts == ()
     assert conn.execute("SELECT count(*) AS n FROM consentvault.review").fetchone()["n"] == 0
 
 
-def test_the_database_still_refuses_a_released_row_for_a_grant_that_is_not_the_contacts_own_earlier_grant(conn, app_conn, disclosure):
+def test_the_database_refuses_every_release_row_even_one_that_decides_a_real_earlier_grant(conn, app_conn, disclosure):
     _stop(conn)
-    grant, _, _ = _web_grant(conn, disclosure)
-    row = dict(_forged_release(app_conn, "00000000-0000-0000-0000-000000000000"))
-    assert row["error"], "the release insert trigger must refuse a release that decides no earlier grant"
+    grant = _web_grant(conn, disclosure)
+    row = _forged_release(app_conn, grant.event_id)
+    assert row["error"] and "no release event can be written" in row["error"]
 
 
 def _forged_release(c, grant_event_id):
@@ -79,7 +81,7 @@ def _forged_release(c, grant_event_id):
 
 
 def test_contact_verification_is_part_of_the_row_hash(conn, disclosure):
-    grant, _, _ = _web_grant(conn, disclosure)
+    grant = _web_grant(conn, disclosure)
     row = dict(conn.execute("SELECT * FROM consentvault.event WHERE event_id = %s::uuid", (grant.event_id,)).fetchone())
     assert compute_row_hash(row["prev_hash"], row, 1) == row["row_hash"]
     assert compute_row_hash(row["prev_hash"], {**row, "contact_verification": "otp"}, 1) != row["row_hash"]

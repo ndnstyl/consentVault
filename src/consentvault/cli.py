@@ -18,7 +18,7 @@ from typing import Callable, Sequence
 
 from .safelog import describe
 from . import config as config_mod
-from .errors import ConsentVaultError, InvalidEventError, ReleaseFailedError
+from .errors import ConsentVaultError, InvalidEventError
 
 EXIT_OK = 0
 EXIT_ERROR = 2
@@ -86,7 +86,7 @@ def _capture_args(p: argparse.ArgumentParser) -> None:
 
 
 def _run_capture(args, cfg) -> int:
-    from .capture import capture_and_release, capture_verified
+    from .capture import capture, capture_verified
 
     extra = {}
     if args.verification:
@@ -94,12 +94,12 @@ def _run_capture(args, cfg) -> int:
     elif args.inbound_message is not None:
         raise InvalidEventError("--inbound-message goes with --verification inbound_keyword")
     else:
-        call = capture_and_release
+        call = capture
     method = args.method
     if args.verification == "inbound_keyword" and method == "checkbox":
         method = "keyword"
     with _connect(cfg) as conn:
-        ev, release, release_error = call(
+        ev = call(
             conn,
             **extra,
             contact=args.contact,
@@ -115,12 +115,7 @@ def _run_capture(args, cfg) -> int:
             page_url=args.page_url,
             source=args.source,
         )
-    out = {"event_id": ev.event_id, "seq": ev.seq, "row_hash": ev.row_hash}
-    if release is not None:
-        out["release"] = release
-    print(json.dumps(out))
-    if release_error is not None:
-        raise ReleaseFailedError(f"the grant {ev.event_id} was recorded but its release decision failed: {release_error}")
+    print(json.dumps({"event_id": ev.event_id, "seq": ev.seq, "row_hash": ev.row_hash}))
     return EXIT_OK
 
 

@@ -14,7 +14,7 @@ from consentvault.tenancy.tokens import org_transaction
 from isolation.cloud_harness import Cloud
 
 from .test_erasure import _confirm, _request
-from .test_erasure_stop import ALL, X, _verified_regrant_and_release, _verify
+from .test_erasure_stop import ALL, X, _verified_regrant, _verify
 
 
 @pytest.fixture
@@ -59,7 +59,7 @@ def _erase_and_return(env, cloud):
     req = _request(env, env.t.a, X)
     assert _confirm(env, env.t.a, req["erasure_id"])["status"] == "completed"
     before = _rows(env)
-    conn, tx = _verified_regrant_and_release(env, cloud, X, commit=True)  # the person returns under a new key
+    conn, tx = _verified_regrant(env, cloud, X, commit=True)  # the person returns under a new key
     tx.__exit__(None, None, None)
     conn.close()
     after = [s for s in _rows(env) if s not in before]

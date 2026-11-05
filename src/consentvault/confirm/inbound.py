@@ -31,7 +31,6 @@ from ..errors import (ConsentVaultError, EmptyConsentError, InvalidEventError, L
                       UncheckedConsentError, UnknownDisclosureError)
 from ..ledger import record_tenant_event
 from ..normalize import normalize_phone
-from ..release import release_after_tenant_grant
 from ..tenancy import crypto as tc
 from ..tenancy.errors import TenancyError
 from . import texts

@@ -21,9 +21,9 @@ def _stop(cloud, **extra):
     return cloud.call("/v1/events", body, token=cloud.token(cloud.a, "capture"))
 
 
-def _allowed(cloud):
+def _open_stops(cloud):
     s, r = cloud.gate(cloud.a, X)
-    return {"allowed": r.get("evidence_status") == "consent_record_found", "status": r.get("evidence_status"), "reasons": r.get("reasons")}
+    return [x for x in r["stops"] if not x["lifted_by_post_ids"]]
 
 
 def _last_facts(cloud):
@@ -68,11 +68,11 @@ def test_crash_at_the_claim_leaves_no_event_and_a_stop_is_not_lifted_by_a_resend
     cloud.server.drain(30)
     assert _events(cloud, "grant") == base + 1
     assert _stop(cloud)[0] == 201
-    assert _allowed(cloud)["allowed"] is False
+    assert len(_open_stops(cloud)) == 1
     cloud.call("/v1/events", _grant_body(cloud, nonce), token=tok, headers=h)  # the documented safe resend after a stop
     cloud.server.drain(30)
     assert _events(cloud, "grant") == base + 1
-    assert _allowed(cloud)["allowed"] is False
+    assert len(_open_stops(cloud)) == 1
 
 
 def test_two_concurrent_copies_of_one_request_record_one_event(cloud, monkeypatch):

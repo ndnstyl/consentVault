@@ -91,7 +91,3 @@ class UnknownPurposeError(InvalidEventError):
 
 class AnchorError(ConsentVaultError):
     """The chain head could not be anchored to the external sink."""
-
-
-class ReleaseFailedError(ConsentVaultError):
-    """A grant was recorded but its release decision could not be written."""

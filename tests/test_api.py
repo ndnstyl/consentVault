@@ -10,6 +10,7 @@ import pytest
 
 from consentvault import api
 from consentvault.capture import capture
+from consentvault.gate import contact_facts
 
 SECRET = "test-shared-secret"
 TOKEN = "test-bearer-token"
@@ -169,8 +170,9 @@ def test_stop_event_is_recorded(server, disclosure):
                                      "purposes": ["marketing"], "method": "keyword"})
     _stored(status, body)
     auth = {"Authorization": f"Bearer {TOKEN}"}
-    s, perm, _ = _call(server + "/v1/permission?contact=%2B12125550101&channel=sms&purpose=marketing", headers=auth)
-    assert s == 200 and perm["allowed"] is False and perm["reason"] == "stopped:revoke"
+    s, facts, _ = _call(server + "/v1/permission?contact=%2B12125550101", headers=auth)
+    assert s == 200 and facts["status"] == "records_found" and [x["event_type"] for x in facts["stops"]] == ["revoke"]
+    assert "allowed" not in facts and "reason" not in facts
 
 
 @pytest.mark.parametrize("body", [b"", b"\x00\xff\xfe garbage", b"{broken", b"[1,2,3]", b'"just a string"', b"null"])
@@ -246,20 +248,20 @@ def test_headers_are_stored_in_order_with_repeats(server, conn):
 def test_permission_and_proof_need_the_bearer_token(server, disclosure, conn):
     capture(conn, contact="+12125550101", checked=True, disclosure_sha256=disclosure,
             channels=["sms"], purposes=["marketing"])
-    q = "?contact=%2B12125550101&channel=sms&purpose=marketing"
+    q = "?contact=%2B12125550101"
     assert _call(server + "/v1/permission" + q)[0] == 401
     assert _call(server + "/v1/permission" + q, headers={"Authorization": "Bearer nope"})[0] == 401
     auth = {"Authorization": f"Bearer {TOKEN}"}
-    s, perm, _ = _call(server + "/v1/permission" + q, headers=auth)
-    assert s == 200 and perm["allowed"] is True
+    s, facts, _ = _call(server + "/v1/permission" + q, headers=auth)
+    assert s == 200 and facts["status"] == "records_found" and len(facts["history"]) == 1
     s, proof, _ = _call(server + "/v1/proof?contact=%2B12125550101", headers=auth)
     assert s == 200 and proof["found"] is True and len(proof["timeline"]) == 1
 
 
-def test_unknown_contact_fails_closed(server):
+def test_unknown_contact_is_the_fact_no_record_found(server):
     auth = {"Authorization": f"Bearer {TOKEN}"}
-    s, perm, _ = _call(server + "/v1/permission?contact=%2B12125550177&channel=sms&purpose=marketing", headers=auth)
-    assert s == 200 and perm["allowed"] is False and perm["reason"] == "no_consent_on_record"
+    s, facts, _ = _call(server + "/v1/permission?contact=%2B12125550177", headers=auth)
+    assert s == 200 and facts["status"] == "no_record_found" and facts["history"] == [] and "allowed" not in facts
     s, proof, _ = _call(server + "/v1/proof?contact=%2B12125550177", headers=auth)
     assert s == 200 and proof["found"] is False
 
@@ -331,19 +333,19 @@ def _own_stop(conn):
                  method="keyword", origin="consumer")
 
 
-def test_a_web_grant_after_the_contacts_own_stop_lifts_it_and_opens_no_review(server, conn, disclosure):
+def test_a_web_grant_after_the_contacts_own_stop_is_a_later_line_and_lifts_nothing(server, conn, disclosure):
     _own_stop(conn)
     payload = _grant(disclosure)
     payload["contact_verification"] = "none"
     status, body, _ = _post(server, payload)
     _stored(status, body)
-    row = conn.execute("SELECT release_outcome, release_cause FROM consentvault.event WHERE event_type = 'release'"
-                       ).fetchone()
-    assert (row["release_outcome"], row["release_cause"]) == ("released", None)
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE event_type = 'release'").fetchone()["n"] == 0
+    facts = contact_facts(conn, "+12125550101")
+    assert [x["event_type"] for x in facts.history] == ["revoke", "grant"] and facts.lifts == ()
     assert conn.execute("SELECT count(*) AS n FROM consentvault.review").fetchone()["n"] == 0
 
 
-def test_an_otp_confirmed_grant_lifts_the_stop(server, conn, disclosure):
+def test_an_otp_confirmed_grant_is_recorded_as_such_and_lifts_nothing(server, conn, disclosure):
     _own_stop(conn)
     payload = _grant(disclosure)
     payload["contact_verification"] = "otp"
@@ -351,7 +353,7 @@ def test_an_otp_confirmed_grant_lifts_the_stop(server, conn, disclosure):
     _stored(status, body)
     assert conn.execute("SELECT contact_verification FROM consentvault.event WHERE event_type = 'grant'"
                         ).fetchone()["contact_verification"] == "otp"
-    assert conn.execute("SELECT release_outcome FROM consentvault.event WHERE event_type = 'release'").fetchone()["release_outcome"] == "released"
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE event_type = 'release'").fetchone()["n"] == 0
 
 
 def test_the_capture_edges_secret_cannot_claim_a_verified_contact_but_the_post_is_stored(server, conn, disclosure):
@@ -415,31 +417,31 @@ def test_purposes_are_lower_cased_in_the_event_and_kept_as_sent_in_the_post(serv
     assert _events(conn) == 1 and _facts(conn, _posts(conn)[1]["post_id"])["event_not_derived"] == "UnknownPurposeError"
 
 
-def test_permission_answers_through_the_gate_including_stop_all(server, conn, disclosure):
+def test_the_contact_check_lists_the_grant_then_the_stop_for_every_purpose(server, conn, disclosure):
     _post(server, _grant(disclosure))
     auth = {"Authorization": f"Bearer {TOKEN}"}
-    q = "?contact=%2B12125550101&channel=sms&purpose=Marketing"
-    s, perm, _ = _call(server + "/v1/permission" + q, headers=auth)
-    assert s == 200 and perm["allowed"] is True and perm["reason"] == "granted" and perm["basis_event_ids"]
+    q = "?contact=%2B12125550101"
+    s, facts, _ = _call(server + "/v1/permission" + q, headers=auth)
+    assert s == 200 and [x["event_type"] for x in facts["history"]] == ["grant"] and facts["stops"] == []
+    assert "reason" not in facts and "basis_event_ids" not in facts
     status, _, _ = _post(server, {"contact": "+12125550101", "event_type": "revoke", "channels": ["sms"],
                                   "purposes": ["*"], "method": "keyword"})
     assert status == 201
-    s, perm, _ = _call(server + "/v1/permission" + q, headers=auth)
-    assert s == 200 and perm["allowed"] is False and perm["reason"] == "stopped:revoke"
-    s, perm, _ = _call(server + "/v1/permission?contact=%2B12125550101&channel=sms&purpose=billing", headers=auth)
-    assert s == 200 and perm["allowed"] is False and perm["reason"] == "stopped:revoke"
+    s, facts, _ = _call(server + "/v1/permission" + q, headers=auth)
+    assert s == 200 and [x["event_type"] for x in facts["history"]] == ["grant", "revoke"]
+    assert facts["stops"][0]["purposes"] == ["*"] and facts["lifts"] == []
 
 
-def test_permission_returns_the_named_denial_when_the_database_errors(raw_dsn):
-    """An unmigrated database raises a psycopg error inside the gate; an unreachable one fails to connect."""
+def test_the_contact_check_says_unavailable_with_the_cause_when_the_database_errors(raw_dsn):
+    """An unmigrated database raises a psycopg error inside the check; an unreachable one fails to connect."""
     auth = {"Authorization": f"Bearer {TOKEN}"}
-    q = "?contact=%2B12125550101&channel=sms&purpose=marketing"
+    q = "?contact=%2B12125550101"
     for bad_dsn in (raw_dsn, "postgresql://nobody@127.0.0.1:1/none"):
         settings = api.ApiSettings(dsn=bad_dsn, secret=SECRET, token=TOKEN, purposes=PURPOSES, default_region="US")
         for base in _serve(settings):
-            s, perm, _ = _call(base + "/v1/permission" + q, headers=auth)
-            assert perm["allowed"] is False and perm["reason"].startswith("database_unreachable:"), perm
-            assert s in (200, 503)
+            s, facts, _ = _call(base + "/v1/permission" + q, headers=auth)
+            assert facts["status"] == "unavailable" and facts["reason"].startswith("database_unreachable:"), facts
+            assert "allowed" not in facts and s == 503
 
 
 def test_the_vault_being_unavailable_is_the_only_answer_that_says_nothing_was_stored(raw_dsn):

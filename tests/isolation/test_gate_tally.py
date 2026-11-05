@@ -145,18 +145,17 @@ def test_a_commit_that_fails_gives_one_clean_503_and_records_nothing(cloud, tena
                           token=tok)
     else:
         s, r = cloud.gate(cloud.a, X, token=tok)
-    assert s == 503 and str(r["evidence_status"]).startswith("unavailable:")
+    assert s == 503 and r["status"] == "unavailable" and r["reason"] == "database"
     answer = r["items"][0] if many else r
-    assert answer["policy_action"] == "hold"  # the approved policy's own cell for an unavailable answer is honored
-    assert answer["policy_version"] == cloud.a.policy_version
+    assert answer["status"] == "unavailable" and not {"policy_action", "policy_version", "allowed"} & set(answer)
     assert _counts(tenancy, tenancy.a) == (0, 0)
 
 
-def test_a_commit_failure_for_an_organisation_with_no_approved_policy_holds_nothing(cloud, tenancy):
+def test_a_commit_failure_for_an_organisation_with_no_approved_policy_answers_the_same(cloud, tenancy):
     assert cloud.grant(cloud.b, X)[0] == 201
     _trigger(tenancy, "gate_check_tally", "cv_fail_at_commit", deferred=True)
     s, r = cloud.gate(cloud.b, X)
-    assert s == 503 and r["policy_action"] is None and r["policy_version"] is None
+    assert s == 503 and r["status"] == "unavailable" and "policy_action" not in r
 
 
 # the decision and its tally are one unit --------------------------------------------------------------------------------------------

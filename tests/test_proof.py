@@ -2,6 +2,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from error_names import db_codes
+
 from consentvault import disclosure as disclosure_mod
 from consentvault.capture import capture
 from consentvault.ledger import record_event
@@ -50,12 +52,11 @@ def test_timeline_is_in_the_order_the_vault_received_events(conn, disclosure):
     assert [e["seq"] for e in res["timeline"]] == [1, 2, 3]
     perm = res["permissions"][0]
     assert perm["allowed"] is False and perm["reason"] == "stopped:revoke"
-    record_event(conn, contact=PHONE_A, event_type="release", channels=["sms"], purposes=["marketing"],
-                 method="checkbox", origin="consumer", captured_at=_t(30),
-                 release_of_event_id=res["timeline"][2]["event_id"], release_outcome="released")
-    res = lookup(conn, PHONE_A)
-    assert res["permissions"][0]["allowed"] is True
-    assert res["timeline"][-1]["event_type"] == "release"
+    with pytest.raises(Exception, match=db_codes("check_release_ref", "no release event can be written")):
+        record_event(conn, contact=PHONE_A, event_type="release", channels=["sms"], purposes=["marketing"],
+                     method="checkbox", origin="consumer", captured_at=_t(30),
+                     release_of_event_id=res["timeline"][2]["event_id"], release_outcome="released")
+    assert lookup(conn, PHONE_A)["permissions"][0]["allowed"] is False  # nothing lifts the stop
 
 
 def test_email_and_subject_key_find_the_same_person(conn):

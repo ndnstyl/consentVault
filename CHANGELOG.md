@@ -16,6 +16,15 @@ All notable changes are listed here. Format follows Keep a Changelog; versions f
   unmapped form, unreadable body or unusual size raises an operator alarm.
 - The capture edge forwards the browser's own bytes and headers in one signed envelope and queues them when the vault is
   down; the widget sends the decision time with its offset and the exact text on screen.
+- The contact check returns the recorded facts and history for a contact point (every line as written, every stop with its
+  source and the posts that triggered it, every lift with the post that lifted it) and no verdict: no `allowed`, `proceed`
+  or `hold`, and no deny by default. `may-contact` prints the same facts and exits non-zero only when the record could not
+  be read.
+- A stop is lifted only by a later consent post from the same person on the same contact point, whose consent value as sent
+  equals the value its form's box sends when ticked. The lift is a link from the stop to the post (migration 0069); no
+  admin, operator, customer, connector or review queue can lift a stop, a text such as START lifts nothing, and no release
+  event can be written any more.
+- The refusal codes and the portal's help copy for answers that no longer fire were removed.
 
 ## 0.1.0 – initial release
 

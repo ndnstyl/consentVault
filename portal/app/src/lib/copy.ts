@@ -147,18 +147,12 @@ export function causeLine(status: number, code: string, override?: string): stri
   return status > 0 ? `${cap} (${status} ${code})` : `${cap} (${code})`;
 }
 
-// What a capture request prints when it is refused (wireframe 06, contracts/capture.md).
+// What a capture request can still be answered with. Every post that reaches the vault is stored; nothing about the post is
+// checked or refused (contracts/capture-api.md), so the only answers left are a token the service did not accept and a
+// store that could not be written.
 export const CAPTURE_REFUSALS: { answer: string; means: string; todo: string }[] = [
-  { answer: '422 UnknownDisclosureError', means: 'That wording is not registered for {org}.', todo: 'Register the exact text in Wording, then send its fingerprint.' },
-  { answer: '403 source_not_allowed', means: 'The source in the body is not the one this credential belongs to.', todo: 'Use the source id shown on the credential.' },
-  { answer: '403 brand_not_allowed', means: 'The brand is not on this source.', todo: "Add the brand to the source, or send the source's brand." },
-  { answer: '403 org_not_active', means: 'Your organization is not active.', todo: 'Check Billing, or ask the operator.' },
   { answer: '401 invalid_client', means: 'The token or signature was not accepted.', todo: 'Get a fresh token. Check the key and algorithm.' },
-  { answer: '422 UncheckedConsentError', means: 'The grant did not carry checked: true.', todo: 'Send checked: true only when the person ticked the box.' },
-  { answer: '422 UnknownPurposeError', means: 'A purpose is not on your purpose list.', todo: 'Use a purpose your wording names.' },
-  { answer: '422 GrantScopeError', means: 'The grant names a channel or purpose the wording does not.', todo: 'Match the channels and purposes to the registered wording.' },
-  { answer: '429 rate_limited', means: 'Too many requests.', todo: 'Wait and send again.' },
-  { answer: '503 key_unavailable', means: 'Nothing was written. Your encryption key could not be reached.', todo: 'Send again in a minute. Report it if it repeats.' },
+  { answer: '503 store_unavailable', means: 'Nothing was stored. The record store could not be written.', todo: 'Send again in a minute. Report it if it repeats.' },
 ];
 
 // ---- Records, setup and confirmation messages (copy-rules.md section 8) ----

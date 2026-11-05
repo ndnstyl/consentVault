@@ -30,29 +30,40 @@ def _consented(cloud):
     assert s == 201, r
 
 
+def _clear(answer):
+    return answer["status"] == "records_found" and answer["stops"] == []
+
+
+def _stopped(answer):
+    """The facts show a stop and nothing lifted it."""
+    return len(answer["stops"]) >= 1 and all(not x["lifted_by_post_ids"] for x in answer["stops"])
+
+
 def _every_cell(cloud):
     return [cloud.gate(cloud.a, X, channel=ch, purpose=p) for ch in CHANNELS for p in PURPOSES]
 
 
 def test_after_erasure_a_consenting_contact_reads_stopped_on_every_channel_and_purpose(env, cloud):
     _consented(cloud)
-    assert all(a[1]["evidence_status"] == "consent_record_found" for a in _every_cell(cloud))
+    assert all(_clear(a[1]) for a in _every_cell(cloud))
     req = _request(env, env.t.a, X)
     assert _confirm(env, env.t.a, req["erasure_id"])["status"] == "completed"
     assert not env.key_present(env.t.a, X)
     for status, answer in _every_cell(cloud):
-        assert status == 200 and answer["evidence_status"] == "stop_on_record", answer
-        assert answer["policy_action"] == "hold", answer
+        assert status == 200 and _stopped(answer), answer
+        stop = answer["stops"][-1]
+        assert (stop["event_type"], stop["purposes"], stop["source"]) == ("suppress", ["*"], "erasure"), answer
+        assert "policy_action" not in answer, answer
 
 
-def test_after_erasure_the_batch_gate_denies_every_channel_and_purpose(env, cloud):
+def test_after_erasure_the_batch_check_lists_the_stop_for_every_channel_and_purpose(env, cloud):
     _consented(cloud)
     req = _request(env, env.t.a, X)
     _confirm(env, env.t.a, req["erasure_id"])
     items = [{"contact": X, "channel": ch, "purpose": p} for ch in CHANNELS for p in PURPOSES]
     s, r = cloud.call("/v1/permission:batch", {"items": items}, token=cloud.token(cloud.a, "gate_read"))
     assert s == 200 and len(r["items"]) == len(items)
-    assert {(i["evidence_status"], i["policy_action"]) for i in r["items"]} == {("stop_on_record", "hold")}
+    assert all(_stopped(i) for i in r["items"])
 
 
 def test_the_erasure_stop_is_one_marked_event_by_fingerprint_with_an_allowed_method(env, cloud):
@@ -71,14 +82,15 @@ def test_the_erasure_stop_is_one_marked_event_by_fingerprint_with_an_allowed_met
     assert r["recorded_by"] == f"erasure:{req['erasure_id']}:1"  # the erasure and its ledger entry's sequence number
 
 
-def test_the_stop_survives_until_the_person_grants_again_on_a_form_and_then_that_grant_takes_effect(env, cloud):
+def test_the_stop_stays_on_the_record_when_the_person_grants_again_on_a_form(env, cloud):
     _consented(cloud)
     req = _request(env, env.t.a, X)
     _confirm(env, env.t.a, req["erasure_id"])
-    assert all(a[1]["evidence_status"] == "stop_on_record" for a in _every_cell(cloud))
+    assert all(_stopped(a[1]) for a in _every_cell(cloud))
     s, r = cloud.grant(cloud.a, X, **ALL)  # the same person captured again on a form, key re-made
     assert s == 201, r
-    assert all(a[1]["evidence_status"] == "consent_record_found" for a in _every_cell(cloud))
+    for _status, answer in _every_cell(cloud):  # the grant is a later line; only a matched consent post links a lift
+        assert [x["event_type"] for x in answer["history"]][-1] == "grant" and _stopped(answer) and answer["lifts"] == []
 
 
 def test_a_second_open_request_for_the_same_contact_is_refused_by_name(env):
@@ -141,16 +153,15 @@ def test_the_stop_survives_a_decline_after_the_first_unheld_confirm(env, cloud, 
         erasure.decline_erasure(c, token_key=env.t.key, operator_id=OPERATOR, request_id="req-d",
                                 org_id=env.t.a.org_id, erasure_id=req["erasure_id"], reason="withdrawn")
     assert env.key_present(env.t.a, X)
-    assert all(a[1]["evidence_status"] == "stop_on_record" for a in _every_cell(cloud))
+    assert all(_stopped(a[1]) for a in _every_cell(cloud))
     items = [{"contact": X, "channel": ch, "purpose": p} for ch in CHANNELS for p in PURPOSES]
     s, r = cloud.call("/v1/permission:batch", {"items": items}, token=cloud.token(cloud.a, "gate_read"))
-    assert {i["evidence_status"] for i in r["items"]} == {"stop_on_record"}
+    assert all(_stopped(i) for i in r["items"])
 
 
-def _verified_regrant_and_release(env, cloud, contact, *, commit):
-    """A verified grant and its release decision, in one transaction on its own connection. Returns the open connection
+def _verified_regrant(env, cloud, contact, *, commit):
+    """A verified grant, in one transaction on its own connection. Returns the open connection
     context when ``commit`` is False so the caller decides when it lands."""
-    from consentvault.release import release_after_tenant_grant
     from consentvault.ledger import record_tenant_event
     from consentvault.tenancy.tokens import org_transaction
 
@@ -161,7 +172,6 @@ def _verified_regrant_and_release(env, cloud, contact, *, commit):
     ev = record_tenant_event(conn, t.crypto, contact=contact, event_type="grant", channels=list(CHANNELS),
                              purposes=list(PURPOSES), method="checkbox", origin="consumer",
                              disclosure_sha256=cloud.a.wording, contact_verification="otp", session_ref="s-9")
-    release_after_tenant_grant(conn, t.crypto, ev.event_id)
     return conn, tx
 
 
@@ -178,7 +188,7 @@ def test_a_grant_still_uncommitted_when_the_stop_is_written_cannot_land_after_it
     assert _confirm(env, env.t.a, req["erasure_id"])["status"] == "held"  # first stop on record
     monkeypatch.undo()
 
-    conn, tx = _verified_regrant_and_release(env, cloud, X, commit=False)  # holds the org's event lock, uncommitted
+    conn, tx = _verified_regrant(env, cloud, X, commit=False)  # holds the org's event lock, uncommitted
     result = {}
 
     def finish():
@@ -209,10 +219,10 @@ def test_a_grant_still_uncommitted_when_the_stop_is_written_cannot_land_after_it
     assert not th.is_alive(), "the erasure did not finish after the grant committed"
     assert "err" not in result, result.get("err")
     assert result["out"]["completed"] == [req["erasure_id"]]
-    assert all(a[1]["evidence_status"] == "stop_on_record" for a in _every_cell(cloud))
+    assert all(_stopped(a[1]) for a in _every_cell(cloud))
 
 
-def test_record_erasure_stop_writes_a_fresh_stop_when_a_grant_or_release_came_after_the_last(env, cloud):
+def test_record_erasure_stop_writes_a_fresh_stop_when_a_grant_came_after_the_last(env, cloud):
     from consentvault.tenancy.erasure import operator_org, record_erasure_stop
 
     _consented(cloud)
@@ -225,13 +235,13 @@ def test_record_erasure_stop_writes_a_fresh_stop_when_a_grant_or_release_came_af
 
     first = stop()
     assert stop() == first  # nothing since: the same stop
-    conn, tx = _verified_regrant_and_release(env, cloud, X, commit=True)
+    conn, tx = _verified_regrant(env, cloud, X, commit=True)
     tx.__exit__(None, None, None)
     conn.close()
-    assert all(a[1]["evidence_status"] == "consent_record_found" for a in _every_cell(cloud))  # the first was lifted
+    assert all(_stopped(a[1]) for a in _every_cell(cloud))  # the grant lifted nothing: the first stop is still on the record
     second = stop()
-    assert second != first
-    assert all(a[1]["evidence_status"] == "stop_on_record" for a in _every_cell(cloud))
+    assert second != first  # a grant after the stop is a new fact, so a fresh stop is written
+    assert all(_stopped(a[1]) for a in _every_cell(cloud))
     with t.superuser() as su:
         row = su.execute("SELECT channels, purposes, contact_norm FROM consentvault.event WHERE event_id = %s",
                          (second,)).fetchone()
@@ -250,10 +260,10 @@ def test_a_confirm_under_a_legal_hold_still_writes_the_stop_and_only_the_key_wai
         _confirm(env, t.a, req["erasure_id"])
     assert e.value.name == "legal_hold_active"
     assert env.key_present(t.a, X)  # the data stays while the hold does
-    assert all(a[1]["evidence_status"] == "stop_on_record" for a in _every_cell(cloud))
+    assert all(_stopped(a[1]) for a in _every_cell(cloud))
     items = [{"contact": X, "channel": ch, "purpose": p} for ch in CHANNELS for p in PURPOSES]
     s, r = cloud.call("/v1/permission:batch", {"items": items}, token=cloud.token(cloud.a, "gate_read"))
-    assert {i["evidence_status"] for i in r["items"]} == {"stop_on_record"}
+    assert all(_stopped(i) for i in r["items"])
 
 
 def test_a_stale_hold_mark_is_cleared_by_erase_in_org_itself(env, monkeypatch):
@@ -298,7 +308,7 @@ def test_crypto_shredded_rows_verify_as_erased_while_their_links_and_hashes_are_
     req = _request(env, env.t.a, X)
     _confirm(env, env.t.a, req["erasure_id"])
     assert not env.key_present(env.t.a, X) and _verify(env) == []  # key gone: rows skipped, links verified
-    conn, tx = _verified_regrant_and_release(env, cloud, X, commit=True)  # the person returns under a new key
+    conn, tx = _verified_regrant(env, cloud, X, commit=True)  # the person returns under a new key
     tx.__exit__(None, None, None)
     conn.close()
     assert env.key_present(env.t.a, X)

@@ -23,11 +23,16 @@ from consentvault.errors import (
     MigrationError,
     UnknownPurposeError,
 )
-from consentvault.gate import may_contact
+from consentvault.gate import contact_facts
 from consentvault.ledger import record_event, verify_chain
-from consentvault.release import release_after_grant
 
 C = "+15555550123"
+
+
+def _types(conn, contact=C):
+    return [line["event_type"] for line in contact_facts(conn, contact).history]
+
+
 SALT = "c" * 64
 
 
@@ -143,7 +148,7 @@ def test_the_runtime_role_cannot_change_history_or_the_schema(app_conn, conn, di
 def test_the_runtime_role_can_read_and_append_and_owns_nothing(app_conn, conn, disclosure):
     ev = _grant(app_conn, disclosure)
     assert ev.seq == 1
-    assert may_contact(app_conn, C, "sms", "marketing").allowed
+    assert contact_facts(app_conn, C).event_ids == (ev.event_id,)
     assert verify_chain(app_conn) == []
     me = app_conn.execute("SELECT rolsuper, rolcreaterole, rolcreatedb FROM pg_roles WHERE rolname = current_user"
                           ).fetchone()
@@ -158,11 +163,11 @@ def test_the_runtime_role_can_read_and_append_and_owns_nothing(app_conn, conn, d
 def test_deleting_the_tail_is_caught_once_the_head_was_anchored(conn, tmp_path):
     _grant(conn, _d(conn))
     _stop(conn)
-    assert not may_contact(conn, C, "sms", "marketing").allowed
+    assert len(contact_facts(conn, C).stops) == 1
     sink = tmp_path / "anchors.jsonl"
     assert anchor_mod.anchor(conn, str(sink))["seq"] == 2
     _as_owner_without_triggers(conn, "event", "DELETE FROM consentvault.event WHERE seq = 2")
-    assert may_contact(conn, C, "sms", "marketing").allowed  # the stop is gone from the ledger
+    assert contact_facts(conn, C).stops == ()  # the stop is gone from the ledger
     assert [(b.seq, b.reason) for b in verify_chain(conn)] == [(2, "anchored_row_missing:chain_head")]
     assert [b.reason for b in verify_chain(conn, sink_file=str(sink))] == [
         "anchored_row_missing:chain_head", "anchored_row_missing:sink"]
@@ -264,15 +269,13 @@ def test_the_runtime_role_can_anchor(app_conn, conn, tmp_path):
 
 # ordering ----------------------------------------------------------------------------------------------------
 
-def test_a_later_stop_wins_even_if_a_grant_claims_a_later_capture_time(conn):
+def test_history_is_in_arrival_order_even_if_a_grant_claims_a_later_capture_time(conn):
     sha = _d(conn)
     now = datetime.now(timezone.utc)
     _stop(conn, captured_at=now - timedelta(days=2))
-    g = _grant(conn, sha, captured_at=now + timedelta(minutes=4))
-    assert release_after_grant(conn, g.event_id).released
+    _grant(conn, sha, captured_at=now + timedelta(minutes=4))
     _stop(conn)
-    d = may_contact(conn, C, "sms", "marketing")
-    assert not d.allowed and d.reason == "stopped:revoke"
+    assert _types(conn) == ["revoke", "grant", "revoke"]
 
 
 def test_a_captured_at_beyond_the_skew_is_refused_and_one_inside_it_is_evidence_only(conn):
@@ -305,8 +308,7 @@ def test_a_backdated_stop_does_not_reorder_history(conn):
     sha = _d(conn)
     _stop(conn, captured_at=datetime.now(timezone.utc) - timedelta(days=30))
     _grant(conn, sha)
-    d = may_contact(conn, C, "sms", "marketing")
-    assert not d.allowed and d.reason == "stopped:revoke"  # a grant alone never beats a stop
+    assert _types(conn) == ["revoke", "grant"]  # the line is where it arrived; the captured time is shown beside it
 
 
 # scope -------------------------------------------------------------------------------------------------------
@@ -318,14 +320,14 @@ def test_a_grant_beyond_its_disclosure_is_refused_by_name(conn):
     with pytest.raises(GrantScopeError, match="billing"):
         _grant(conn, _d(conn), purposes=["billing"])
     assert conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"] == 0
-    assert not may_contact(conn, C, "artificial_voice", "marketing").allowed
+    assert contact_facts(conn, C).status == "no_record_found"
 
 
 def test_a_subset_of_the_disclosure_is_a_valid_grant(conn):
     wide = _d(conn, channels=["sms", "voice", "email"], purposes=["marketing", "billing"], body="All of it.")
     _grant(conn, wide, channels=["sms"], purposes=["billing"])
-    assert may_contact(conn, C, "sms", "billing").allowed
-    assert not may_contact(conn, C, "sms", "marketing").allowed
+    line = contact_facts(conn, C).history[0]
+    assert (line["channels"], line["purposes"]) == (["sms"], ["billing"])
 
 
 def test_the_database_refuses_a_grant_beyond_its_disclosure_when_the_python_check_is_skipped(conn):
@@ -343,11 +345,10 @@ def test_the_database_refuses_a_grant_beyond_its_disclosure_when_the_python_chec
 
 # purposes ----------------------------------------------------------------------------------------------------
 
-def test_purposes_are_lower_cased_so_a_stop_in_any_case_stops(conn):
+def test_purposes_are_lower_cased_so_a_stop_in_any_case_is_one_stop(conn):
     _grant(conn, _d(conn))
     _stop(conn, purposes=["Marketing"])
-    assert not may_contact(conn, C, "sms", "marketing").allowed
-    assert not may_contact(conn, C, "sms", "MARKETING").allowed
+    assert contact_facts(conn, C).stops[0]["purposes"] == ["marketing"]
     assert conn.execute("SELECT DISTINCT unnest(purposes) AS p FROM consentvault.event").fetchall() == [{"p": "marketing"}]
 
 
@@ -366,20 +367,19 @@ def test_purposes_must_be_on_the_configured_list(conn):
         _stop(conn, purposes=[])
 
 
-def test_a_stop_for_every_purpose_denies_every_purpose_on_its_channels(conn):
+def test_a_stop_for_every_purpose_is_listed_as_a_stop_for_every_purpose(conn):
     wide = _d(conn, channels=["sms", "email"], purposes=["marketing", "billing"], body="Wide.")
     _grant(conn, wide, channels=["sms", "email"], purposes=["marketing", "billing"])
     other = "+15555550199"
     record_event(conn, contact=other, event_type="grant", channels=["sms"], purposes=["marketing"],
                  method="checkbox", origin="consumer", disclosure_sha256=wide)
     _stop(conn, channels=["sms"], purposes=["*"])
-    for purpose in ("marketing", "billing", "never-granted"):
-        d = may_contact(conn, C, "sms", purpose)
-        assert not d.allowed and d.reason == "stopped:revoke", (purpose, d)
-    assert may_contact(conn, C, "email", "marketing").allowed  # other channels are untouched
-    assert may_contact(conn, other, "sms", "marketing").allowed  # other people are untouched
+    stop = contact_facts(conn, C).stops[0]
+    assert (stop["channels"], stop["purposes"]) == (["sms"], ["*"])
+    assert _types(conn, other) == ["grant"]  # other people are untouched
     _grant(conn, wide, channels=["sms"], purposes=["marketing"], session_ref="again")
-    assert not may_contact(conn, C, "sms", "marketing").allowed  # a grant alone never beats a stop
+    assert _types(conn) == ["grant", "revoke", "grant"]  # a later grant is a later line; nothing is lifted
+    assert contact_facts(conn, C).lifts == ()
 
 
 def test_stop_all_is_only_for_stops_and_only_on_its_own(conn):
@@ -390,23 +390,15 @@ def test_stop_all_is_only_for_stops_and_only_on_its_own(conn):
         _stop(conn, purposes=["*", "marketing"])
     with pytest.raises(UnknownPurposeError):
         disc.register(conn, "Star.", "f", "en", ["sms"], ["*"])
-    assert not may_contact(conn, C, "sms", "*").allowed
     with pytest.raises(psycopg.errors.CheckViolation):
         conn.execute("INSERT INTO consentvault.disclosure (sha256, body, label, locale, channels, purposes)"
                      " VALUES (repeat('c', 64), 'b', 'l', 'en', ARRAY['sms'], ARRAY['*'])")
 
 
-def test_a_stop_for_every_purpose_is_lifted_only_by_a_release_of_the_purpose_granted(conn):
-    sha = _d(conn)
-    _grant(conn, sha)
-    _stop(conn, purposes=["*"])
-    g = _grant(conn, sha, session_ref="s2")
-    assert not may_contact(conn, C, "sms", "marketing").allowed
-    assert release_after_grant(conn, g.event_id).released
-    assert may_contact(conn, C, "sms", "marketing").allowed
 
 
-# release rule: a stop that arrived after the grant is never lifted by it ---------------------------------------
+
+# no release row can be written ----------------------------------------------------------------------------------------
 
 def _raw_event(conn, **over):
     """Insert one row the way a writer holding only INSERT could: hand-built, chained, hashed."""
@@ -432,85 +424,29 @@ def _raw_event(conn, **over):
     return row
 
 
-def test_a_release_decided_for_an_earlier_grant_does_not_lift_a_later_stop(conn):
-    sha = _d(conn)
-    _stop(conn)
-    g = _grant(conn, sha)
-    _stop(conn)  # the person texts STOP again before the release decision is written
-    assert not may_contact(conn, C, "sms", "marketing").allowed
-    res = release_after_grant(conn, g.event_id)
-    assert not res.released and res.refusals == {"stop_after_grant": ("sms",)}
-    d = may_contact(conn, C, "sms", "marketing")
-    assert not d.allowed and d.reason == "stopped:revoke"
 
 
-def test_the_view_ranks_a_release_at_its_grant_even_when_the_row_is_hand_written(conn):
-    sha = _d(conn)
-    _stop(conn)
-    g = _grant(conn, sha)
-    _stop(conn)
-    _raw_event(conn, event_type="release", release_of_event_id=uuid.UUID(g.event_id), release_outcome="released")
-    d = may_contact(conn, C, "sms", "marketing")
-    assert not d.allowed and d.reason == "stopped:revoke"
 
 
-def test_a_release_before_any_later_stop_still_lifts_and_a_new_stop_wins_again(conn):
-    sha = _d(conn)
-    _stop(conn)
-    g = _grant(conn, sha)
-    assert release_after_grant(conn, g.event_id).released
-    assert may_contact(conn, C, "sms", "marketing").allowed
-    _stop(conn)
-    assert not may_contact(conn, C, "sms", "marketing").allowed
 
 
-def test_the_release_decision_takes_the_ledger_lock(conn, dsn):
-    sha = _d(conn)
-    _stop(conn)
-    g = _grant(conn, sha)
-    with db.connect(dsn) as other:
-        other.execute("BEGIN")
-        other.execute("SELECT pg_advisory_xact_lock(hashtext('consentvault.ledger'))")
-        conn.execute("SET lock_timeout = '300ms'")
-        with pytest.raises(psycopg.errors.LockNotAvailable):
-            conn.execute("SELECT pg_advisory_xact_lock(hashtext('consentvault.ledger'))")
-        other.execute("ROLLBACK")
-    conn.execute("RESET lock_timeout")
-    assert release_after_grant(conn, g.event_id).released
 
 
-# a release row must decide an earlier consumer grant of the same contact point ------------------------------
 
-def test_a_release_naming_a_stop_instead_of_a_grant_is_refused(app_conn, conn, disclosure):
-    _grant(conn, disclosure)
+
+
+
+# the database refuses every release row, whatever it names -------------------------------------------------------
+
+def test_the_database_refuses_a_release_row_whatever_it_names(app_conn, conn, disclosure):
+    own = _grant(conn, disclosure)
     stop = _stop(conn)
-    assert not may_contact(conn, C, "sms", "marketing").allowed
-    with pytest.raises(psycopg.Error, match="earlier consumer grant"):
-        _raw_event(app_conn, event_type="release", release_of_event_id=uuid.UUID(stop.event_id),
-                   release_outcome="released")
-    assert not may_contact(conn, C, "sms", "marketing").allowed
-
-
-def test_a_release_naming_another_persons_grant_or_no_event_is_refused(conn):
-    sha = _d(conn)
     other = record_event(conn, contact="+15555550199", event_type="grant", channels=["sms"], purposes=["marketing"],
-                         method="checkbox", origin="consumer", disclosure_sha256=sha, session_ref="s")
-    for target in (uuid.UUID(other.event_id), uuid.uuid4()):
-        with pytest.raises(psycopg.Error, match="earlier consumer grant"):
-            _raw_event(conn, event_type="release", release_of_event_id=target, release_outcome="released")
-
-
-def test_a_release_naming_a_staff_grant_or_more_than_its_grant_is_refused(conn):
-    sha = _d(conn, channels=("sms", "voice"))
-    staff = record_event(conn, contact=C, event_type="grant", channels=["sms"], purposes=["marketing"],
-                         method="staff", origin="staff", disclosure_sha256=sha)
-    with pytest.raises(psycopg.Error, match="earlier consumer grant"):
-        _raw_event(conn, event_type="release", release_of_event_id=uuid.UUID(staff.event_id),
-                   release_outcome="released")
-    own = _grant(conn, sha)
-    with pytest.raises(psycopg.Error, match="only the channels and purposes of the grant"):
-        _raw_event(conn, event_type="release", channels=["voice"], release_of_event_id=uuid.UUID(own.event_id),
-                   release_outcome="released")
+                         method="checkbox", origin="consumer", disclosure_sha256=disclosure, session_ref="s")
+    for target in (own.event_id, stop.event_id, other.event_id, str(uuid.uuid4())):
+        with pytest.raises(psycopg.Error, match="no release event can be written"):
+            _raw_event(app_conn, event_type="release", release_of_event_id=uuid.UUID(target), release_outcome="released")
+    assert contact_facts(conn, C).stops[0]["lifted_by_post_ids"] == []
 
 
 # trigger functions pin their search path -------------------------------------------------------------------

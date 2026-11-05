@@ -5,8 +5,12 @@ from test_api import server  # noqa: F401
 
 
 def _perm(server):
-    return T._call(server + "/v1/permission?contact=%2B12125550101&channel=sms&purpose=marketing",
+    return T._call(server + "/v1/permission?contact=%2B12125550101",
                    headers={"Authorization": "Bearer test-bearer-token"})[1]
+
+
+def _types(server):
+    return [x["event_type"] for x in _perm(server)["history"]]
 
 
 STOP = {"contact": "+12125550101", "event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"], "method": "keyword"}
@@ -24,7 +28,7 @@ def test_r1_form_grant_after_stop(server, disclosure, conn):
     assert T._post(server, form, ts=now - 20)[0] == 201
     rel = conn.execute("SELECT release_outcome, release_cause FROM consentvault.event WHERE event_type='release'").fetchall()
     print("R1", _last(conn), rel, _perm(server))
-    assert _perm(server)["allowed"] is True
+    assert _types(server) == ["grant", "revoke", "grant"] and rel == [] and _perm(server)["lifts"] == []
 
 
 def test_r2_signed_revoke_carrying_the_stop_text(server, disclosure, conn):
@@ -32,7 +36,7 @@ def test_r2_signed_revoke_carrying_the_stop_text(server, disclosure, conn):
     assert T._post(server, T._grant(disclosure), ts=now - 60)[0] == 201
     assert T._post(server, dict(STOP, inbound_message="STOP"), ts=now - 30)[0] == 201
     print("R2", _last(conn), _perm(server))
-    assert _perm(server)["allowed"] is False
+    assert "revoke" in _types(server) and _perm(server)["stops"][0]["lifted_by_post_ids"] == []
 
 
 def test_r3_reused_request_id_header_on_a_different_message(server, disclosure, conn):
@@ -41,7 +45,7 @@ def test_r3_reused_request_id_header_on_a_different_message(server, disclosure, 
     assert T._post(server, T._grant(disclosure), ts=now - 60, headers=h)[0] == 201
     assert T._post(server, STOP, ts=now - 30, headers=h)[0] == 201
     print("R3", _last(conn), _perm(server))
-    assert _perm(server)["allowed"] is False
+    assert "revoke" in _types(server) and _perm(server)["stops"][0]["lifted_by_post_ids"] == []
 
 
 def test_r4_subprocess_imports_branch_source():
@@ -69,4 +73,4 @@ def test_r6_a_failed_derive_burns_the_request_id_so_the_safe_resend_is_dropped(s
     assert T._post(server, STOP, ts=now - 30, headers=h)[0] == 201
     assert T._post(server, STOP, ts=now - 20, headers=h)[0] == 201  # the documented safe resend
     print("R6", _last(conn), _perm(server))
-    assert _perm(server)["allowed"] is False
+    assert "revoke" in _types(server) and _perm(server)["stops"][0]["lifted_by_post_ids"] == []

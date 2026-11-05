@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from consentvault import api, dbclock
-from consentvault.gate_rules import engine
 
 from test_api import PURPOSES, SECRET, TOKEN, VERIFIED_SECRET, _grant, _post, server  # noqa: F401
 
@@ -38,10 +37,11 @@ def test_a_stale_request_is_still_stale_whatever_the_host_clock(server, disclosu
 
 
 @pytest.mark.parametrize("by", SKEWS, ids=["ahead", "behind"])
-def test_the_gate_decides_at_the_time_it_is_given_never_the_host_clock(by):
+def test_the_contact_check_stamps_the_database_time_never_the_host_clock(by):
     import inspect
-    assert "now" in inspect.signature(engine.decide).parameters
-    assert inspect.signature(engine.decide).parameters["now"].default is inspect.Parameter.empty
+    from consentvault.gate import TenantGate
+    src = inspect.getsource(TenantGate.check)
+    assert "dbclock.now(self.conn)" in src and "datetime.now" not in src and "time.time" not in src
 
 
 def test_the_database_clock_helpers_read_the_database(app_dsn):

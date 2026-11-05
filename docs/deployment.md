@@ -171,7 +171,6 @@ Environment wins over `consentvault.toml`.
 | `[api] token` | `CONSENTVAULT_API_TOKEN` | bearer token for read endpoints |
 | `[api] verified_secret` | `CONSENTVAULT_API_VERIFIED_SECRET` | optional second signing secret; only a request signed with it may claim a verified contact point |
 | `[api] allowed_hosts` | `CONSENTVAULT_API_HOSTS` | accepted `Host` header values |
-| none | `CONSENTVAULT_RELEASE_REQUIRE_NO_CONTACT_SINCE_STOP` | when `1`, a later grant releases an earlier stop only if no contact was logged between them |
 | none | `CONSENTVAULT_OPENSSL` | path to the `openssl` binary used for timestamp requests and verification |
 | none | `CONSENTVAULT_TSA_CAFILE` | CA bundle used to verify timestamp tokens (default: the system bundle) |
 

@@ -1046,6 +1046,24 @@
    "defined_in": "0002_tenancy.sql"
   },
   {
+   "code": "db_match_lookup_kmqhny",
+   "function": "consentvault.match_lookup",
+   "signature": "text",
+   "line": 7,
+   "template": "consentvault match_lookup: no tenant entered",
+   "meaning": "consentvault match_lookup: no tenant entered",
+   "defined_in": "0069_match_lookup.sql"
+  },
+  {
+   "code": "db_match_lookup_qkhjvz",
+   "function": "consentvault.match_lookup",
+   "signature": "text",
+   "line": 10,
+   "template": "consentvault match_lookup: the fingerprint must be 64 hex characters",
+   "meaning": "consentvault match_lookup: the fingerprint must be 64 hex characters",
+   "defined_in": "0069_match_lookup.sql"
+  },
+  {
    "code": "db_member_last_admin_guard_hsgprm",
    "function": "consentvault.member_last_admin_guard",
    "signature": "",

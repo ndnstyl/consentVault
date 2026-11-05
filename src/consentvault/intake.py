@@ -16,7 +16,7 @@ from typing import Callable
 
 import psycopg
 
-from . import extract, safelog
+from . import extract, match, safelog
 from .alarms import AlarmWriteError, raise_operator_alarm
 from .errors import ConsentVaultError
 from .rawpost import Fact, RawPostWriter, RawRequest, StoredPost, StoreUnavailable
@@ -67,9 +67,39 @@ def _alarm(conn, enter, name: str, post_id: str, error_class: str, request_id: s
         out.failures.append(f"alarm:{name}:{type(exc).__name__}")
 
 
+def _link(writer, conn, enter, stored: StoredPost, req: RawRequest, out: AfterCommit, fmap, body: bytes, content_type, source_id,
+          region, request_id) -> None:
+    """Link the post to the person's other posts (or file it unmatched with its reason). A failure leaves the post stored,
+    raises ``capture.link_failed`` and is left for the repair run, which appends the missing rows."""
+    if req.kind != "post":
+        return
+    try:
+        if writer.crypto is None:
+            # the single-company vault keeps no organisation fingerprint secret, so there is nothing to link by: said as a fact
+            # beside the post, never a silent skip
+            writer.add_facts(conn, enter, stored, [Fact("vault", "link_skipped", "single_company_no_fingerprint_key")])
+            return
+        if source_id:
+            writer.add_facts(conn, enter, stored, [Fact("vault", "capture_source_id", str(source_id))])
+        post = match.PostInfo(stored.post_id, stored.seq, req.edge_received_at or stored.received_at, stored.body_sha256)
+        result = match.link_post(writer, conn, enter, org=stored.org_id, post=post, readings=out.readings,
+                                 contacts=match.find_contacts(body, content_type, fmap, region),
+                                 map_version=fmap.map_version if fmap else 0, source_id=source_id, data_key=stored.data_key)
+    except (ConsentVaultError, psycopg.Error) as exc:
+        _log.error("the post could not be linked; it is stored and the repair run will link it", request_id=request_id,
+                   error=type(exc).__name__)
+        out.failures.append(f"link:{type(exc).__name__}")
+        _alarm(conn, enter, ALARM_LINK_FAILED, stored.post_id, "LinkFailed", request_id, out)
+        return
+    if result.unmatched_reason:
+        _alarm(conn, enter, ALARM_UNMATCHED_POST, stored.post_id, "UnmatchedPost", request_id, out)
+
+
 def read_after_commit(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, stored: StoredPost,
-                      req: RawRequest, *, source_id: uuid.UUID | str | None = None, request_id: str | None = None) -> AfterCommit:
-    """Extraction and alarms for one stored post. Never raises: each failure is logged, counted and returned."""
+                      req: RawRequest, *, source_id: uuid.UUID | str | None = None, request_id: str | None = None,
+                      region: str | None = None) -> AfterCommit:
+    """Extraction, the link to the person's other posts, and alarms for one stored post. Never raises: each failure is logged,
+    counted and returned."""
     out = AfterCommit()
     org = uuid.UUID(stored.org_id)
     try:
@@ -84,7 +114,8 @@ def read_after_commit(writer: RawPostWriter, conn: psycopg.Connection, enter: Ca
     out.map_label = fmap.label if fmap else None
     read_headers = req.read_headers if req.read_headers is not None else req.headers
     content_type = next((v for n, v in read_headers if n.lower() == "content-type"), None)
-    out.readings = extract.read_fields(bytes(req.read_body if req.read_body is not None else req.body), content_type, fmap)
+    body = bytes(req.read_body if req.read_body is not None else req.body)
+    out.readings = extract.read_fields(body, content_type, fmap)
     try:
         extract.write_readings(conn, enter, org=org, post_id=stored.post_id, map_version=fmap.map_version if fmap else 0,
                                readings=out.readings, data_key=stored.data_key)
@@ -92,6 +123,7 @@ def read_after_commit(writer: RawPostWriter, conn: psycopg.Connection, enter: Ca
         _log.error("the readings of a stored post could not be written; the post is stored", request_id=request_id,
                    error=type(exc).__name__)
         out.failures.append(f"readings:{type(exc).__name__}")
+    _link(writer, conn, enter, stored, req, out, fmap, body, content_type, source_id, region, request_id)
     by_field = {r.field: r for r in out.readings}
     if fmap is None:
         _alarm(conn, enter, ALARM_FIELD_MAP_MISSING, stored.post_id, "NoFieldMap", request_id, out)

@@ -89,7 +89,8 @@ def test_an_alarm_that_cannot_be_written_is_reported_and_never_touches_the_store
     writer = make_writer(tenancy, tmp_path)
     with caplog.at_level("CRITICAL"):
         stored, after = run(tenancy, writer, b'{"contact": "x"}')
-    assert after.alarms == [] and after.failures == ["alarm:capture.consent_not_sent:AlarmWriteError",
+    assert after.alarms == [] and after.failures == ["alarm:capture.unmatched_post:AlarmWriteError",
+                                                     "alarm:capture.consent_not_sent:AlarmWriteError",
                                                      "alarm:capture.wording_not_sent:AlarmWriteError"]
     assert "capture alarm NOT written" in caplog.text
     with tenancy.superuser() as su:

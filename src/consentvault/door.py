@@ -333,6 +333,8 @@ def reason_of(exc: BaseException) -> str:
         return "LedgerError:" + type(exc.__cause__).__name__ if exc.__cause__ is not None else "LedgerError"
     if isinstance(exc, ConsentVaultError):
         return type(exc).__name__
+    if isinstance(exc, psycopg.Error) and not retryable(exc):
+        return "refused:" + type(exc).__name__
     return "unavailable:" + type(exc).__name__
 
 
@@ -361,13 +363,17 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
             except psycopg.errors.UniqueViolation:
                 raise _AlreadyProjected() from None
     except _AlreadyProjected:
-        outcome = Outcome(view.post_id, reason="request_seen_before")
-    except (ConsentVaultError, psycopg.Error) as exc:
+        outcome = _already(conn, enter, view)
+        if outcome.event_id is not None:
+            return outcome
+    except Exception as exc:  # loud-failure-exempt: classified below; a passing fault is logged and retried, a repeating refusal is stored
+        if not isinstance(exc, (ConsentVaultError, psycopg.Error)) and not retryable(exc):
+            raise
         reason = reason_of(exc)
-        if not reason.startswith("unavailable:"):
-            _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason))
-        else:
+        if retryable(exc):
             _log.error("the event of a stored post could not be written; the projection will run again for it", error=reason)
+        else:
+            _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason))
         if raise_errors:
             raise
         return Outcome(view.post_id, reason=reason)
@@ -381,6 +387,31 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
 
 class _AlreadyProjected(Exception):
     pass
+
+
+def _already(conn, enter, view: PostView) -> Outcome:
+    """A second event for this post or request was refused by the database: the event this post already has, or the plain reason
+    that an earlier post of the same signed request made the event."""
+    with _ctx(conn, enter):
+        row = conn.execute("SELECT event_id::text AS event_id FROM consentvault.event_source_post WHERE post_id = %s"
+                           " AND role = 'trigger'", (uuid.UUID(view.post_id),)).fetchone()
+    return Outcome(view.post_id, event_id=row["event_id"]) if row else Outcome(view.post_id, reason="request_seen_before")
+
+
+def retryable(exc: BaseException) -> bool:
+    """True for a fault that is passing, never a refusal of these bytes: the database or the evidence store was unreachable, busy
+    or rolled the transaction back. Only a refusal that would repeat on the same bytes may be stored as final."""
+    from .rawpost import StoreUnavailable
+
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, (StoreUnavailable, psycopg.OperationalError, psycopg.InterfaceError, OSError, TimeoutError)):
+            return True
+        if type(exc).__name__ == "KeyProviderError" or getattr(exc, "name", None) in ("key_unavailable", "service_unavailable", "audit_unavailable"):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
 
 
 def _record(writer, conn, enter, view: PostView, outcome: Outcome) -> Outcome:

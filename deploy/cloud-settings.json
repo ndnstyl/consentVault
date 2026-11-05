@@ -92,7 +92,8 @@
       "kind": "secret_file",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -123,7 +124,8 @@
       "used_by": [
         "vault",
         "job:alarm-relay",
-        "job:twenty-workflow-reminders"
+        "job:twenty-workflow-reminders",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -197,7 +199,8 @@
       "kind": "setting",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -255,7 +258,8 @@
       "kind": "secret_file",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -372,7 +376,8 @@
       "kind": "setting",
       "required": "no; IAM mode only (or CV_DB_OPERATOR_USER): the operator connection's own login, else CONSENTVAULT_DB_USER serves both",
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -414,7 +419,8 @@
       "kind": "setting",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -429,7 +435,8 @@
       "used_by": [
         "vault",
         "sync",
-        "job:twenty-reconcile"
+        "job:twenty-reconcile",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -446,7 +453,8 @@
       "used_by": [
         "vault",
         "sync",
-        "job:twenty-reconcile"
+        "job:twenty-reconcile",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -462,7 +470,8 @@
         "vault",
         "job:records-exports",
         "job:records-backfill",
-        "job:restore-drill"
+        "job:restore-drill",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -491,7 +500,8 @@
       "kind": "setting",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -511,7 +521,8 @@
         "job:records-backfill",
         "job:key-lifecycle",
         "job:restore-drill",
-        "job:twenty-reconcile"
+        "job:twenty-reconcile",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -539,7 +550,8 @@
       "kind": "setting",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "kms-plugin",
       "deployments": [
@@ -552,7 +564,8 @@
       "kind": "setting",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "kms-plugin",
       "deployments": [
@@ -565,7 +578,8 @@
       "kind": "setting",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "kms-plugin",
       "deployments": [
@@ -592,7 +606,8 @@
       "required": "vault and key-lifecycle",
       "used_by": [
         "vault",
-        "job:key-lifecycle"
+        "job:key-lifecycle",
+        "job:projection-rebuild"
       ],
       "read_by": "kms-plugin",
       "deployments": [
@@ -605,7 +620,8 @@
       "required": "vault and key-lifecycle",
       "used_by": [
         "vault",
-        "job:key-lifecycle"
+        "job:key-lifecycle",
+        "job:projection-rebuild"
       ],
       "read_by": "kms-plugin",
       "deployments": [
@@ -639,7 +655,8 @@
         "job:erasure-resume",
         "job:key-lifecycle",
         "job:restore-drill",
-        "job:twenty-reconcile"
+        "job:twenty-reconcile",
+        "job:projection-rebuild"
       ],
       "read_by": "kms-plugin",
       "deployments": [
@@ -656,7 +673,8 @@
         "job:erasure-resume",
         "job:erasure-commit-sweep",
         "job:key-lifecycle",
-        "job:restore-drill"
+        "job:restore-drill",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -699,7 +717,8 @@
       "kind": "secret_file",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -730,7 +749,8 @@
       "kind": "setting",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -744,7 +764,8 @@
       "required": true,
       "used_by": [
         "vault",
-        "job:twenty-workflow-reminders"
+        "job:twenty-workflow-reminders",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -775,7 +796,8 @@
       "required": true,
       "used_by": [
         "vault",
-        "job:twenty-workflow-reminders"
+        "job:twenty-workflow-reminders",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -788,7 +810,8 @@
       "kind": "setting",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -800,7 +823,8 @@
       "kind": "setting",
       "required": false,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -813,7 +837,8 @@
       "kind": "setting",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -825,7 +850,8 @@
       "kind": "setting",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -974,7 +1000,8 @@
       "required": true,
       "used_by": [
         "vault",
-        "job:twenty-workflow-reminders"
+        "job:twenty-workflow-reminders",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -987,7 +1014,8 @@
       "kind": "setting",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -1000,7 +1028,8 @@
       "kind": "secret_file",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -1016,7 +1045,8 @@
       "kind": "setting",
       "required": false,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -1160,7 +1190,8 @@
       "kind": "setting",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -1189,7 +1220,8 @@
         "vault",
         "job:usage-daily",
         "job:usage-retry",
-        "job:usage-acknowledge"
+        "job:usage-acknowledge",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -1204,7 +1236,8 @@
       "kind": "secret_file",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -1219,7 +1252,8 @@
       "kind": "setting",
       "required": false,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -1232,7 +1266,8 @@
       "kind": "setting",
       "required": true,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -1250,7 +1285,8 @@
         "job:erasure-commit-sweep",
         "job:key-lifecycle",
         "job:restore-drill",
-        "job:twenty-reconcile"
+        "job:twenty-reconcile",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -1272,7 +1308,8 @@
         "job:erasure-commit-sweep",
         "job:key-lifecycle",
         "job:restore-drill",
-        "job:twenty-reconcile"
+        "job:twenty-reconcile",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -1328,7 +1365,8 @@
       "kind": "setting",
       "required": false,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -1341,7 +1379,8 @@
       "kind": "setting",
       "required": false,
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -1411,7 +1450,8 @@
       "kind": "setting",
       "required": "no; IAM mode only (or CONSENTVAULT_DB_OPERATOR_USER)",
       "used_by": [
-        "vault"
+        "vault",
+        "job:projection-rebuild"
       ],
       "read_by": "product",
       "deployments": [
@@ -1428,6 +1468,19 @@
       "read_by": "product",
       "deployments": [
         "cloud",
+        "self-host"
+      ]
+    },
+    {
+      "name": "CONSENTVAULT_FINGERPRINT_SECRET",
+      "kind": "secret_value",
+      "required": "no (a single-company vault makes its own and keeps it in its database)",
+      "used_by": [
+        "vault",
+        "job:projection-rebuild"
+      ],
+      "read_by": "product",
+      "deployments": [
         "self-host"
       ]
     }

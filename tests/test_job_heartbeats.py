@@ -13,7 +13,7 @@ from consentvault.providers.rds_iam import AwsCredentials
 
 BEATING = ("seal", "anchor", "verify-chain", "verify-seals", "erasure-resume", "usage-daily", "usage-retry",
            "replay-sweep", "erasure-commit-sweep", "records-exports", "key-lifecycle", "isolation-self-test", "restore-drill",
-           "twenty-reconcile", "twenty-workflow-reminders")
+           "twenty-reconcile", "twenty-workflow-reminders", "projection-rebuild")
 
 
 class FakeAws:

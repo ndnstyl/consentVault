@@ -11,7 +11,7 @@ from consentvault import cli, jobs
 
 SCHEDULED = ("seal", "anchor", "verify-chain", "verify-seals", "isolation-self-test", "key-lifecycle", "erasure-resume",
              "replay-sweep", "erasure-commit-sweep", "alarm-relay", "usage-daily", "usage-retry", "usage-acknowledge", "restore-drill", "records-exports", "records-backfill",
-             "twenty-reconcile", "twenty-workflow-reminders")
+             "twenty-reconcile", "twenty-workflow-reminders", "projection-rebuild")
 
 
 def test_every_scheduled_job_name_is_known():
@@ -28,7 +28,8 @@ def test_every_scheduled_job_name_is_known():
                                          ("isolation-self-test", "isolation-self-test"),
                                          ("restore-drill", "restore-drill"),
                                          ("twenty-reconcile", "twenty-reconcile"),
-                                         ("twenty-workflow-reminders", "twenty-workflow-reminders")])
+                                         ("twenty-workflow-reminders", "twenty-workflow-reminders"),
+                                         ("projection-rebuild", "projection-rebuild")])
 def test_a_built_job_runs_its_cli_command(monkeypatch, job, command):
     seen = []
     monkeypatch.setattr(cli, "main", lambda argv: seen.append(list(argv)) or 0)

@@ -4,6 +4,13 @@ All notable changes are listed here. Format follows Keep a Changelog; versions f
 
 ## Unreleased
 
+- One door, review fixes: no replay claim is made at intake (a resend after a failed store is stored and the fold counts a signed
+  request once); a passing database or store fault is retried by the projection and never stored as "not derived" (only a refusal
+  that repeats on the same bytes is final); the projection catches up across every intake in arrival order and a person's history
+  and a stop lift read the post's arrival, not the order events were written; the age of a signed request, a clock or site-key
+  outage never refuse a stop; a post is projected with the region, purposes and defaults stored beside it; a restore re-ingests a
+  stop as a stored post projected through the door (migration 0074); `consentvault projection-rebuild` (job `projection-rebuild`)
+  runs the rebuild. The reply receipt time and the confirmation counts read the injected clock.
 - One door: every entry point (the single-company server, the multi-tenant server, the text reply, the command line, the
   library, the stop page, a connected system's signal) stores the request whole and hands it to one projection. The events are
   a rebuildable projection of the posts with one writer; each event cites the one post it came from, and the database refuses

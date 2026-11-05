@@ -55,13 +55,15 @@ def test_the_multi_tenant_server_gives_the_reference_history_for_a_random_sequen
                             method="checkbox", client_nonce=str(uuid.uuid4()))
                 if base == "start":
                     body["inbound_message"] = "START"
+                if base == "poison":   # a post no event can come from: its own error is its own stored reason
+                    body["channels"] = 5
             headers = {"X-ConsentVault-Request-Id": "rid-%d-%s" % (n, uuid.uuid4().hex[:6])}
         sent.append((body, headers))
         if kind.startswith("crash"):
             def crash(*a, **k):
                 raise RuntimeError("crash between the answer and the event")
             with pytest.MonkeyPatch.context() as m:
-                m.setattr(door.TenantBackend, "apply", crash)
+                m.setattr(door, "project_post", crash)
                 status, answer = cloud.call("/v1/events", body, token=token, headers=headers)
         else:
             status, answer = cloud.call("/v1/events", body, token=token, headers=headers)

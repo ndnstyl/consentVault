@@ -48,7 +48,7 @@ def test_a_stop_through_another_door_between_a_crashed_grant_and_the_next_post_k
     with pytest.MonkeyPatch.context() as m:
         def crash(*a, **k):
             raise RuntimeError("crash between the answer and the event")
-        m.setattr(door.TenantBackend, "apply", crash)
+        m.setattr(door, "project_post", crash)
         status, _ = cloud.call("/v1/events", _grant(co, CONTACT, 1), token=token, headers={"X-ConsentVault-Request-Id": "r1"})
         assert status == 201
     _stop_through_another_door(cloud, CONTACT)

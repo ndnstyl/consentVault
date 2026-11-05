@@ -2,6 +2,7 @@
 request then counts once, and a duplicate is a fold rule that spends no evidence."""
 import json, os, threading, time, urllib.request, uuid
 
+import psycopg
 import pytest
 
 from consentvault import door
@@ -55,7 +56,7 @@ def test_a_crash_after_the_answer_leaves_no_event_and_a_stop_is_not_lifted_by_a_
     def dies(self, *a, **k):
         n["c"] += 1
         if n["c"] == 1:
-            raise RuntimeError("process died before the event")  # stands in for a crash between the answer and the event
+            raise psycopg.OperationalError("process died before the event")  # stands in for a crash between the answer and the event (a passing fault)
         return real(self, *a, **k)
     base = _events(cloud, "grant")
     monkeypatch.setattr(door.TenantBackend, "apply", dies)

@@ -388,6 +388,39 @@ def read_fields(body: bytes, content_type: str | None, fmap: FieldMap | None) ->
     return out
 
 
+def read_contact_values(body: bytes, content_type: str | None, fmap: FieldMap) -> list[tuple[str, str | None]]:
+    """Every contact value the map's contact paths find, in byte order, as ``(kind named by the map, text as sent)``.
+
+    The text is the value as the sender wrote it (a JSON string unescaped, a form value percent-decoded); it is the input of the
+    contact fingerprint only and is never stored. A value whose bytes are not text is given as ``None`` (the match writer files
+    the post as unmatched with its reason). Raises ``Unreadable`` when the body cannot be read in the map's format. A path that
+    does not occur gives nothing."""
+    pairs = [(p, k) for p, k in fmap.contact_paths]
+    names = [p for p, _ in pairs]
+    if fmap.body_format == "json":
+        found = json_occurrences(body, names)
+    elif fmap.body_format == "form_urlencoded":
+        found = form_occurrences(body, names)
+    elif fmap.body_format == "multipart":
+        found = multipart_occurrences(body, content_type, names)
+    else:
+        raise Unreadable("a text body has no named fields")
+    out: list[tuple[str, str | None]] = []
+    for path, kind in pairs:
+        for raw in found[path]:
+            try:
+                if fmap.body_format == "json":
+                    text = json.loads(raw.decode("utf-8")) if raw[:1] == b'"' else raw.decode("utf-8")
+                elif fmap.body_format == "form_urlencoded":
+                    text = unquote_to_bytes(raw.replace(b"+", b" ")).decode("utf-8")
+                else:
+                    text = raw.decode("utf-8")
+            except (UnicodeDecodeError, ValueError):  # loud-failure-exempt: the value is given as None and the post is filed unmatched with the reason contact_unreadable_as_<kind>
+                text = None
+            out.append((kind, text if isinstance(text, str) else None))
+    return out
+
+
 # Storing readings ---------------------------------------------------------------------------------------------------------
 
 def write_readings(conn: psycopg.Connection, enter: Callable | None, *, org: uuid.UUID | str, post_id: uuid.UUID | str,

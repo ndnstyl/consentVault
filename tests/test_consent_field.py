@@ -61,7 +61,7 @@ def test_an_absent_box_reads_not_sent_and_raises_the_alarm_and_nothing_is_filled
 def test_a_form_with_no_map_reads_unmapped_raises_the_alarm_and_the_post_stays(tenancy, writer):
     stored, after = store_and_read(tenancy, writer, b'{"checked": true}', intake_name="twenty")
     assert readings(tenancy, writer, stored, "consent")["state"] == "unmapped"
-    assert after.alarms == ["capture.field_map_missing"] and after.map_label is None
+    assert after.alarms == ["capture.unmatched_post", "capture.field_map_missing"] and after.map_label is None
     with tenancy.superuser() as su:
         assert su.execute("SELECT count(*) AS n FROM consentvault.raw_post WHERE post_id = %s", (uuid.UUID(stored.post_id),)).fetchone()["n"] == 1
 
@@ -139,7 +139,7 @@ def test_an_unreadable_body_reads_body_unreadable_for_the_fields_and_the_post_st
     stored, after = store_and_read(tenancy, writer, b"{ this is not json")
     for field in ("consent", "decision_time", "wording"):
         assert readings(tenancy, writer, stored, field)["state"] == "body_unreadable"
-    assert after.alarms == ["capture.body_unreadable"]
+    assert after.alarms == ["capture.unmatched_post", "capture.body_unreadable"]  # no contact could be read either
 
 
 def test_the_same_post_read_twice_with_the_same_map_gives_the_same_readings(tenancy, writer):

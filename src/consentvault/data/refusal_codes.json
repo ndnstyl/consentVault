@@ -269,7 +269,7 @@
    "line": 6,
    "template": "consentvault release: no release event can be written; a stop is lifted only by a later consent post from the person",
    "meaning": "consentvault release: no release event can be written; a stop is lifted only by a later consent post from the person",
-   "defined_in": "0069_stop_lift.sql"
+   "defined_in": "0071_stop_lift.sql"
   },
   {
    "code": "db_check_stop_lift_qrgzvq",
@@ -278,7 +278,7 @@
    "line": 13,
    "template": "consentvault stop lift: the stop named is not a stop of this contact point",
    "meaning": "consentvault stop lift: the stop named is not a stop of this contact point",
-   "defined_in": "0069_stop_lift.sql"
+   "defined_in": "0071_stop_lift.sql"
   },
   {
    "code": "db_check_stop_lift_rgzzvt",
@@ -287,7 +287,7 @@
    "line": 28,
    "template": "consentvault stop lift: the lifting post did not arrive after the stop",
    "meaning": "consentvault stop lift: the lifting post did not arrive after the stop",
-   "defined_in": "0069_stop_lift.sql"
+   "defined_in": "0071_stop_lift.sql"
   },
   {
    "code": "db_check_stop_lift_xkhskr",
@@ -296,7 +296,7 @@
    "line": 21,
    "template": "consentvault stop lift: the lifting post is not matched to the same contact point",
    "meaning": "consentvault stop lift: the lifting post is not matched to the same contact point",
-   "defined_in": "0069_stop_lift.sql"
+   "defined_in": "0071_stop_lift.sql"
   },
   {
    "code": "db_check_verified_claim_pznnzr",
@@ -1062,6 +1062,24 @@
    "template": "consentvault seal: no seal % in the current organisation",
    "meaning": "consentvault seal: no seal % in the current organisation",
    "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_match_lookup_kmqhny",
+   "function": "consentvault.match_lookup",
+   "signature": "text",
+   "line": 7,
+   "template": "consentvault match_lookup: no tenant entered",
+   "meaning": "consentvault match_lookup: no tenant entered",
+   "defined_in": "0069_match_lookup.sql"
+  },
+  {
+   "code": "db_match_lookup_qkhjvz",
+   "function": "consentvault.match_lookup",
+   "signature": "text",
+   "line": 10,
+   "template": "consentvault match_lookup: the fingerprint must be 64 hex characters",
+   "meaning": "consentvault match_lookup: the fingerprint must be 64 hex characters",
+   "defined_in": "0069_match_lookup.sql"
   },
   {
    "code": "db_member_last_admin_guard_hsgprm",
@@ -1854,6 +1872,15 @@
    "template": "consentvault tenant token: org, scopes and a lifetime of 1 to 900 seconds are required",
    "meaning": "consentvault tenant token: org, scopes and a lifetime of 1 to 900 seconds are required",
    "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_single_fingerprint_secret_xspgmp",
+   "function": "consentvault.single_fingerprint_secret",
+   "signature": "bytea",
+   "line": 6,
+   "template": "consentvault single_fingerprint_secret: this vault is multi-tenant; each organisation has its own secret",
+   "meaning": "consentvault single_fingerprint_secret: this vault is multi-tenant; each organisation has its own secret",
+   "defined_in": "0070_single_fingerprint_secret.sql"
   },
   {
    "code": "db_sso_binding_check_jmxpjp",

@@ -15,6 +15,7 @@ export const ROUTES: RouteDef[] = [
   { id: 'brands', pattern: '/brands', title: 'Brands', chrome: 'app' },
   { id: 'sources', pattern: '/sources', title: 'Capture sources', chrome: 'app' },
   { id: 'source-detail', pattern: '/sources/:source_id', title: 'Capture source', chrome: 'app' },
+  { id: 'source-field-maps', pattern: '/sources/:source_id/field-maps', title: 'Field map', chrome: 'app' },
   { id: 'credentials', pattern: '/credentials', title: 'Credentials', chrome: 'app' },
   { id: 'credential-new', pattern: '/credentials/new', title: 'Issue a credential', chrome: 'app' },
   { id: 'wording', pattern: '/wording', title: 'Wording', chrome: 'app' },

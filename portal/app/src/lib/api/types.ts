@@ -56,6 +56,19 @@ export interface Source {
   last_event_at: string | null; last_event_seq: number | null; last_event_sealed: boolean | null;
   partial?: string[];
 }
+export type FieldMapBodyFormat = 'json' | 'form_urlencoded' | 'multipart' | 'text';
+export interface FieldMapContact { path: string; kind: string }
+export interface FieldMapSettings {
+  body_format: FieldMapBodyFormat; consent_paths: string[]; consent_ticked_value: string | null; seller_paths: string[] | null;
+  contact_paths: FieldMapContact[];
+  decision_time_path: string | null; wording_path: string | null; wording_hash_path: string | null; form_version_path: string | null;
+  checkbox_default_path: string | null; submit_context_path: string | null; third_party_cert_path: string | null;
+  jurisdiction_path: string | null; channel_scope_path: string | null;
+}
+export interface FieldMapVersion extends FieldMapSettings { source_id: string | null; map_version: number; set_by: string; set_at: string }
+export interface FieldMapBuiltIn extends FieldMapSettings { label: string }
+export interface FieldMapList { items: FieldMapVersion[]; built_in: FieldMapBuiltIn }
+export type FieldMapNew = Partial<Omit<FieldMapSettings, 'body_format' | 'consent_paths' | 'contact_paths'>> & { body_format: FieldMapBodyFormat; consent_paths: string[]; contact_paths?: { path: string; kind: 'phone' | 'email' }[] }
 export type CredentialKind = 'edge_site_key' | 'jwt_public_key' | 'hmac_fallback';
 export type CredentialScope = 'capture' | 'gate_read' | 'proof_read';
 export interface Credential {

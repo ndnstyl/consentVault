@@ -251,6 +251,36 @@ route('PATCH', '/v1/sources/:id', (c) => {
   const s = c.st.sources.find((y) => y.source_id === c.m.groups!.id); if (!s) return E(404, 'not_found');
   Object.assign(s, c.body); return OK(s);
 });
+const WIDGET_MAP: T.FieldMapBuiltIn = {
+  label: 'built_in:widget', body_format: 'json', consent_paths: ['/checked'], consent_ticked_value: null, seller_paths: null,
+  contact_paths: [{ path: '/contact', kind: 'detect' }], decision_time_path: '/decided_at', wording_path: '/disclosure_text', wording_hash_path: '/disclosure_sha256',
+  form_version_path: null, checkbox_default_path: null, submit_context_path: null, third_party_cert_path: null, jurisdiction_path: null, channel_scope_path: null,
+};
+route('GET', '/v1/sources/:id/field-maps', (c) => {
+  const x = allow(c, 'admin', 'developer'); if (x) return x;
+  const id = c.m.groups!.id;
+  if (!c.st.sources.some((y) => y.source_id === id)) return E(404, 'not_found');
+  return OK({ items: (c.st.fieldMaps[id] ?? []).slice().sort((a, b) => b.map_version - a.map_version), built_in: WIDGET_MAP });
+});
+route('POST', '/v1/sources/:id/field-maps', (c) => {
+  const x = allow(c, 'admin', 'developer'); if (x) return x;
+  const id = c.m.groups!.id;
+  const src = c.st.sources.find((y) => y.source_id === id);
+  if (!src) return E(404, 'not_found');
+  if (src.status !== 'active') return E(422, 'validation_failed', '', { source_id: 'that source is retired' });
+  const b = c.body ?? {};
+  if (!['json', 'form_urlencoded', 'multipart', 'text'].includes(b.body_format)) return E(422, 'validation_failed', '', { body_format: 'one of the four formats' });
+  if (!Array.isArray(b.consent_paths) || b.consent_paths.length < 1) return E(422, 'validation_failed', '', { consent_paths: 'at least one' });
+  const list = (c.st.fieldMaps[id] ??= []);
+  const v: T.FieldMapVersion = {
+    source_id: id, map_version: list.length + 1, body_format: b.body_format, consent_paths: b.consent_paths, consent_ticked_value: b.consent_ticked_value ?? null,
+    seller_paths: b.seller_paths ?? null, contact_paths: b.contact_paths ?? [], decision_time_path: b.decision_time_path ?? null, wording_path: b.wording_path ?? null,
+    wording_hash_path: b.wording_hash_path ?? null, form_version_path: b.form_version_path ?? null, checkbox_default_path: b.checkbox_default_path ?? null,
+    submit_context_path: b.submit_context_path ?? null, third_party_cert_path: b.third_party_cert_path ?? null, jurisdiction_path: b.jurisdiction_path ?? null,
+    channel_scope_path: b.channel_scope_path ?? null, set_by: 'Dana Ruiz', set_at: nowIso(),
+  };
+  list.push(v); return OK(v, 201);
+});
 route('GET', '/v1/credentials', (c) => {
   const x = allow(c, 'admin', 'developer'); if (x) return x;
   let items = c.st.credentials; if (c.st.role === 'developer') items = items.filter((y) => y.scope === 'capture');

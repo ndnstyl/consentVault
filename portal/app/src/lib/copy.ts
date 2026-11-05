@@ -201,3 +201,17 @@ export function deadCauseWord(cause: string | null): string {
   const m = /^retry:(\d+)$/.exec(cause);
   return m ? `Provider answered ${m[1]}` : `The service answered ${cause}`;
 }
+
+// The field map screen (T065). A map only says where a form puts its fields; nothing here judges a form or a value.
+export const FIELD_MAP_COPY: Record<string, string> = {
+  title: 'Field map',
+  lede: 'Where this capture source puts each field in what it sends. A change is a new version. An earlier version is never edited and stays on record.',
+  empty: 'No version added yet. Until you add one, a post from the ConsentVault widget is read with the built-in widget map shown below, and any other post is stored whole and read as unmapped.',
+  built_in: 'Built-in widget map. It applies to posts from the ConsentVault widget when this source has no version of its own.',
+  add: 'Add a version',
+  paths_hint: 'Write each path exactly as the form sends it: a JSON pointer such as /checked, or a form field name such as tcpa_box.',
+  ticked_hint: 'The exact text your box sends when it is ticked, for example true or on. It is only used to link a stop that a form lifts. Leave it empty if you are unsure.',
+  contact_hint: 'One per line, written as path: phone or path: email.',
+  saved: 'Version added. Recorded in the audit log. The earlier versions are unchanged.',
+  retired: 'This source is retired. Its versions can be read; a new one cannot be added.',
+};

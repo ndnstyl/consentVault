@@ -377,6 +377,104 @@ def update_source(ctx: Ctx, source_id, body: Any) -> dict:
 
 
 # ======================================================================================================================
+# Field maps (where a form puts its fields): versions are added, never edited
+# ======================================================================================================================
+MAP_BODY_FORMATS = ("json", "form_urlencoded", "multipart", "text")
+MAP_CONTACT_KINDS = ("phone", "email")
+_MAP_PATH_FIELDS = ("decision_time_path", "wording_path", "wording_hash_path", "form_version_path", "checkbox_default_path",
+                    "submit_context_path", "third_party_cert_path", "jurisdiction_path", "channel_scope_path")
+_MAP_KEYS = {"body_format", "consent_paths", "consent_ticked_value", "contact_paths", "seller_paths", *_MAP_PATH_FIELDS}
+
+
+def _map_path(value: Any, name: str) -> str:
+    if not isinstance(value, str) or not 1 <= len(value) <= 500:
+        raise invalid(**{name: "a path is text of 1 to 500 characters"})
+    return value
+
+
+def _map_paths(b: dict, name: str, *, required: bool) -> Optional[list[str]]:
+    if b.get(name) is None and not required:
+        return None
+    return [_map_path(v, name) for v in need_list(b, name, min_items=1 if required else 0, max_items=50)]
+
+
+def _field_map_obj(r: dict) -> dict:
+    out = {"source_id": str(r["source_id"]) if r["source_id"] else None, "map_version": r["map_version"],
+           "body_format": r["body_format"], "consent_paths": list(r["consent_paths"]),
+           "consent_ticked_value": r["consent_ticked_value"], "seller_paths": list(r["seller_paths"]) if r["seller_paths"] is not None else None,
+           "contact_paths": [{"path": c["path"], "kind": c.get("kind", "detect")} for c in (r["contact_paths"] or [])],
+           "set_by": r["set_by"], "set_at": iso(r["set_at"])}
+    for f in _MAP_PATH_FIELDS:
+        out[f] = r[f]
+    return out
+
+
+def _built_in_widget_map() -> dict:
+    from .. import extract
+    w = extract.WIDGET_MAP
+    out = {"label": w.label, "body_format": w.body_format, "consent_paths": list(w.consent_paths),
+           "consent_ticked_value": w.consent_ticked_value, "seller_paths": list(w.seller_paths) or None,
+           "contact_paths": [{"path": p, "kind": k} for p, k in w.contact_paths]}
+    for f in _MAP_PATH_FIELDS:
+        out[f] = getattr(w, f)
+    return out
+
+
+def _source_exists(ctx: Ctx, source_id) -> uuid.UUID:
+    sid = to_uuid(source_id, "source")
+    if ctx.conn.execute("SELECT 1 FROM consentvault.capture_source WHERE org_id = (SELECT consentvault.current_org())"
+                        " AND source_id = %s", (sid,)).fetchone() is None:
+        raise ApiError("not_found", "no such source in this organization")
+    return sid
+
+
+def list_field_maps(ctx: Ctx, source_id) -> dict:
+    """GET /v1/sources/{id}/field-maps: every stored version, newest first, with who set it and when, and the vault's built-in
+    map for the widget (the map in force for a widget post when a source has no version of its own)."""
+    ctx.actor.require(ROLE_ADMIN, ROLE_DEVELOPER)
+    sid = _source_exists(ctx, source_id)
+    rows = ctx.conn.execute("SELECT * FROM consentvault.form_field_map WHERE org_id = (SELECT consentvault.current_org())"
+                            " AND source_id = %s ORDER BY map_version DESC", (sid,)).fetchall()
+    return {"items": [_field_map_obj(r) for r in rows], "built_in": _built_in_widget_map()}
+
+
+def add_field_map(ctx: Ctx, source_id, body: Any) -> dict:
+    """POST /v1/sources/{id}/field-maps: a new version. An old version is never edited; the version number, the member who set
+    it and the time are stated by the vault, never by the caller."""
+    ctx.actor.require(ROLE_ADMIN, ROLE_DEVELOPER)
+    b = body_dict(body)
+    unknown = sorted(set(b) - _MAP_KEYS)
+    if unknown:
+        raise invalid(**{k: "not a field map setting" for k in unknown})
+    sid = _active_source(ctx, source_id)
+    fmt = want_enum(b.get("body_format"), "body_format", MAP_BODY_FORMATS)
+    consent = _map_paths(b, "consent_paths", required=True)
+    ticked = b.get("consent_ticked_value")
+    if ticked is not None and (not isinstance(ticked, str) or len(ticked) > 200):
+        raise invalid(consent_ticked_value="text of up to 200 characters")
+    contacts = []
+    for c in need_list(b, "contact_paths", max_items=20) if "contact_paths" in b else []:
+        if not isinstance(c, dict):
+            raise invalid(contact_paths="each is an object with a path and a kind")
+        contacts.append((_map_path(c.get("path"), "contact_paths"), want_enum(c.get("kind"), "contact_paths", MAP_CONTACT_KINDS)))
+    paths: dict[str, Any] = {}
+    for f in _MAP_PATH_FIELDS:
+        if b.get(f) is not None:
+            paths[f] = _map_path(b[f], f)
+    sellers = _map_paths(b, "seller_paths", required=False)
+    if sellers is not None:
+        paths["seller_paths"] = sellers
+    ctx.conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"form_field_map:{sid}",))
+    from .. import extract
+    version = extract.add_field_map(ctx.conn, set_by=ctx.actor.id, source_id=sid, body_format=fmt, consent_paths=consent,
+                                    consent_ticked_value=ticked, contact_paths=contacts, **paths)
+    ctx.audit("field_map.added", "source", str(sid), f"version {version}")
+    row = ctx.conn.execute("SELECT * FROM consentvault.form_field_map WHERE org_id = (SELECT consentvault.current_org())"
+                           " AND source_id = %s AND map_version = %s", (sid, version)).fetchone()
+    return _field_map_obj(row)
+
+
+# ======================================================================================================================
 # Credentials
 # ======================================================================================================================
 _PRIVATE_KEY = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")

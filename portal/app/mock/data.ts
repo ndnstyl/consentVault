@@ -47,6 +47,7 @@ export interface Store {
   role: T.Role;
   brands: T.Brand[];
   sources: T.Source[];
+  fieldMaps: Record<string, T.FieldMapVersion[]>;
   credentials: T.Credential[];
   disclosures: T.Disclosure[];
   policies: (T.PolicyDetail)[];
@@ -156,7 +157,7 @@ export function newStore(s: Scenario): Store {
     brands: s.empty.includes('brands') ? [] : brands, sources: s.empty.includes('sources') ? [] : sources, credentials: s.empty.includes('credentials') ? [] : credentials,
     disclosures: s.empty.includes('disclosures') ? [] : disclosures, policies: s.empty.includes('policies') ? [] : policies,
     checklists: s.empty.includes('checklists') ? [] : checklists, systems: s.empty.includes('systems') ? [] : systems, deliveries,
-    redrives: {}, members, audit: s.empty.includes('audit') ? [] : audit, retention: s.empty.includes('retention') ? retention.slice(1).slice(0, 0) : retention,
+    fieldMaps: {}, redrives: {}, members, audit: s.empty.includes('audit') ? [] : audit, retention: s.empty.includes('retention') ? retention.slice(1).slice(0, 0) : retention,
     exports: [], invites: {}, log: [], failCount: {}, offboardingRequested: false, firstEventPolls: 0, testPushes: {}, ext: {},
   };
 }

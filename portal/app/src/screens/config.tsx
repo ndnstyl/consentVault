@@ -213,7 +213,7 @@ export function SourceDetail({ id }: { id: string }) {
             onSubmit={async (v) => { const r = await update.run({ name: v.name.trim(), brand_ids: v.brand_ids, allowed_origins: v.kind === 'site_key' ? v.origins.split('\n').map((x) => x.trim()).filter(Boolean) : [] }); if (r.ok) { setEdit(false); setSaved(true); res.refresh(); } }} />
         </div>
       )}
-      <div className="btn-row mt5"><LinkBtn href="/sources" variant="quiet">Back to capture sources</LinkBtn></div>
+      <div className="btn-row mt5"><LinkBtn href={`/sources/${source.source_id}/field-maps`} variant="secondary">Field map</LinkBtn><LinkBtn href="/sources" variant="quiet">Back to capture sources</LinkBtn></div>
       {retire && (
         <ConfirmDialog title={`Retire ${source.name}?`} destructive confirmLabel="Retire source" busyLabel="Retiring" failTitle="The source was not retired" failNext="Try again. Nothing was changed."
           body="A retired source refuses new events. Records already captured stay on record."

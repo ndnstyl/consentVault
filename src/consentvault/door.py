@@ -470,9 +470,9 @@ def retryable(exc: BaseException) -> bool:
     seen: set[int] = set()
     while exc is not None and id(exc) not in seen:
         seen.add(id(exc))
-        if isinstance(exc, StoreUnavailable) or {c.__name__ for c in type(exc).__mro__} & {"KeyProviderError"}:
+        if isinstance(exc, StoreUnavailable) or {c.__name__ for c in type(exc).__mro__} & {"KeyProviderError", "EvidenceStoreUnavailable"}:
             return True
-        if getattr(exc, "name", None) in ("key_unavailable", "service_unavailable", "audit_unavailable"):
+        if getattr(exc, "name", None) in ("key_unavailable", "service_unavailable", "audit_unavailable", "evidence_store_unavailable"):
             return True
         if isinstance(exc, psycopg.Error):
             state = exc.sqlstate

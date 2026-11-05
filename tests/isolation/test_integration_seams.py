@@ -1,12 +1,13 @@
-"""The integration pass across the wave-one lanes: live statuses, the outbox hook in capture and release, the release
-alarm row, the email send log, and what the operator role may read."""
+"""The integration pass across the wave-one lanes: live statuses, the outbox hook in capture, the operator alarm row, the
+email send log, and what the operator role may read."""
 
 import json
+import uuid
 
 import psycopg
 import pytest
 
-from consentvault.alarms import ALARM_RELEASE_NOT_WRITTEN
+from consentvault.alarms import raise_operator_alarm
 from consentvault.cmd_anchor import TENANT_ANCHOR_JOB
 from consentvault.errors import LedgerError
 from consentvault.notify import PostgresSendLog, SendLogError, SendRecord, scrub_detail
@@ -43,7 +44,7 @@ def test_trial_past_due_and_suspended_orgs_keep_capture_and_gate(cloud, status):
     s, r = cloud.grant(cloud.a, X)  # a fresh access token is issued in this status
     assert s == 201, r
     s, g = cloud.gate(cloud.a, X)
-    assert s == 200 and g["evidence_status"] == "consent_record_found", g
+    assert s == 200 and g["status"] == "records_found", g
 
 
 def test_a_closed_org_gets_no_access_token(cloud):
@@ -93,46 +94,39 @@ def test_an_event_captured_while_suspended_is_pushed_and_anchored_without_reinst
                           (tenancy.a.org_id,)).fetchone()["status"] == "suspended"
 
 
-# ---- the outbox hook in capture and release ------------------------------------------------------------------------------
+# ---- the outbox hook in capture ----------------------------------------------------------------------------------------
 def _outbox(t, org, contact_fp):
     with t.superuser() as su:
         return su.execute("SELECT version, status FROM consentvault.outbox WHERE org_id = %s AND contact_fp = %s"
                           " ORDER BY version, created_at", (org.org_id, contact_fp)).fetchall()
 
 
-def test_capture_and_release_queue_their_pushes_in_the_same_transaction(cloud, pg_server):
+def test_capture_queues_its_pushes_in_the_same_transaction_and_a_later_grant_lifts_nothing(cloud, pg_server):
     env = SyncEnv(cloud.t, pg_server["port"])
     env.add_system(cloud.t.a, "crm")
     fp = env.fp(cloud.t.a, X)
     stop = {"contact": X, "event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"], "method": "keyword"}
     assert cloud.call("/v1/events", stop, token=cloud.token(cloud.a, "capture"))[0] == 201
     assert _outbox(cloud.t, cloud.t.a, fp) == [{"version": 1, "status": "pending"}]  # the capture queued the stop
-    # an otp-verified grant over the person's own stop: the capture records the grant (behind the stop it moves
-    # nothing; tests/sync/test_outbox.py proves that), the release lifts the stop and queues version 2. The view ranks
-    # a release at its grant, so the pushed state's basis is the grant.
+    # an otp-verified grant after the person's own stop is recorded as a later line; only a consent post matched to the contact
+    # point lifts a stop (tests/test_stop_lift.py), so no release is written and the pushed state stays on the stop
     s, r = cloud.grant(cloud.a, X, contact_verification="otp", token=cloud.token(cloud.a, "capture_verified"))
     assert s == 201, r
-    rows = _outbox(cloud.t, cloud.t.a, fp)
-    assert [x["version"] for x in rows] == [1, 2] and rows[1]["status"] == "pending"
     with cloud.t.superuser() as su:
         moved = su.execute("SELECT state, version, basis_event_id FROM consentvault.state_version WHERE org_id = %s"
                            " AND contact_fp = %s", (cloud.t.a.org_id, fp)).fetchone()
-        released = su.execute("SELECT release_outcome FROM consentvault.event WHERE org_id = %s AND event_type ="
-                              " 'release' AND release_of_event_id = %s", (cloud.t.a.org_id, r["event_id"])).fetchone()
-    assert (moved["state"], moved["version"], str(moved["basis_event_id"])) == ("permitted", 2, r["event_id"])
-    assert released["release_outcome"] == "released"
+        releases = su.execute("SELECT count(*) AS n FROM consentvault.event WHERE org_id = %s AND event_type = 'release'",
+                              (cloud.t.a.org_id,)).fetchone()["n"]
+    assert moved["state"] == "denied" and releases == 0
     assert _outbox(cloud.t, cloud.t.b, env.fp(cloud.t.b, X)) == []  # nothing crosses to the other organisation
 
 
-# ---- a release that could not be written leaves an alarm row ------------------------------------------------------------
-def test_a_release_failure_after_a_recorded_grant_writes_an_operator_alarm(cloud, monkeypatch):
-    import consentvault.release as release_mod
-
-    def broken(*a, **k):
-        raise LedgerError("simulated: the release decision could not be written")
-    monkeypatch.setattr(release_mod, "release_after_tenant_grant", broken)
-    s, r = cloud.grant(cloud.a, X)
-    assert s == 201, r  # the grant stands
+# ---- an operator alarm row ----------------------------------------------------------------------------------------------
+def test_an_operator_alarm_row_is_seen_by_the_operator_only_and_acknowledged_once(cloud):
+    ref = str(uuid.uuid4())
+    with cloud.t.app() as app, org_transaction(app, cloud.t.token(cloud.t.a)):
+        raise_operator_alarm(app, name="capture.link_failed", error_class="LedgerError", ref_kind="raw_post", ref_id=ref,
+                             request_id="req-1")
     with cloud.t.superuser() as su:
         su.execute("SET ROLE consentvault_operator")
         rows = su.execute("SELECT org_id, name, ref_kind, ref_id, error_class, request_id, acknowledged_at"
@@ -141,7 +135,7 @@ def test_a_release_failure_after_a_recorded_grant_writes_an_operator_alarm(cloud
     assert len(rows) == 1
     row = rows[0]
     assert (row["org_id"], row["name"], row["ref_kind"], str(row["ref_id"]), row["error_class"]) == (
-        cloud.t.a.org_id, ALARM_RELEASE_NOT_WRITTEN, "event", r["event_id"], "LedgerError")
+        cloud.t.a.org_id, "capture.link_failed", "raw_post", ref, "LedgerError")
     assert row["request_id"] and row["acknowledged_at"] is None
     # the other organisation's tenant never sees it; nobody deletes it; it is acknowledged once
     with cloud.t.app() as app, org_transaction(app, cloud.t.admin_token(cloud.t.b.org_id)):
@@ -155,24 +149,6 @@ def test_a_release_failure_after_a_recorded_grant_writes_an_operator_alarm(cloud
         with pytest.raises(psycopg.errors.IntegrityConstraintViolation):
             su.execute("UPDATE consentvault.operator_alarm SET acknowledged_by = 'op-2'")
         su.execute("RESET ROLE")
-
-
-def test_an_alarm_that_cannot_be_written_is_a_critical_log_and_never_changes_the_answer(cloud, monkeypatch, caplog):
-    import consentvault.alarms as alarms_mod
-    import consentvault.release as release_mod
-
-    def broken(*a, **k):
-        raise LedgerError("simulated: the release decision could not be written")
-
-    def no_alarm(*a, **k):
-        raise alarms_mod.AlarmWriteError("simulated: the alarm table refused")
-    monkeypatch.setattr(release_mod, "release_after_tenant_grant", broken)
-    monkeypatch.setattr(alarms_mod, "raise_operator_alarm", no_alarm)
-    with caplog.at_level("CRITICAL"):
-        s, r = cloud.grant(cloud.a, X)
-    assert s == 201 and r["stored"] is True, r  # the post was stored and answered before the release decision was tried
-    assert "operator alarm NOT written" in caplog.text and "neither its release decision nor its alarm was written" in caplog.text
-    assert r["event_id"]  # the event itself is recorded
 
 
 def test_a_runtime_role_raises_an_alarm_only_for_its_own_organisation(tenancy):

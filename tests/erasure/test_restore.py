@@ -58,19 +58,18 @@ def test_the_gate_answers_503_until_reconciliation_and_the_lost_work_comes_back(
         with env.admin(t.a) as ctx:
             hold = holds.place_hold_member(ctx, {"scope": "contacts", "contacts": [X], "reason": "preserve"},
                                            ledger=env.ledger, crypto=t.crypto)
-        assert cloud.gate(cloud.a, X)[1]["evidence_status"] == "stop_on_record"
+        assert len(cloud.gate(cloud.a, X)[1]["stops"]) >= 1
 
         server2 = api.make_cloud_server(dataclasses.replace(cloud.settings, dsn=r.app_dsn), "127.0.0.1", 0)
         threading.Thread(target=server2.serve_forever, daemon=True).start()
         cloud.base = f"http://127.0.0.1:{server2.server_address[1]}"  # from here every call reaches the restored copy
-        assert cloud.gate(cloud.a, X)[1]["evidence_status"] == "consent_record_found"  # the stop is missing
+        assert cloud.gate(cloud.a, X)[1]["stops"] == []  # the stop is missing
 
         with psycopg.connect(r.operator_dsn, autocommit=True, row_factory=psycopg.rows.dict_row) as o:
             restore.begin_restore(o, operator_id=OPERATOR, request_id="req-rs", restore_point=restore_point)
         status, body = cloud.gate(cloud.a, X)
-        assert status == 503 and body["policy_action"] == "hold", body  # contract: hold when the approved policy holds on unavailability
-        assert body["policy_version"] == cloud.a.policy_version
-        assert body["error"] == "restore_in_progress" and body["evidence_status"] == "unavailable:restore_in_progress"
+        assert status == 503 and "policy_action" not in body, body  # unavailable is a fact with its cause, never a verdict
+        assert body["error"] == "restore_in_progress" and (body["status"], body["reason"]) == ("unavailable", "restore_in_progress")
 
         drop_synthetic_seals(r)  # the harness's fake seals would rightly fail the restore's seal re-check
         kw = dict(token_key=t.key, crypto=t.crypto, store=cloud.store, ledger=env.ledger,
@@ -87,7 +86,7 @@ def test_the_gate_answers_503_until_reconciliation_and_the_lost_work_comes_back(
             report = restore.reconcile(o, accept_unreadable="Y re-captured from the client's own stop list", **kw)
         assert report["orgs"][str(t.a.org_id)]["stops_reingested"] == []  # idempotent: nothing twice
         status, body = cloud.gate(cloud.a, X)
-        assert status == 200 and body["evidence_status"] == "stop_on_record", body
+        assert status == 200 and len(body["stops"]) >= 1, body
         with psycopg.connect(r.super_dsn, autocommit=True, row_factory=psycopg.rows.dict_row) as su:
             assert su.execute("SELECT 1 FROM consentvault.contact_key WHERE org_id = %s AND contact_fp = %s",
                               (t.a.org_id, env.fp(t.a))).fetchone() is None  # the erasure survived the restore
@@ -138,7 +137,7 @@ def test_a_restore_replays_the_erasure_with_its_stop_so_the_gate_still_denies(en
         server2 = api.make_cloud_server(dataclasses.replace(cloud.settings, dsn=r.app_dsn), "127.0.0.1", 0)
         threading.Thread(target=server2.serve_forever, daemon=True).start()
         cloud.base = f"http://127.0.0.1:{server2.server_address[1]}"
-        assert cloud.gate(cloud.a, X)[1]["evidence_status"] == "consent_record_found"  # the copy predates the erasure
+        assert cloud.gate(cloud.a, X)[1]["stops"] == []  # the copy predates the erasure
 
         with psycopg.connect(r.operator_dsn, autocommit=True, row_factory=psycopg.rows.dict_row) as o:
             restore.begin_restore(o, operator_id=OPERATOR, request_id="req-rs", restore_point=restore_point)
@@ -149,7 +148,7 @@ def test_a_restore_replays_the_erasure_with_its_stop_so_the_gate_still_denies(en
             report = restore.reconcile(o, **kw)
         assert report["orgs"][str(t.a.org_id)]["erasures_replayed"] == 1
         status, body = cloud.gate(cloud.a, X)
-        assert status == 200 and body["evidence_status"] == "stop_on_record", body
+        assert status == 200 and len(body["stops"]) >= 1, body
         with psycopg.connect(r.super_dsn, autocommit=True, row_factory=psycopg.rows.dict_row) as su:
             assert su.execute("SELECT 1 FROM consentvault.contact_key WHERE org_id = %s AND contact_fp = %s",
                               (t.a.org_id, env.fp(t.a, X))).fetchone() is None
@@ -189,7 +188,7 @@ def test_a_stop_written_before_the_erasure_completed_is_in_the_ledger_and_a_rest
         server2 = api.make_cloud_server(dataclasses.replace(cloud.settings, dsn=r.app_dsn), "127.0.0.1", 0)
         threading.Thread(target=server2.serve_forever, daemon=True).start()
         cloud.base = f"http://127.0.0.1:{server2.server_address[1]}"
-        assert cloud.gate(cloud.a, X)[1]["evidence_status"] == "consent_record_found"  # the copy lacks the stop
+        assert cloud.gate(cloud.a, X)[1]["stops"] == []  # the copy lacks the stop
 
         with psycopg.connect(r.super_dsn, autocommit=True, row_factory=psycopg.rows.dict_row) as su:
             su.execute("DELETE FROM consentvault.channel WHERE org_id = %s AND channel = 'voice'", (t.a.org_id,))
@@ -203,7 +202,7 @@ def test_a_stop_written_before_the_erasure_completed_is_in_the_ledger_and_a_rest
         assert report["orgs"][str(t.a.org_id)]["stops_replayed"] == 1
         for ch in ("sms", "artificial_voice", "email"):
             status, body = cloud.gate(cloud.a, X, channel=ch)
-            assert status == 200 and body["evidence_status"] == "stop_on_record", (ch, body)
+            assert status == 200 and len(body["stops"]) >= 1, (ch, body)
         with psycopg.connect(r.super_dsn, autocommit=True, row_factory=psycopg.rows.dict_row) as su:
             row = su.execute("SELECT channels FROM consentvault.event WHERE org_id = %s AND source = 'erasure'",
                              (t.a.org_id,)).fetchone()
@@ -271,11 +270,11 @@ def test_a_stop_whose_confirm_rolled_back_is_replayed_unconfirmed_and_alarmed(en
                     raise Rollback()
             commit_after(c, token_key=t.key, ledger=env.ledger, org_id=t.a.org_id, request_id="req-c")
         assert [e["kind"] for e in env.ledger.entries(t.a.org_id)] == ["erasure_stop"]  # entered, never committed
-        assert cloud.gate(cloud.a, X)[1]["evidence_status"] == "consent_record_found"  # the rollback left no stop
+        assert cloud.gate(cloud.a, X)[1]["stops"] == []  # the rollback left no stop
 
         server2, org = _restore_copy(env, cloud, r, restore_point, evidence)
         assert [u["erasure_id"] for u in org["stops_unconfirmed"]] == [eid] and org["stops_replayed"] == 1
-        assert cloud.gate(cloud.a, X)[1]["evidence_status"] == "stop_on_record"  # over-stop, never under-stop
+        assert len(cloud.gate(cloud.a, X)[1]["stops"]) >= 1  # over-stop, never under-stop
         _unconfirmed_checks(r, t, eid)
     finally:
         if server2 is not None:
@@ -314,7 +313,7 @@ def test_the_ledger_down_at_commit_then_a_restore_still_stops_the_person_and_ala
 
         server2, org = _restore_copy(env, cloud, r, restore_point, evidence)
         assert [u["erasure_id"] for u in org["stops_unconfirmed"]] == [eid]
-        assert cloud.gate(cloud.a, X)[1]["evidence_status"] == "stop_on_record"
+        assert len(cloud.gate(cloud.a, X)[1]["stops"]) >= 1
         _unconfirmed_checks(r, t, eid)
     finally:
         if server2 is not None:
@@ -326,7 +325,7 @@ def test_the_ledger_down_at_commit_then_a_restore_still_stops_the_person_and_ala
 def test_a_backup_taken_after_the_erasure_and_the_return_is_left_alone_by_the_restore(env, tmp_path, pg_server):
     """The person is erased, comes back and consents again with a verified grant; the backup is taken then. Restoring it
     must not delete the new key, re-stop the verified re-grant or count the erasure twice."""
-    from erasure.test_erasure_stop import _verified_regrant_and_release
+    from erasure.test_erasure_stop import _verified_regrant
 
     t = env.t
     evidence = tmp_path / "evidence"
@@ -340,10 +339,12 @@ def test_a_backup_taken_after_the_erasure_and_the_return_is_left_alone_by_the_re
             erasure.confirm_erasure(c, token_key=t.key, crypto=t.crypto, ledger=env.ledger, operator_id=OPERATOR,
                                     request_id="req-e", org_id=t.a.org_id, erasure_id=eid)
         assert not env.key_present(t.a, X)
-        conn, tx = _verified_regrant_and_release(env, cloud, X, commit=True)  # the person returns, verified
+        conn, tx = _verified_regrant(env, cloud, X, commit=True)  # the person returns, verified
         tx.__exit__(None, None, None)
         conn.close()
-        assert env.key_present(t.a, X) and cloud.gate(cloud.a, X)[1]["evidence_status"] == "consent_record_found"
+        facts = cloud.gate(cloud.a, X)[1]
+        assert env.key_present(t.a, X) and [x["event_type"] for x in facts["history"]] == ["grant", "suppress", "grant"]
+        assert len(facts["stops"]) == 1 and facts["lifts"] == []  # the grant after the stop lifts nothing
         r = _copy(t, pg_server["port"])  # the backup, taken after all of it
         restore_point = datetime.now(timezone.utc)
 
@@ -353,10 +354,10 @@ def test_a_backup_taken_after_the_erasure_and_the_return_is_left_alone_by_the_re
         assert org["keys_deleted"] == 0 and org["erasures_replayed"] == 0 and org["erasures_present"] == 1
         assert org["stops_present"] == 1 and org["stops_replayed"] == 0
         with psycopg.connect(r.super_dsn, autocommit=True, row_factory=psycopg.rows.dict_row) as su:
-            allowed = su.execute("SELECT allowed FROM consentvault.current_permission WHERE org_id = %s AND"
-                                 " contact_fp = %s AND channel = 'sms' AND purpose = 'marketing'",
-                                 (t.a.org_id, env.fp(t.a, X))).fetchone()["allowed"]
-            assert allowed is True  # the verified re-grant still stands
+            lines = [r["event_type"] for r in su.execute(
+                "SELECT event_type FROM consentvault.event WHERE org_id = %s AND contact_fp = %s ORDER BY seq",
+                (t.a.org_id, env.fp(t.a, X)))]
+            assert lines == ["grant", "suppress", "grant"]  # the verified re-grant still stands, and no second stop was written
             assert su.execute("SELECT 1 FROM consentvault.contact_key WHERE org_id = %s AND contact_fp = %s",
                               (t.a.org_id, env.fp(t.a, X))).fetchone() is not None
             assert su.execute("SELECT count(*) AS n FROM consentvault.event WHERE org_id = %s AND source = 'erasure'",
@@ -399,7 +400,7 @@ def test_a_rolled_back_stop_then_a_successful_erasure_does_not_break_the_restore
         server2, org = _restore_copy(env, cloud, r, restore_point, evidence)  # raises if any check failed
         assert org["failed_checks"] == [] and [u["seq"] for u in org["stops_superseded"]] == [1]
         assert org["stops_replayed"] == 1 and org["erasures_replayed"] == 1 and org["stops_unconfirmed"] == []
-        assert cloud.gate(cloud.a, X)[1]["evidence_status"] == "stop_on_record"
+        assert len(cloud.gate(cloud.a, X)[1]["stops"]) >= 1
     finally:
         if server2 is not None:
             server2.shutdown()
@@ -434,12 +435,12 @@ def test_the_ledger_failing_between_the_erasure_commit_and_the_stop_commit_still
                                     operator_id=OPERATOR, request_id="req-e", org_id=t.a.org_id, erasure_id=eid)
         kinds = [e["kind"] for e in env.ledger.entries(t.a.org_id)]
         assert kinds == ["erasure_stop", "erasure_intent", "erasure_commit"]  # no stop commit
-        assert cloud.gate(cloud.a, X)[1]["evidence_status"] == "stop_on_record"
+        assert len(cloud.gate(cloud.a, X)[1]["stops"]) >= 1
 
         server2, org = _restore_copy(env, cloud, r, restore_point, evidence)
         assert org["failed_checks"] == [] and org["stops_replayed"] == 1 and org["erasures_replayed"] == 1
         assert [u["seq"] for u in org["stops_unconfirmed"]] == [1] and org["stops_superseded"] == []
-        assert cloud.gate(cloud.a, X)[1]["evidence_status"] == "stop_on_record"
+        assert len(cloud.gate(cloud.a, X)[1]["stops"]) >= 1
         with psycopg.connect(r.super_dsn, autocommit=True, row_factory=psycopg.rows.dict_row) as su:
             assert su.execute("SELECT 1 FROM consentvault.contact_key WHERE org_id = %s AND contact_fp = %s",
                               (t.a.org_id, env.fp(t.a, X))).fetchone() is None  # erased, and stopped first

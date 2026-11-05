@@ -236,10 +236,10 @@
     "tests/test_ledger.py::test_current_permission_stop_outranks_grant",
     "tests/test_ledger.py::test_concurrent_writers_do_not_fork",
     "tests/test_ledger_guarantees.py::test_a_grant_beyond_its_disclosure_is_refused_by_name",
-    "tests/test_ledger_guarantees.py::test_a_later_stop_wins_even_if_a_grant_claims_a_later_capture_time",
-    "tests/test_gate.py::test_database_down_fails_closed",
-    "tests/test_gate.py::test_no_consent_is_denied_with_reason",
-    "tests/test_release.py::test_consumer_stop_is_released_by_later_grant",
+    "tests/test_ledger_guarantees.py::test_history_is_in_arrival_order_even_if_a_grant_claims_a_later_capture_time",
+    "tests/test_gate.py::test_a_record_that_cannot_be_read_is_unavailable_with_the_cause_and_nothing_else",
+    "tests/test_gate.py::test_no_record_is_the_fact_no_record_found",
+    "tests/test_stop_lift.py::test_a_later_post_carrying_the_ticked_value_lifts_the_stop_and_the_stop_stays_on_the_record",
     "tests/test_seal.py::test_an_event_left_unsealed_past_the_grace_period_is_a_failure"
    ]
   },
@@ -259,7 +259,7 @@
     "tests/sync/test_signals.py::test_a_stop_for_a_person_the_vault_never_saw_is_recorded_as_a_stop_event",
     "tests/sync/test_signals.py::test_a_stop_from_a_signal_is_hard_and_a_later_consumer_checkbox_cannot_lift_it",
     "tests/test_api.py::test_stop_event_is_recorded",
-    "tests/test_gate.py::test_stop_denies_and_names_both_events",
+    "tests/test_gate.py::test_a_stop_is_listed_with_its_source_and_beside_the_grant_it_followed",
     "tests/test_stopwords.py::test_stop"
    ]
   },
@@ -383,7 +383,7 @@
    "tests": [
     "tests/notify/test_notify.py::test_bounce_logged_and_alarmed",
     "tests/notify/test_notify.py::test_failed_send_logged_alarmed_and_raised",
-    "tests/isolation/test_integration_seams.py::test_an_alarm_that_cannot_be_written_is_a_critical_log_and_never_changes_the_answer"
+    "tests/isolation/test_integration_seams.py::test_an_operator_alarm_row_is_seen_by_the_operator_only_and_acknowledged_once"
    ],
    "owner": "ops repo: runbooks/incident.md and the channel the operator watches"
   },
@@ -417,20 +417,18 @@
    "tests": [
     "portal/app/test/format.test.ts::copy check refuses legal conclusions and dashes, and allows only the fixed strings",
     "tests/traceability/test_copy_check.py::test_the_repo_copy_carries_no_legal_conclusion_overclaim_or_em_dash",
-    "tests/isolation/test_endpoints.py::test_gate_answers_evidence_and_the_approved_policy_never_a_legal_conclusion",
+    "tests/isolation/test_endpoints.py::test_gate_answers_the_facts_and_history_never_a_verdict_or_a_legal_conclusion",
     "tests/export/test_bundle.py::test_a_rewritten_cover_statement_is_caught_even_when_the_hash_is_repinned"
    ]
   },
   "FR-037": {
    "tests": [
-    "tests/test_gate_rules.py::test_no_policy_gives_no_action_and_says_so",
-    "tests/test_gate_rules.py::test_the_cell_decides_and_a_stop_never_proceeds_even_if_a_cell_says_so",
-    "tests/test_gate_rules.py::test_incomplete_names_the_missing_elements_and_only_marks_a_found_record",
+    "tests/test_gate_rules.py::test_an_approved_policy_carries_no_cell_lookup",
     "tests/isolation/test_capture_pipeline.py::test_gate_decisions_are_append_only_and_land_in_monthly_partitions",
-    "tests/isolation/test_endpoints.py::test_gate_answers_evidence_and_the_approved_policy_never_a_legal_conclusion",
+    "tests/isolation/test_endpoints.py::test_gate_answers_the_facts_and_history_never_a_verdict_or_a_legal_conclusion",
     "tests/isolation/test_endpoints.py::test_gate_batch_answers_in_order_and_records_each_item",
-    "tests/test_attacks_wave2_gate.py::test_unavailable_holds_only_when_the_cell_says_hold",
-    "tests/test_attacks_wave2_gate.py::test_unavailable_answers_proceed_when_cell_says_proceed"
+    "tests/test_attacks_wave2_gate.py::test_no_stored_policy_cell_can_reach_an_answer",
+    "tests/test_attacks_wave2_gate.py::test_an_unreadable_record_is_unavailable_with_the_cause_and_no_action"
    ]
   },
   "FR-038": {
@@ -490,8 +488,8 @@
    "tests": [
     "portal/app/test/format.test.ts::copy check refuses legal conclusions and dashes, and allows only the fixed strings",
     "tests/traceability/test_copy_check.py::test_the_repo_copy_carries_no_legal_conclusion_overclaim_or_em_dash",
-    "tests/test_gate_rules.py::test_evidence_mapping_describes_records_only",
-    "tests/isolation/test_endpoints.py::test_gate_answers_evidence_and_the_approved_policy_never_a_legal_conclusion"
+    "tests/test_gate_rules.py::test_an_approved_policy_carries_no_cell_lookup",
+    "tests/isolation/test_endpoints.py::test_gate_answers_the_facts_and_history_never_a_verdict_or_a_legal_conclusion"
    ]
   },
   "FR-044": {
@@ -505,15 +503,15 @@
   },
   "FR-045": {
    "tests": [
-    "tests/test_gate_rules.py::test_a_rule_never_lifts_a_hold",
-    "tests/test_gate_rules.py::test_each_narrowing_rule_only_turns_proceed_into_hold",
+    "tests/test_gate_rules.py::test_an_approved_policy_carries_no_cell_lookup",
+    "tests/test_gate_rules.py::test_a_well_formed_rule_is_kept_as_written",
     "tests/admin/test_policy.py::test_a_stop_can_only_hold",
-    "tests/isolation/test_endpoints.py::test_a_stop_holds_whatever_the_policy_and_narrowing_rules_only_narrow"
+    "tests/isolation/test_endpoints.py::test_a_stored_policy_changes_nothing_in_the_answer_and_a_stop_is_a_stop_line"
    ]
   },
   "FR-046": {
    "tests": [
-    "tests/test_gate_rules.py::test_incomplete_names_the_missing_elements_and_only_marks_a_found_record",
+    "tests/test_gate_rules.py::test_an_approved_policy_carries_no_cell_lookup",
     "tests/admin/test_wording_checklists.py::test_checklist_lifecycle",
     "tests/admin/test_wording_checklists.py::test_checklist_input_checks",
     "tests/admin/test_wording_checklists.py::test_pewc_example_points_at_a_rule_reference_and_quotes_nothing"
@@ -527,7 +525,7 @@
   },
   "FR-048": {
    "tests": [
-    "tests/test_gate_rules.py::test_a_rule_reference_is_a_citation_only",
+    "tests/test_gate_rules.py::test_a_well_formed_rule_is_kept_as_written",
     "tests/admin/test_wording_checklists.py::test_pewc_example_points_at_a_rule_reference_and_quotes_nothing",
     "tests/admin/test_policy.py::test_rules_are_checked_against_the_organisations_own_lists"
    ]
@@ -693,11 +691,11 @@
   },
   "SC-008": {
    "tests": [
-    "tests/test_attacks_wave2_gate.py::test_unavailable_holds_only_when_the_cell_says_hold",
-    "tests/test_attacks_wave2_gate.py::test_unavailable_answers_proceed_when_cell_says_proceed",
-    "tests/test_gate.py::test_database_down_fails_closed",
-    "tests/test_gate.py::test_bad_input_fails_closed",
-    "tests/test_api.py::test_permission_returns_the_named_denial_when_the_database_errors"
+    "tests/test_attacks_wave2_gate.py::test_no_stored_policy_cell_can_reach_an_answer",
+    "tests/test_attacks_wave2_gate.py::test_an_unreadable_record_is_unavailable_with_the_cause_and_no_action",
+    "tests/test_gate.py::test_a_record_that_cannot_be_read_is_unavailable_with_the_cause_and_nothing_else",
+    "tests/test_gate.py::test_a_contact_that_is_not_a_phone_or_email_is_a_bad_request_not_a_verdict",
+    "tests/test_api.py::test_the_contact_check_says_unavailable_with_the_cause_when_the_database_errors"
    ],
    "note": "the one-second 99th percentile latency is not measured by any test"
   },
@@ -745,7 +743,7 @@
     "tests/traceability/test_copy_check.py::test_the_repo_copy_carries_no_legal_conclusion_overclaim_or_em_dash",
     "portal/app/test/format.test.ts::copy check refuses legal conclusions and dashes, and allows only the fixed strings",
     "tests/notify/test_notify.py::test_templates_render_text_html_no_em_dash",
-    "tests/test_gate_rules.py::test_evidence_mapping_describes_records_only"
+    "tests/test_gate_rules.py::test_an_approved_policy_carries_no_cell_lookup"
    ]
   },
   "SC-015": {

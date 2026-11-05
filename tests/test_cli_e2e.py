@@ -62,14 +62,16 @@ def test_full_lifecycle_through_the_console_script(cli_dsns, tsa_authority, tmp_
     run("capture", "--contact", PHONE, "--checked", "--disclosure", sha, "--channel", "sms",
         "--purpose", "marketing", "--session-ref", "cli-1", "--page-url", "https://www.example.com/signup")
 
-    allowed = run("may-contact", "--contact", PHONE, "--channel", "sms", "--purpose", "marketing")
-    assert allowed["allowed"] is True and allowed["reason"] == "granted"
+    facts = run("may-contact", "--contact", PHONE)
+    assert facts["status"] == "records_found" and [x["event_type"] for x in facts["history"]] == ["grant"]
+    assert "allowed" not in facts and facts["stops"] == []
 
     verdict = run("classify", "STOP")
     assert verdict["verdict"] == "stop"
     run("revoke", "--contact", PHONE, "--channel", "sms", "--purpose", "marketing", "--session-ref", "cli-2")
-    denied = run("may-contact", "--contact", PHONE, "--channel", "sms", "--purpose", "marketing", expect=1)
-    assert denied["allowed"] is False and denied["reason"] == "stopped:revoke"
+    stopped = run("may-contact", "--contact", PHONE)  # the contact point was read: exit 0, the stop is a line of the history
+    assert [x["event_type"] for x in stopped["history"]] == ["grant", "revoke"] and len(stopped["stops"]) == 1
+    assert "allowed" not in stopped
 
     sealed = run("seal")
     assert sealed["sealed"] == 2 and sealed["unsealed_remaining"] == 0
@@ -92,7 +94,7 @@ def test_full_lifecycle_through_the_console_script(cli_dsns, tsa_authority, tmp_
     assert "RESULT PASS" in proc.stdout and "FAIL" not in proc.stdout.replace("RESULT PASS", "")
 
 
-def test_a_capture_runs_the_release_rule_and_verify_chain_names_an_unchecked_webhook_sink(dsn, monkeypatch, capsys, conn):
+def test_a_capture_lifts_nothing_and_verify_chain_names_an_unchecked_webhook_sink(dsn, monkeypatch, capsys, conn):
     from consentvault import cli, disclosure
 
     sha = disclosure.register(conn, WORDING, "cli-test", "en", ["sms"], ["marketing"])
@@ -105,9 +107,12 @@ def test_a_capture_runs_the_release_rule_and_verify_chain_names_an_unchecked_web
     assert cli.main(["capture", "--contact", PHONE, "--checked", "--disclosure", sha, "--channel", "sms",
                      "--purpose", "marketing", "--session-ref", "cli-3", "--verification", "otp"]) == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["release"] == {"released_channels": ["sms"], "refusals": {}}
-    assert cli.main(["may-contact", "--contact", PHONE, "--channel", "sms", "--purpose", "marketing"]) == 0
-    capsys.readouterr()
+    assert set(out) == {"event_id", "seq", "row_hash"}
+    assert cli.main(["may-contact", "--contact", PHONE]) == 0
+    facts = json.loads(capsys.readouterr().out)
+    assert facts["status"] == "records_found" and [x["event_type"] for x in facts["history"]] == ["revoke", "grant"]
+    assert facts["stops"][0]["lifted_by_post_ids"] == [] and facts["lifts"] == []
+    assert not {"allowed", "proceed", "hold", "policy_action"} & set(facts)
 
     monkeypatch.setenv("CONSENTVAULT_ANCHOR_SINK", "https://hooks.example.com/anchor")
     assert cli.main(["verify-chain"]) == 0
@@ -131,11 +136,14 @@ def test_a_start_text_through_the_command_line_writes_no_grant_and_leaves_the_ch
     base = ["capture", "--contact", PHONE, "--checked", "--disclosure", sha, "--channel", "sms",
             "--purpose", "marketing", "--session-ref", "cli-4", "--verification", "inbound_keyword"]
     capsys.readouterr()
-    for extra in (["--inbound-message", "START"], []):
+    for extra in (["--inbound-message", "START"], ["--inbound-message", "who is this"], []):
         try:
             code = cli.main(base + extra)
         except SystemExit as exc:
             code = exc.code
         assert code not in (0, None)
     assert grants() == 0
-    assert cli.main(["may-contact", "--contact", PHONE, "--channel", "sms", "--purpose", "marketing"]) == 1
+    assert cli.main(["may-contact", "--contact", PHONE]) == 0
+    facts = json.loads(capsys.readouterr().out)
+    assert [x["event_type"] for x in facts["history"]] == ["revoke"]
+    assert facts["stops"][0]["lifted_by_post_ids"] == [] and facts["lifts"] == []

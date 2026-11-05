@@ -1,45 +1,27 @@
-"""Evidence status and the client's approved policy: what the records show, and what the client said to do about it.
+"""Validation of the narrowing rules a client's stored policy may carry.
 
-Nothing here states a legal conclusion. ``evidence_status`` describes the records (``consent_record_found``,
-``stop_on_record``, ``no_record``, ``record_incomplete:<elements>``, ``unavailable:<cause>``). ``policy_action`` is the
-cell of the client's approved policy for that status, channel and purpose (``proceed`` or ``hold``), or ``None`` when no
-policy is approved. Narrowing rules written into the approved policy run after it and can only turn ``proceed`` into
-``hold``; nothing turns a stop into ``proceed``.
+The contact check no longer reads a policy: it returns the recorded facts and history and nothing that turns them into a
+decision (``gate.py``). What stays here is the check run when a policy document is written (``check_narrowing``), so the
+stored document remains well formed until the policy store itself is retired.
 
-Narrowing rules (``rules.narrowing`` of the approved policy, each ``{"kind": ..., ...}``; an optional
-``rule_reference_id`` is a citation only and is never read by the engine):
+Narrowing rules (``rules.narrowing``, each ``{"kind": ..., ...}``; an optional ``rule_reference_id`` is a citation only):
 
-* ``require_channel_scope`` ``{channels: [...]}``: for these channels, the grant behind the record must name the
-  channel itself and its wording must name it too.
-* ``internal_suppression_list`` ``{contact_fps: [...]}``: the client's own list, by contact fingerprint.
-* ``time_window`` ``{start: "HH:MM", end: "HH:MM", tz: "<IANA zone>", days?: [0-6, Monday 0]}``: outside it, hold.
-* ``require_verified_contact`` ``{channels: [...]}``: the grant must carry a verified contact point (one-time code or
-  inbound keyword).
-* ``max_age_of_consent`` ``{days: N}``: a grant older than N days, hold.
+* ``require_channel_scope`` ``{channels: [...]}``
+* ``internal_suppression_list`` ``{contact_fps: [...]}``
+* ``time_window`` ``{start: "HH:MM", end: "HH:MM", tz: "<IANA zone>", days?: [0-6, Monday 0]}``
+* ``require_verified_contact`` ``{channels: [...]}``
+* ``max_age_of_consent`` ``{days: N}``
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..errors import ConsentVaultError
-
-NOTICE = ("Evidence status and the outcome of your organization's approved policy. Not a legal determination.")
-
-FOUND = "consent_record_found"
-STOP = "stop_on_record"
-NONE = "no_record"
-INCOMPLETE = "record_incomplete"
-UNAVAILABLE = "unavailable"
-
-REASON_FOUND = "consent_record_found"
-REASON_NO_CONSENT = "no_consent_on_record"
-REASON_NO_POLICY = "no_policy_configured"
-REASON_POLICY_CELL_MISSING = "policy_cell_missing"
 
 RULE_KINDS = ("require_channel_scope", "internal_suppression_list", "time_window", "require_verified_contact",
               "max_age_of_consent")
@@ -49,7 +31,7 @@ _FP = re.compile(r"^[0-9a-f]{64}$")
 
 
 class PolicyRuleError(ConsentVaultError):
-    """A rule in the approved policy is malformed; the gate answers unavailable rather than guess."""
+    """A rule in a policy document is malformed."""
 
 
 @dataclass(frozen=True)
@@ -59,36 +41,6 @@ class ApprovedPolicy:
     approved_by: str | None
     approved_at: datetime | None
     approval_id: str | None = None
-
-    def purpose(self, purpose: str) -> Mapping[str, Any] | None:
-        purposes = self.rules.get("purposes") if isinstance(self.rules, Mapping) else None
-        if not isinstance(purposes, Mapping):
-            return None
-        p = purposes.get(purpose)
-        return p if isinstance(p, Mapping) else None
-
-    def cell(self, status_kind: str, channel: str, purpose: str) -> str | None:
-        p = self.purpose(purpose)
-        if p is None:
-            return None
-        for c in p.get("cells") or ():
-            if isinstance(c, Mapping) and c.get("evidence_status") == status_kind and c.get("channel") == channel:
-                action = c.get("action")
-                return action if action in ("proceed", "hold") else None
-        return None
-
-    def checklist_version(self, purpose: str) -> int | None:
-        p = self.purpose(purpose)
-        v = p.get("checklist_version") if p is not None else None
-        return v if isinstance(v, int) and not isinstance(v, bool) else None
-
-    def narrowing(self) -> list[Mapping[str, Any]]:
-        rules = self.rules.get("narrowing") if isinstance(self.rules, Mapping) else None
-        if rules is None:
-            return []
-        if not isinstance(rules, list) or not all(isinstance(r, Mapping) for r in rules):
-            raise PolicyRuleError("policy rules.narrowing must be a list of objects")
-        return list(rules)
 
 
 @dataclass(frozen=True)
@@ -104,41 +56,9 @@ class Basis:
 
 @dataclass(frozen=True)
 class Evidence:
-    status: str  # one of the five kinds, with ':<detail>' for incomplete and unavailable
-    reason: str
-    basis_event_ids: tuple[str, ...] = ()
+    """The one grant a rule is evaluated against (a neutral probe when a policy document is validated)."""
+
     grant: Basis | None = None
-
-    @property
-    def kind(self) -> str:
-        return self.status.split(":", 1)[0]
-
-
-@dataclass(frozen=True)
-class Outcome:
-    evidence_status: str
-    policy_action: str | None
-    policy_version: int | None
-    approved_by: str | None
-    approved_at: datetime | None
-    basis_event_ids: tuple[str, ...]
-    reasons: tuple[str, ...]
-    approval_id: str | None = None
-    fired: tuple[str, ...] = field(default=())
-
-
-def evidence_from_permission(row: Mapping[str, Any] | None, star_stop_reason: str | None) -> Evidence:
-    """Map a ``current_permission`` row (or its absence) to an evidence status. Describes the records only."""
-    if row is None:
-        if star_stop_reason is not None and star_stop_reason.startswith("stopped:"):
-            return Evidence(STOP, star_stop_reason)
-        return Evidence(NONE, REASON_NO_CONSENT)
-    reason = str(row.get("reason") or "")
-    if row.get("allowed"):
-        return Evidence(FOUND, REASON_FOUND)
-    if reason.startswith("stopped:"):
-        return Evidence(STOP, reason)
-    return Evidence(NONE, REASON_NO_CONSENT)
 
 
 def _days(value: Any) -> set[int]:
@@ -219,7 +139,7 @@ def check_narrowing(rules: Any) -> list[dict]:
         return []
     if not isinstance(rules, list) or not all(isinstance(r, Mapping) for r in rules):
         raise PolicyRuleError("policy rules.narrowing must be a list of objects")
-    probe = Evidence(FOUND, REASON_FOUND, (), Basis("probe", (), datetime.now(timezone.utc), "none"))
+    probe = Evidence(Basis("probe", (), datetime.now(timezone.utc), "none"))
     for rule in rules:
         kind = rule.get("kind")
         if kind not in _RULE_FIELDS:
@@ -236,67 +156,3 @@ def check_narrowing(rules: Any) -> list[dict]:
         _fires(rule, channel=next(iter(rule.get("channels") or ["sms"])), contact_fp="0" * 64, evidence=probe,
                now=datetime.now(timezone.utc))
     return [dict(r) for r in rules]
-
-
-_RULE_REASON = {
-    "require_channel_scope": "rule:require_channel_scope",
-    "internal_suppression_list": "rule:internal_suppression",
-    "time_window": "rule:time_window",
-    "require_verified_contact": "rule:require_verified_contact",
-    "max_age_of_consent": "rule:max_age_of_consent",
-}
-
-
-def decide(
-    evidence: Evidence,
-    policy: ApprovedPolicy | None,
-    *,
-    channel: str,
-    purpose: str,
-    contact_fp: str,
-    now: datetime,
-    apply_rules: bool = True,
-) -> Outcome:
-    """The policy action for one evidence status, judged at ``now``: the caller passes the database's clock, there is no default.
-    Raises ``PolicyRuleError`` on a malformed approved rule."""
-    reasons = [evidence.reason]
-    if policy is None:
-        return Outcome(evidence.status, None, None, None, None, evidence.basis_event_ids,
-                       tuple(reasons + [REASON_NO_POLICY]))
-    action = policy.cell(evidence.kind, channel, purpose)
-    if action is None:
-        action = "hold"
-        reasons.append(REASON_POLICY_CELL_MISSING)
-    if evidence.kind == STOP:
-        action = "hold"  # a stop is never turned into proceed, whatever a cell says
-    fired: list[str] = []
-    if apply_rules:
-        for rule in policy.narrowing():
-            if _fires(rule, channel=channel, contact_fp=contact_fp, evidence=evidence, now=now):
-                name = _RULE_REASON[str(rule.get("kind"))]
-                if name not in fired:
-                    fired.append(name)
-    if fired:
-        action = "hold"
-        reasons.extend(fired)
-    return Outcome(evidence.status, action, policy.version, policy.approved_by, policy.approved_at,
-                   evidence.basis_event_ids, tuple(reasons), policy.approval_id, tuple(fired))
-
-
-def unavailable(cause: str, policy: ApprovedPolicy | None, channel: str, purpose: str) -> Outcome:
-    """The answer when the records cannot be read: ``hold`` when the policy's ``unavailable`` cell says hold, else no
-    action. Never ``proceed`` (contracts/gate.md), whatever a stored cell says."""
-    status = f"{UNAVAILABLE}:{cause}"
-    if policy is None:
-        return Outcome(status, None, None, None, None, (), (status,))
-    action = "hold" if policy.cell(UNAVAILABLE, channel, purpose) == "hold" else None
-    return Outcome(status, action, policy.version if action else None, policy.approved_by if action else None,
-                   policy.approved_at if action else None, (), (status,), policy.approval_id if action else None)
-
-
-def incomplete(evidence: Evidence, missing: Iterable[str]) -> Evidence:
-    """Mark a found record incomplete against the client's checklist (documentation completeness only)."""
-    elems = sorted({str(m) for m in missing})
-    if evidence.kind != FOUND or not elems:
-        return evidence
-    return Evidence(f"{INCOMPLETE}:{','.join(elems)}", evidence.reason, evidence.basis_event_ids, evidence.grant)

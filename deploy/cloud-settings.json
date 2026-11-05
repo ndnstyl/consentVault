@@ -1025,19 +1025,6 @@
       ]
     },
     {
-      "name": "CONSENTVAULT_RELEASE_REQUIRE_NO_CONTACT_SINCE_STOP",
-      "kind": "setting",
-      "required": false,
-      "used_by": [
-        "vault"
-      ],
-      "read_by": "product",
-      "deployments": [
-        "cloud",
-        "self-host"
-      ]
-    },
-    {
       "name": "CONSENTVAULT_RESTORE_DRILL_ADMIN_DSN",
       "kind": "setting",
       "required": true,

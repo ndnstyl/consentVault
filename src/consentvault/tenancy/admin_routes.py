@@ -694,7 +694,6 @@ def _one_of_contact_or_record(b: Any, allowed: tuple[str, ...]) -> dict:
 def proof_for(ctx: Ctx, body: Any, *, region: str) -> dict:
     """POST /v1/proof for a portal session (admin or compliance viewer): by contact point as before, or by ``record_id``,
     which adds ``record_id``, the masked contact and the person and never the full contact point."""
-    from ..gate_rules.policy import PolicyStoreError, approved_policy
     from ..proof import tenant_lookup
     from .pipeline import normalize, require_serving
 
@@ -708,17 +707,8 @@ def proof_for(ctx: Ctx, body: Any, *, region: str) -> dict:
     else:
         kind, norm = normalize(b["contact"], region)
         fp = ctx.crypto.contact_fingerprint(org, kind, norm)
-    try:
-        with ctx.conn.transaction():
-            policy = approved_policy(ctx.conn)
-        policy_failed = False
-    except PolicyStoreError:  # loud-failure-exempt: the permissions section is null and named in partial below
-        policy, policy_failed = None, True
     answer = tenant_lookup(ctx.conn, ctx.crypto, org=org, contact_fp=fp, contact_kind=kind, page=b.get("page"), region=region,
-                           cursor_key=ctx.cursor_key, policy=policy, now=ctx.now())
-    if policy_failed and answer.get("found") and "permissions" in answer:
-        answer["permissions"] = None
-        answer["partial"] = sorted(set(answer.get("partial", [])) | {"permissions"})
+                           cursor_key=ctx.cursor_key, now=ctx.now())
     if row is not None:
         who = rec.record_identity(ctx, row)
         answer = {**answer, "record_id": str(row["record_id"]), "contact": who["contact"], "person": who["person"]}

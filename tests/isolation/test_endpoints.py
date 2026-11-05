@@ -170,14 +170,14 @@ def test_scopes_are_held_to_their_endpoints_and_a_capture_with_the_wrong_scope_i
 
 
 # gate -----------------------------------------------------------------------------------------------------------------
-def test_gate_answers_evidence_and_the_approved_policy_never_a_legal_conclusion(cloud):
+def test_gate_answers_the_facts_and_history_never_a_verdict_or_a_legal_conclusion(cloud):
     assert cloud.grant(cloud.a, X)[0] == 201
     s, g = cloud.gate(cloud.a, X)
-    assert s == 200 and g["evidence_status"] == "consent_record_found" and g["policy_action"] == "proceed"
-    assert g["policy_version"] == 1 and g["notice"].endswith("Not a legal determination.")
-    assert set(g) == {"evidence_status", "policy_action", "policy_version", "approved_by", "approved_at",
-                      "basis_event_ids", "reasons", "decision_id", "evaluated_at", "notice"}
-    assert not any(k in g for k in ("allowed", "permitted", "lawful", "compliant"))
+    assert s == 200 and g["status"] == "records_found" and [x["event_type"] for x in g["history"]] == ["grant"]
+    assert g["notice"].endswith("does not decide.")
+    assert set(g) == {"status", "history", "stops", "lifts", "decision_id", "evaluated_at", "notice"}
+    assert not any(k in g for k in ("allowed", "permitted", "lawful", "compliant", "policy_action", "policy_version",
+                                    "reasons", "evidence_status"))
 
 
 def test_gate_from_b_on_a_contact_only_a_holds_matches_a_contact_nobody_holds(cloud):
@@ -187,8 +187,7 @@ def test_gate_from_b_on_a_contact_only_a_holds_matches_a_contact_nobody_holds(cl
     s2, g2 = cloud.gate(cloud.b, U, token=tok)
     assert s1 == s2 == 200
     assert without(g1, "decision_id", "evaluated_at") == without(g2, "decision_id", "evaluated_at")
-    assert g1["evidence_status"] == "no_record" and g1["policy_action"] is None
-    assert g1["reasons"] == ["no_consent_on_record", "no_policy_configured"]
+    assert g1["status"] == "no_record_found" and g1["history"] == [] and g1["stops"] == [] and g1["lifts"] == []
 
 
 def test_gate_timing_does_not_reveal_another_orgs_contact(cloud):
@@ -213,8 +212,8 @@ def test_gate_batch_answers_in_order_and_records_each_item(cloud):
              {"contact": "not a phone", "channel": "sms", "purpose": "marketing"},
              {"contact": U, "channel": "sms", "purpose": "marketing"}]
     s, r = cloud.call("/v1/permission:batch", {"items": items}, token=cloud.token(cloud.a, "gate_read"))
-    assert s == 200 and [i.get("evidence_status", i.get("error")) for i in r["items"]] == \
-        ["consent_record_found", "invalid_contact", "no_record"]
+    assert s == 200 and [i.get("status", i.get("error")) for i in r["items"]] == \
+        ["records_found", "invalid_contact", "no_record_found"]
     with cloud.t.superuser() as su:
         n = su.execute("SELECT count(*) AS n FROM consentvault.gate_decision WHERE batch_id = %s",
                        (r["batch_id"],)).fetchone()["n"]
@@ -222,18 +221,18 @@ def test_gate_batch_answers_in_order_and_records_each_item(cloud):
     assert n == 2 and orgs == {cloud.a.org.org_id}
 
 
-def test_a_stop_holds_whatever_the_policy_and_narrowing_rules_only_narrow(cloud):
+def test_a_stored_policy_changes_nothing_in_the_answer_and_a_stop_is_a_stop_line(cloud):
     approve_policy(cloud.t, cloud.b.org, policy_rules(narrowing=[
         {"kind": "require_verified_contact", "channels": ["sms"],
          "rule_reference_id": "00000000-0000-0000-0000-000000000000"}]))
     assert cloud.grant(cloud.b, X)[0] == 201
     s, g = cloud.gate(cloud.b, X)
-    assert g["evidence_status"] == "consent_record_found" and g["policy_action"] == "hold"
-    assert "rule:require_verified_contact" in g["reasons"]
+    assert g["status"] == "records_found" and g["stops"] == [] and "policy_action" not in g
     stop = {"contact": X, "event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"], "method": "keyword"}
     assert cloud.call("/v1/events", stop, token=cloud.token(cloud.b, "capture"))[0] == 201
     s, g = cloud.gate(cloud.b, X)
-    assert g["evidence_status"] == "stop_on_record" and g["policy_action"] == "hold"
+    assert [x["event_type"] for x in g["history"]] == ["grant", "revoke"]
+    assert [x["event_type"] for x in g["stops"]] == ["revoke"] and g["stops"][0]["lifted_by_post_ids"] == []
 
 
 # proof ----------------------------------------------------------------------------------------------------------------
@@ -244,8 +243,8 @@ def test_proof_shows_a_its_own_record_and_b_nothing(cloud):
     assert s == 200 and p["found"] is True and p["partial"] == []
     assert p["doc_check_results"] == []  # stored results are readable now; this record was never checked
     assert p["timeline"]["items"][0]["event_type"] == "grant"
-    assert p["gate_decisions"]["items"][0]["evidence_status"] == "consent_record_found"
-    assert p["permissions"][0]["policy_action"] == "proceed"
+    assert p["gate_decisions"]["items"][0]["evidence_status"] == "records_found"
+    assert p["permissions"][0]["status"] == "records_found" and "policy_action" not in p["permissions"][0]
     assert X not in str(p)  # never a contact point
     tok = cloud.token(cloud.b, "proof_read")
     s1, p1 = cloud.proof(cloud.b, X, token=tok)

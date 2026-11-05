@@ -42,7 +42,7 @@ def test_erasure_deletes_the_key_and_the_fingerprint_still_matches_its_stop(env,
     cloud = Cloud(t, str(tmp_path / "evidence"))
     try:
         before = cloud.gate(cloud.a, PHONE)
-        assert before[0] == 200 and before[1]["evidence_status"] == "stop_on_record", before
+        assert before[0] == 200 and len(before[1]["stops"]) == 1 and before[1]["lifts"] == [], before
         req = _request(env, t.a)
         assert req["status"] == "pending_operator_confirmation"
         assert env.key_present(t.a)  # nothing is deleted before an operator confirms
@@ -50,8 +50,8 @@ def test_erasure_deletes_the_key_and_the_fingerprint_still_matches_its_stop(env,
         assert out["status"] == "completed" and out["key_deleted"] is True
         assert not env.key_present(t.a) and env.key_present(t.b)  # only this organisation's contact
         after = cloud.gate(cloud.a, PHONE)
-        assert after[0] == 200 and after[1]["evidence_status"] == "stop_on_record", after
-        assert after[1]["policy_action"] == "hold"
+        assert after[0] == 200 and len(after[1]["stops"]) == 2 and after[1]["stops"][-1]["source"] == "erasure", after
+        assert "policy_action" not in after[1]
         with t.app() as app, org_transaction(app, t.token(t.a, ("proof_read",))):
             assert contact_has_records(app, t.crypto, env.fp(t.a)) is False  # the person's data reads as gone
     finally:

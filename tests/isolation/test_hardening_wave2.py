@@ -273,7 +273,7 @@ def _checklist(w, org, elements, *, approved=True) -> int:
     return 1
 
 
-def test_a_policy_naming_a_checklist_answers_from_the_stored_result_not_unavailable(hw):
+def test_stored_documentation_results_are_read_in_the_proof_and_the_contact_check_stays_the_facts(hw):
     a = hw.cloud.a
     e1, e2, e3 = (str(uuid.uuid4()) for _ in range(3))
     _checklist(hw, a.org, [{"element_id": e1, "name": "Seller named", "description": "", "required": True},
@@ -288,8 +288,7 @@ def test_a_policy_naming_a_checklist_answers_from_the_stored_result_not_unavaila
     event_id = granted["event_id"]
 
     status, answer = hw.cloud.gate(a, X)
-    assert status == 200, answer  # never "unavailable" (503) once results are stored
-    assert answer["evidence_status"] == "record_incomplete:not_checked"
+    assert status == 200 and answer["status"] == "records_found", answer  # the facts, whatever a checklist says
 
     admin_token = hw.portal_token(a.org)
     s, raw, _ = hw.call("POST", "/v1/doc-checks", {"results": [
@@ -298,13 +297,13 @@ def test_a_policy_naming_a_checklist_answers_from_the_stored_result_not_unavaila
     item = _j(raw)["items"][0]
     assert item["present"] == [e1] and item["missing"] == [e2]  # the optional element is not "missing"
     status, answer = hw.cloud.gate(a, X)
-    assert status == 200 and answer["evidence_status"] == f"record_incomplete:{e2}", answer
+    assert status == 200 and answer["status"] == "records_found" and "evidence_status" not in answer, answer
 
     s, raw, _ = hw.call("POST", "/v1/doc-checks", {"results": [
         {"event_id": event_id, "checklist_version": 1, "present": [e1, e2]}]}, token=admin_token)
     assert s == 201 and _j(raw)["items"][0]["missing"] == []
     status, answer = hw.cloud.gate(a, X)
-    assert status == 200 and answer["evidence_status"] == "consent_record_found", answer  # the latest check answers
+    assert status == 200 and answer["status"] == "records_found", answer
 
     status, proof = hw.cloud.proof(a, X)
     assert status == 200 and proof["doc_check_results"] == [

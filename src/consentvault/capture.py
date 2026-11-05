@@ -6,7 +6,6 @@ from typing import Iterable
 
 import psycopg
 
-from .safelog import describe
 from .errors import EmptyConsentError, UncheckedConsentError
 from .ledger import Event, record_event
 
@@ -45,35 +44,14 @@ def capture(
     )
 
 
-def capture_and_release(conn: psycopg.Connection, **kwargs) -> tuple[Event, dict | None, str | None]:
-    """Record a grant, then run the release rule for a consumer grant.
-
-    Returns ``(grant, release, release_error)``. ``release`` is ``{"released_channels": [...], "refusals":
-    {cause: [channels]}}`` for a consumer grant and ``None`` for any other origin. When the decision itself cannot
-    be written the grant stays recorded and ``release_error`` names the failure, so callers can surface the error.
-    """
-    from .errors import ConsentVaultError
-    from .release import release_after_grant
-
-    ev = capture(conn, **kwargs)
-    if kwargs.get("origin", "consumer") != "consumer":
-        return ev, None, None
-    try:
-        res = release_after_grant(conn, ev.event_id)
-    except ConsentVaultError as exc:
-        return ev, None, f"{describe(exc)}"
-    return ev, {"released_channels": list(res.released_channels),
-                "refusals": {c: list(v) for c, v in res.refusals.items()}}, None
-
-
 def capture_verified(
     conn: psycopg.Connection,
     *,
     verification: str,
     inbound_message: str | None = None,
     **kwargs,
-) -> tuple[Event, dict | None, str | None]:
-    """Record a grant whose contact point the integrator verified, then run the release rule.
+) -> Event:
+    """Record a grant whose contact point the integrator verified.
 
     ``verification`` is ``otp`` (the integrator confirmed a one-time code sent to the contact point). The vault records
     that the integrator verified it; sending and checking the code is the integrator's job and the vault cannot see it.
@@ -88,7 +66,7 @@ def capture_verified(
     if "checked" not in kwargs:
         raise InvalidEventError("a verified grant needs the consent box value the person sent (checked); it is never defaulted")
     kwargs.setdefault("method", "checkbox")
-    return capture_and_release(conn, contact_verification=verification, **kwargs)
+    return capture(conn, contact_verification=verification, **kwargs)
 
 
 def tenant_capture(

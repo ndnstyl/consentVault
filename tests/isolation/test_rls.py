@@ -49,7 +49,9 @@ def test_every_tenant_table_forces_row_level_security_bound_to_the_verified_tena
                           "confirmation_send", "confirmation_connect_test", "confirmation_reply",
                           # the raw post store (migration 0067): the post, its key, facts, readings, links, seals and anchors
                           "raw_post", "raw_post_key", "raw_post_chain_head", "raw_post_fact", "raw_post_field",
-                          "raw_post_match", "raw_post_seal", "event_source_post"}
+                          "raw_post_match", "raw_post_seal", "event_source_post",
+                          # a stop and the post that lifted it (migration 0069)
+                          "stop_lift"}
         audit = {p["tablename"] for p in policies if p["policyname"].endswith("_read_scope")
                  and p["permissive"] == "RESTRICTIVE" and p["cmd"] == "SELECT" and "may_read_audit" in p["qual"]}
         assert audit == {"audit_event"}
@@ -251,7 +253,7 @@ def test_the_mode_never_returns_to_single_and_the_home_organisation_never_moves(
         assert owner.execute("SELECT mode FROM consentvault.tenancy_setting").fetchone()["mode"] == "multi"
 
 
-def test_a_version_two_release_must_decide_a_grant_of_the_same_fingerprint(tenancy):
+def test_no_version_two_release_can_be_written_whatever_it_decides(tenancy):
     from consentvault.ledger import record_tenant_event
 
     verified = tenancy.token(tenancy.a, scopes=["capture", "capture_verified"])
@@ -259,15 +261,12 @@ def test_a_version_two_release_must_decide_a_grant_of_the_same_fingerprint(tenan
     with tenancy.app() as app, org_transaction(app, verified):
         g = record_tenant_event(app, tenancy.crypto, contact="+15555550122", event_type="grant", method="checkbox",
                                 disclosure_sha256=tenancy.a.disclosure, contact_verification="otp", **common)
-        r = record_tenant_event(app, tenancy.crypto, contact="+15555550122", event_type="release", method="checkbox",
-                                release_of_event_id=g.event_id, release_outcome="released", **common)
-        assert r.seq == g.seq + 1
-    with tenancy.app() as app:
-        with pytest.raises(LedgerError, match=db_codes("check_release_ref", "earlier consumer grant of the same contact point")):
-            with org_transaction(app, verified):
-                record_tenant_event(app, tenancy.crypto, contact="+15555550133", event_type="release",
-                                    method="checkbox", release_of_event_id=g.event_id, release_outcome="released",
-                                    **common)
+    for contact in ("+15555550122", "+15555550133"):  # the grant's own contact point, and another person's
+        with tenancy.app() as app:
+            with pytest.raises(LedgerError, match=db_codes("check_release_ref", "no release event can be written")):
+                with org_transaction(app, verified):
+                    record_tenant_event(app, tenancy.crypto, contact=contact, event_type="release", method="checkbox",
+                                        release_of_event_id=g.event_id, release_outcome="released", **common)
 
 
 @pytest.mark.parametrize("table,column", [("seal", "seal_uuid"), ("chain_head", "head_uuid"),

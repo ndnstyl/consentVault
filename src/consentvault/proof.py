@@ -233,19 +233,18 @@ def _page_args(page: Any) -> tuple[str | None, str | None, int]:
 
 
 def tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None, page: Any = None, region: str | None = None,
-                  cursor_key: bytes, policy=None, now: float | None = None, contact_fp: str | None = None,
+                  cursor_key: bytes, now: float | None = None, contact_fp: str | None = None,
                   contact_kind: str | None = None) -> dict:
     """The proof answer (contracts/proof-export.md) for one contact in the entered organisation.
 
-    Shows evidence and the client's policy outcome only; never a contact point, never a statement that a record
+    Shows the recorded evidence only; never a contact point, never a statement that a record
     establishes valid consent. A section that could not be read is named in ``partial`` and is ``null``.
 
     A caller that holds a record (records.md, proof by ``record_id``) passes ``contact_fp`` and ``contact_kind`` instead of
     ``contact``: the lookup then needs no contact point, so a record whose contact key was erased answers with the stops it
     still holds.
     """
-    from .gate import tenant_evidence
-    from .gate_rules import engine
+    from .gate import NOTICE, tenant_facts
     from .tenancy.admin_base import ApiError, decode_cursor, encode_cursor
     from .tenancy.errors import KeyProviderError
     from .tenancy.pipeline import normalize
@@ -356,8 +355,7 @@ def tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None,
         "gate_decisions", "SELECT * FROM consentvault.gate_decision WHERE org_id = consentvault.current_org()"
         " AND contact_fp = ANY(%s)", (fps,), ("at", "decision_id"), False,
         lambda r: {"decision_id": str(r["decision_id"]), "at": _iso_z(r["at"]), "channel": r["channel"],
-                   "purpose": r["purpose"], "evidence_status": r["evidence_status"],
-                   "policy_action": r["policy_action"], "policy_version": r["policy_version"]})
+                   "purpose": r["purpose"], "evidence_status": r["evidence_status"]})
     contact_log = paged(
         "contact_log", "SELECT contact_log_uuid, contacted_at, channel, purpose, outcome, recorded_by"
         "  FROM consentvault.contact_log WHERE org_id = consentvault.current_org() AND contact_fp = ANY(%s)",
@@ -377,27 +375,24 @@ def tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None,
 
     found = bool(ev_rows) or any(total(x) for x in (gate_decisions, contact_log, reviews)) or bool(partial)
     if not found:
-        return {"found": False, "evaluated_at": evaluated_at, "notice": engine.NOTICE, "permissions": []}
+        return {"found": False, "evaluated_at": evaluated_at, "notice": NOTICE, "permissions": []}
     if section is not None:
         value = {"timeline": timeline, "gate_decisions": gate_decisions, "contact_log": contact_log,
                  "reviews": reviews}[section]
-        return {"found": True, "evaluated_at": evaluated_at, "notice": engine.NOTICE, section: value,
+        return {"found": True, "evaluated_at": evaluated_at, "notice": NOTICE, section: value,
                 "partial": sorted(set(partial))}
 
     def permissions():
-        out = []
+        facts = tenant_facts(conn, kind, fp)
         pairs = conn.execute(
             "SELECT DISTINCT channel, purpose FROM consentvault.current_permission"
             " WHERE org_id = consentvault.current_org() AND contact_kind = %s AND contact_fp = ANY(%s)"
             " ORDER BY channel, purpose", (kind, fps)).fetchall()
-        for p in pairs:
-            ev = tenant_evidence(conn, kind, fp, p["channel"], p["purpose"])
-            o = engine.decide(ev, policy, channel=p["channel"], purpose=p["purpose"], contact_fp=fp,
-                            now=dbclock.now(conn))
-            out.append({"channel": p["channel"], "purpose": p["purpose"], "evidence_status": o.evidence_status,
-                        "policy_action": o.policy_action, "policy_version": o.policy_version,
-                        "basis_event_ids": list(o.basis_event_ids)})
-        return out
+        return [{"channel": p["channel"], "purpose": p["purpose"], "status": facts.status,
+                 "basis_event_ids": [line["event_id"] for line in facts.history
+                                     if p["channel"] in line["channels"] and (p["purpose"] in line["purposes"]
+                                                                              or "*" in line["purposes"])]}
+                for p in pairs]
 
     def disclosures():
         shas = sorted({r["disclosure_sha256"] for r in ev_rows if r["disclosure_sha256"]})
@@ -440,7 +435,7 @@ def tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None,
     return {
         "found": True,
         "evaluated_at": evaluated_at,
-        "notice": engine.NOTICE,
+        "notice": NOTICE,
         "permissions": read("permissions", permissions),
         "timeline": timeline,
         "disclosures": read("disclosures", disclosures),

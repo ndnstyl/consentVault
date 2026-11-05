@@ -95,15 +95,16 @@ def test_a_failed_commit_leaves_the_object_pending_until_reconciled_by_the_worke
             app.execute("UPDATE consentvault.evidence_object SET status = 'committed' WHERE status = 'uncommitted'")
 
 
-def test_a_form_grant_after_the_persons_own_stop_lifts_it_with_no_review(cloud):
+def test_a_form_grant_after_the_persons_own_stop_is_a_later_line_and_lifts_nothing(cloud):
     stop = {"contact": X, "event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"], "method": "keyword"}
     assert cloud.call("/v1/events", stop, token=cloud.token(cloud.a, "capture"))[0] == 201
     assert cloud.grant(cloud.a, X)[0] == 201
     s, g = cloud.gate(cloud.a, X)
-    assert g["evidence_status"] == "consent_record_found" and g["policy_action"] == "proceed"
+    assert [x["event_type"] for x in g["history"]] == ["revoke", "grant"]
+    assert g["stops"][0]["lifted_by_post_ids"] == [] and g["lifts"] == []
     s, p = cloud.proof(cloud.a, X)
     assert p["reviews"]["items"] == []
-    assert [i["event_type"] for i in p["timeline"]["items"]] == ["revoke", "grant", "release"]
+    assert [i["event_type"] for i in p["timeline"]["items"]] == ["revoke", "grant"]
 
 
 def test_a_tenant_anchor_names_its_organisation_and_its_uuid(cloud, tmp_path):

@@ -13,7 +13,6 @@ import psycopg
 
 from .errors import ConsentVaultError
 
-ALARM_RELEASE_NOT_WRITTEN = "release.not_written"
 _CLASS = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,80}$")
 
 

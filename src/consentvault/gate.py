@@ -1,7 +1,11 @@
-"""The contact gate: may this contact point be contacted on this channel for this purpose?
+"""The contact check: the facts and history recorded for a contact point, and nothing else.
 
-Fails closed. A database that cannot answer, a contact that cannot be read, or the absence of
-consent all return ``allowed=False`` with a named reason; nothing here ever guesses yes.
+ConsentVault is a record of consent. It does not decide whether anyone may be contacted, so the answer carries no verdict:
+no ``allowed``, no ``proceed`` or ``hold``, no deny-by-default. It lists every line of the contact point's history as it
+was written (grants, stops, and any release row written before the rule changed), every stop with its source and the posts
+that triggered it, and every lift with the post that lifted it. A contact point with no line answers ``no_record_found``.
+A record that cannot be read answers ``unavailable`` with the reason, never a stand-in verdict. The check never writes to a
+raw post.
 """
 
 from __future__ import annotations
@@ -17,75 +21,102 @@ from .errors import ConsentVaultError, NormalizationError
 from .ledger import CHANNELS
 from .normalize import normalize_contact
 
+NOTICE = "The records held for this contact point, as recorded. ConsentVault records consent and does not decide."
+
+STATUS_FOUND = "records_found"
+STATUS_NONE = "no_record_found"
+STATUS_UNAVAILABLE = "unavailable"
 REASON_DB_DOWN = "database_unreachable"
-REASON_NO_CONSENT = "no_consent_on_record"
-REASON_BAD_CONTACT = "invalid_contact"
-REASON_BAD_CHANNEL = "invalid_channel"
-REASON_BAD_PURPOSE = "invalid_purpose"
-REASON_GRANTED = "granted"
+
+STOP_TYPES = ("revoke", "suppress")
+
+
+def _iso(t: datetime | None) -> str | None:
+    return None if t is None else t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 @dataclass(frozen=True)
-class Decision:
-    allowed: bool
-    reason: str
-    basis_event_ids: tuple[str, ...] = ()
+class ContactFacts:
+    """What the vault holds for one contact point. ``history`` is every event line in the order written, ``stops`` the
+    stop lines among them, ``lifts`` the links from a stop to the post that lifted it. No field says what to do."""
+
+    status: str
+    reason: str | None = None
+    history: tuple[dict, ...] = ()
+    stops: tuple[dict, ...] = ()
+    lifts: tuple[dict, ...] = ()
+
+    @property
+    def read(self) -> bool:
+        return self.status != STATUS_UNAVAILABLE
+
+    @property
+    def event_ids(self) -> tuple[str, ...]:
+        return tuple(line["event_id"] for line in self.history)
+
+    @property
+    def label(self) -> str:
+        """The evidence-status label a recorded check carries."""
+        return f"{STATUS_UNAVAILABLE}:{self.reason}" if self.status == STATUS_UNAVAILABLE else self.status
+
+    def as_dict(self) -> dict:
+        out = {"status": self.status, "history": list(self.history), "stops": list(self.stops), "lifts": list(self.lifts)}
+        if self.reason is not None:
+            out["reason"] = self.reason
+        return out
 
 
-def _deny(reason: str, basis: tuple[str, ...] = ()) -> Decision:
-    return Decision(False, reason, basis)
+def unavailable(reason: str) -> ContactFacts:
+    return ContactFacts(STATUS_UNAVAILABLE, reason)
 
 
-def may_contact(
-    conn: psycopg.Connection,
-    contact: str,
-    channel: str,
-    purpose: str,
-    region: str | None = None,
-) -> Decision:
-    """Answer the contact question from ``current_permission``. Never raises for a database fault."""
-    if channel not in CHANNELS:
-        return _deny(f"{REASON_BAD_CHANNEL}:{channel}")
-    if not purpose or not str(purpose).strip() or str(purpose).strip() == "*":
-        return _deny(REASON_BAD_PURPOSE)
+_LINE_COLUMNS = ("seq, event_id::text AS event_id, event_type, origin, method, source, recorded_by, channels, purposes,"
+                 " captured_at, received_at, disclosure_sha256, payload_sha256, contact_verification,"
+                 " release_of_event_id::text AS release_of_event_id, release_outcome, release_cause")
+
+
+def _line(row) -> dict:
+    out = {
+        "event_id": row["event_id"], "seq": row["seq"], "event_type": row["event_type"], "origin": row["origin"],
+        "method": row["method"], "source": row["source"], "recorded_by": row["recorded_by"],
+        "channels": list(row["channels"]), "purposes": list(row["purposes"]), "captured_at": _iso(row["captured_at"]),
+        "received_at": _iso(row["received_at"]), "disclosure_sha256": row["disclosure_sha256"],
+        "payload_sha256": row["payload_sha256"], "contact_verification": row["contact_verification"],
+    }
+    if row["event_type"] == "release":  # a row written before no release could be: shown as the history it is
+        out.update(release_of_event_id=row["release_of_event_id"], release_outcome=row["release_outcome"],
+                   release_cause=row["release_cause"])
+    return out
+
+
+def _facts(rows, lifts=(), posts=None) -> ContactFacts:
+    lines = []
+    for r in rows:
+        line = _line(r)
+        if posts is not None:
+            line["source_post_ids"] = list(posts.get(line["event_id"], ()))
+        lines.append(line)
+    lifted: dict[str, list[str]] = {}
+    for lift in lifts:
+        lifted.setdefault(lift["stop_event_id"], []).append(lift["lifting_post_id"])
+    stops = tuple({**line, "lifted_by_post_ids": lifted.get(line["event_id"], [])}
+                  for line in lines if line["event_type"] in STOP_TYPES)
+    if not lines:
+        return ContactFacts(STATUS_NONE)
+    return ContactFacts(STATUS_FOUND, None, tuple(lines), stops, tuple(lifts))
+
+
+def contact_facts(conn: psycopg.Connection, contact: str, region: str | None = None) -> ContactFacts:
+    """The facts and history held for one contact point of the single-company vault. Raises ``NormalizationError`` for a
+    contact point that is not a phone number or an email address; a database fault is the answer ``unavailable``."""
+    kind, norm = normalize_contact(contact, None, region)
     try:
-        kind, norm = normalize_contact(contact, None, region)
-    except NormalizationError as exc:
-        return _deny(f"{REASON_BAD_CONTACT}:{describe(exc)}")
-    purpose = purpose.strip().lower()
-    try:
-        row = conn.execute(
-            "SELECT allowed, reason, deciding_event_id FROM consentvault.current_permission"
-            " WHERE contact_kind = %s AND contact_norm = %s AND channel = %s AND purpose = %s",
-            (kind, norm, channel, purpose),
-        ).fetchone()
-        if row is None:
-            stopped_all = conn.execute(
-                "SELECT reason FROM consentvault.current_permission"
-                " WHERE contact_kind = %s AND contact_norm = %s AND channel = %s AND purpose = '*'",
-                (kind, norm, channel),
-            ).fetchone()
-            if stopped_all is not None:
-                return _deny(stopped_all["reason"])
-            return _deny(REASON_NO_CONSENT)
-        basis = conn.execute(
-            "SELECT event_id::text AS event_id FROM ("
-            "  SELECT DISTINCT ON (kind) event_id, seq FROM ("
-            "    SELECT event_id, seq, CASE WHEN event_type = 'grant' THEN 'g'"
-            "           WHEN event_type = 'release' AND origin = 'consumer' AND release_outcome = 'released' THEN 'r'"
-            "           WHEN event_type IN ('revoke', 'suppress') THEN 's' END AS kind"
-            "    FROM consentvault.event"
-            "    WHERE contact_kind = %s AND contact_norm = %s AND %s = ANY(channels) AND (%s = ANY(purposes) OR '*' = ANY(purposes))"
-            "  ) x WHERE kind IS NOT NULL ORDER BY kind, seq DESC"
-            ") y ORDER BY seq",
-            (kind, norm, channel, purpose),
-        ).fetchall()
-    except Exception as exc:  # fail closed: any fault at all is a named denial, never a guess
-        return _deny(f"{REASON_DB_DOWN}:{type(exc).__name__}")
-    ids = tuple(r["event_id"] for r in basis)
-    if row["allowed"]:
-        return Decision(True, REASON_GRANTED, ids)
-    return _deny(row["reason"], ids)
+        rows = conn.execute(
+            f"SELECT {_LINE_COLUMNS} FROM consentvault.event WHERE contact_kind = %s AND contact_norm = %s ORDER BY seq",
+            (kind, norm)).fetchall()
+    except Exception as exc:  # the answer is "unavailable" with the named cause, never a guess
+        return unavailable(f"{REASON_DB_DOWN}:{type(exc).__name__}")
+    return _facts(rows)
 
 
 def record_contact(
@@ -161,7 +192,9 @@ def record_tenant_contact(
     return str(row_id)
 
 
-# Multi-tenant gate: evidence status and the client's approved policy ---------------------------------------------------
+
+
+# Multi-tenant check: the same facts for one contact fingerprint, recorded as a decision row ----------------------------
 
 MAX_BATCH = 1000
 
@@ -173,95 +206,44 @@ class GateItem:
     purpose: object
 
 
-def _fail_answer(outcome, decision_id, evaluated_at) -> dict:
-    from .gate_rules.engine import NOTICE
-
-    return {"evidence_status": outcome.evidence_status, "policy_action": outcome.policy_action,
-            "policy_version": outcome.policy_version, "decision_id": decision_id,
-            "evaluated_at": evaluated_at, "notice": NOTICE}
-
-
-def _answer(outcome, decision_id: str, evaluated_at: str) -> dict:
-    from .gate_rules.engine import NOTICE
-
-    return {
-        "evidence_status": outcome.evidence_status,
-        "policy_action": outcome.policy_action,
-        "policy_version": outcome.policy_version,
-        "approved_by": outcome.approved_by,
-        "approved_at": _iso(outcome.approved_at),
-        "basis_event_ids": list(outcome.basis_event_ids),
-        "reasons": list(outcome.reasons),
-        "decision_id": decision_id,
-        "evaluated_at": evaluated_at,
-        "notice": NOTICE,
-    }
+def tenant_facts(conn: psycopg.Connection, kind: str, fp: str) -> ContactFacts:
+    """The facts and history the entered organisation holds for one contact fingerprint: its events, the posts that triggered
+    them, and the stop lifts. Reads only; the caller holds a read scope."""
+    rows = conn.execute(
+        f"SELECT {_LINE_COLUMNS} FROM consentvault.event WHERE org_id = consentvault.current_org()"
+        " AND contact_kind = %s AND contact_fp = %s ORDER BY seq", (kind, fp)).fetchall()
+    posts: dict[str, list[str]] = {}
+    for r in conn.execute(
+            "SELECT s.event_id::text AS event_id, s.post_id::text AS post_id FROM consentvault.event_source_post s"
+            " JOIN consentvault.event e ON e.org_id = s.org_id AND e.event_id = s.event_id"
+            " WHERE s.org_id = consentvault.current_org() AND s.role = 'trigger' AND e.contact_kind = %s AND e.contact_fp = %s"
+            " ORDER BY s.recorded_at, s.post_id", (kind, fp)):
+        posts.setdefault(r["event_id"], []).append(r["post_id"])
+    lifts = tuple({"stop_event_id": r["stop_event_id"], "lifting_post_id": r["lifting_post_id"],
+                   "linked_at": _iso(r["linked_at"])} for r in conn.execute(
+        "SELECT stop_event_id::text AS stop_event_id, lifting_post_id::text AS lifting_post_id, linked_at"
+        " FROM consentvault.stop_lift WHERE org_id = consentvault.current_org() AND contact_fp = %s"
+        " ORDER BY linked_at, lifting_post_id", (fp,)))
+    return _facts(rows, lifts, posts)
 
 
-def _iso(t: datetime | None) -> str | None:
-    return None if t is None else t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-
-
-def tenant_evidence(conn: psycopg.Connection, kind: str, fp: str, channel: str, purpose: str):
-    """What the entered organisation's records show for one contact fingerprint, channel and purpose."""
-    from .gate_rules.engine import Basis, Evidence, evidence_from_permission
-
-    row = conn.execute(
-        "SELECT allowed, reason, deciding_event_id FROM consentvault.current_permission"
-        " WHERE org_id = consentvault.current_org() AND contact_kind = %s AND contact_fp = %s"
-        " AND channel = %s AND purpose = %s", (kind, fp, channel, purpose)).fetchone()
-    star = None
-    if row is None:
-        s = conn.execute(
-            "SELECT reason FROM consentvault.current_permission WHERE org_id = consentvault.current_org()"
-            " AND contact_kind = %s AND contact_fp = %s AND channel = %s AND purpose = '*'",
-            (kind, fp, channel)).fetchone()
-        star = s["reason"] if s else None
-    ev = evidence_from_permission(row, star)
-    basis = conn.execute(
-        "SELECT event_id::text AS event_id, kind FROM ("
-        "  SELECT DISTINCT ON (kind) event_id, seq, kind FROM ("
-        "    SELECT event_id, seq, CASE WHEN event_type = 'grant' THEN 'g'"
-        "           WHEN event_type = 'release' AND origin = 'consumer' AND release_outcome = 'released' THEN 'r'"
-        "           WHEN event_type IN ('revoke', 'suppress') THEN 's' END AS kind"
-        "    FROM consentvault.event"
-        "    WHERE org_id = consentvault.current_org() AND contact_kind = %s AND contact_fp = %s"
-        "      AND %s = ANY(channels) AND (%s = ANY(purposes) OR '*' = ANY(purposes))"
-        "  ) x WHERE kind IS NOT NULL ORDER BY kind, seq DESC"
-        ") y ORDER BY seq", (kind, fp, channel, purpose)).fetchall()
-    ids = tuple(r["event_id"] for r in basis)
-    grant = None
-    g = next((r["event_id"] for r in basis if r["kind"] == "g"), None)
-    if g is not None and ev.kind == "consent_record_found":
-        gr = conn.execute(
-            "SELECT e.channels, e.received_at, e.contact_verification, d.channels AS d_channels"
-            "  FROM consentvault.event e LEFT JOIN consentvault.disclosure d"
-            "    ON d.org_id = e.org_id AND d.sha256 = e.disclosure_sha256"
-            " WHERE e.org_id = consentvault.current_org() AND e.event_id = %s::uuid", (g,)).fetchone()
-        grant = Basis(g, tuple(gr["channels"]), gr["received_at"], gr["contact_verification"],
-                      tuple(gr["d_channels"] or ()))
-    return Evidence(ev.status, ev.reason, ids, grant)
+def _answer(facts: ContactFacts, decision_id: str | None, evaluated_at: str) -> dict:
+    return {**facts.as_dict(), "decision_id": decision_id, "evaluated_at": evaluated_at, "notice": NOTICE}
 
 
 class TenantGate:
-    """One gate request inside the entered organisation: validate, read the records, apply the approved policy,
-    record the decision. Construct inside ``org_transaction`` with a ``gate_read`` token."""
+    """One contact check inside the entered organisation: validate, read the records, record the check. Construct inside
+    ``org_transaction`` with a ``gate_read`` token."""
 
     def __init__(self, conn: psycopg.Connection, crypto, *, org, requested_by: str | None,
                  region: str | None = None, now: datetime | None = None):
-        from .gate_rules.policy import PolicyStoreError, approved_policy
         from .tenancy.pipeline import org_channels, org_purposes
 
         self.conn, self.crypto, self.org = conn, crypto, org
         self.requested_by, self.region = requested_by, region
-        self._pinned_now = now   # tests only; a gate with none reads the database's clock at each check
+        self._pinned_now = now   # tests only; a check with none reads the database's clock
         self.channels = org_channels(conn)
         self.purposes = org_purposes(conn)
-        self.policy_error: str | None = None
-        try:
-            self.policy = approved_policy(conn)
-        except PolicyStoreError:
-            self.policy, self.policy_error = None, "policy"
 
     def validate(self, item: GateItem) -> tuple[str, str, str, str]:
         """(kind, norm, channel, purpose) or an ``ApiError`` naming the bad field."""
@@ -277,9 +259,7 @@ class TenantGate:
         return kind, norm, channel, purpose.strip().lower()
 
     def check(self, item: GateItem, *, batch_id: str | None = None) -> tuple[int, dict]:
-        """(HTTP status, answer). 200 with the policy outcome, or 503 when the records could not be read."""
-        from .gate_rules import engine
-        from .gate_rules.policy import PolicyStoreError, missing_elements
+        """(HTTP status, answer). 200 with the facts, or 503 when the records could not be read."""
         from .tenancy.errors import KeyProviderError
 
         kind, norm, channel, purpose = self.validate(item)
@@ -287,34 +267,17 @@ class TenantGate:
         evaluated_at = _iso(now)
         try:
             fp = self.crypto.contact_fingerprint(self.org, kind, norm)
-        except KeyProviderError:
-            out = engine.unavailable("key", self.policy, channel, purpose)
-            return 503, _fail_answer(out, None, evaluated_at)
-        cause = self.policy_error
-        out = None
-        if cause is None:
-            try:
-                with self.conn.transaction():  # a savepoint: a failed read leaves the decision recordable
-                    ev = tenant_evidence(self.conn, kind, fp, channel, purpose)
-                    version = self.policy.checklist_version(purpose) if self.policy else None
-                    if version is not None and ev.kind == engine.FOUND and ev.grant is not None:
-                        ev = engine.incomplete(ev, missing_elements(self.conn, ev.grant.event_id, version))
-                    out = engine.decide(ev, self.policy, channel=channel, purpose=purpose, contact_fp=fp,
-                                        now=now)
-            except PolicyStoreError:
-                cause = "doc_check_results"
-            except engine.PolicyRuleError:
-                cause = "policy_rule"
-            except psycopg.Error:
-                cause = "database"
-        if out is None:
-            out = engine.unavailable(cause, self.policy, channel, purpose)
-        decision_id = self._record(fp, channel, purpose, out, batch_id)
-        if cause is not None:
-            return 503, _fail_answer(out, decision_id, evaluated_at)
-        return 200, _answer(out, decision_id, evaluated_at)
+        except KeyProviderError:  # no fingerprint, so nothing to file the check under: answered, not recorded
+            return 503, _answer(unavailable("key"), None, evaluated_at)
+        try:
+            with self.conn.transaction():  # a savepoint: a failed read leaves the check recordable
+                facts = tenant_facts(self.conn, kind, fp)
+        except psycopg.Error:
+            facts = unavailable("database")
+        decision_id = self._record(fp, channel, purpose, facts, batch_id)
+        return (200 if facts.read else 503), _answer(facts, decision_id, evaluated_at)
 
-    def _record(self, fp: str, channel: str, purpose: str, out, batch_id: str | None) -> str:
+    def _record(self, fp: str, channel: str, purpose: str, facts: ContactFacts, batch_id: str | None) -> str:
         import uuid as _uuid
 
         decision_id = str(_uuid.uuid4())
@@ -322,19 +285,17 @@ class TenantGate:
             with self.conn.transaction():
                 self.conn.execute(
                     "INSERT INTO consentvault.gate_decision (org_id, decision_id, contact_fp, channel, purpose,"
-                    " evidence_status, policy_action, policy_version, approved_by, approved_at, basis_event_ids,"
-                    " reasons, requested_by, batch_id)"
-                    " VALUES (consentvault.current_org(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::uuid[], %s, %s, %s)",
-                    (decision_id, fp, channel, purpose, out.evidence_status, out.policy_action, out.policy_version,
-                     out.approved_by, out.approved_at, list(out.basis_event_ids), list(out.reasons),
-                     self.requested_by, batch_id))
-                # the usage tally rides the same savepoint: a decision is counted if and only if it is recorded
+                    " evidence_status, basis_event_ids, reasons, requested_by, batch_id)"
+                    " VALUES (consentvault.current_org(), %s, %s, %s, %s, %s, %s::uuid[], %s, %s, %s)",
+                    (decision_id, fp, channel, purpose, facts.label, list(facts.event_ids), [], self.requested_by,
+                     batch_id))
+                # the usage tally rides the same savepoint: a check is counted if and only if it is recorded
                 self.conn.execute("INSERT INTO consentvault.gate_check_tally (org_id, day)"
                                   " VALUES (consentvault.current_org(), (clock_timestamp() AT TIME ZONE 'UTC')::date)")
         except psycopg.Error as exc:
-            raise GateRecordError(f"the gate decision could not be recorded: {type(exc).__name__}") from exc
+            raise GateRecordError(f"the contact check could not be recorded: {type(exc).__name__}") from exc
         return decision_id
 
 
 class GateRecordError(ConsentVaultError):
-    """A gate answer could not be recorded, so it is not given."""
+    """A contact check could not be recorded, so it is not answered."""

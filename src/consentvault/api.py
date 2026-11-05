@@ -29,13 +29,13 @@ from urllib.parse import parse_qs, urlsplit
 from .safelog import caller_detail, db_code, describe, refusal_code
 from . import config as config_mod
 from . import edge_envelope
-from .capture import capture_and_release, capture_verified
+from .capture import capture, capture_verified
 from .capture_http import (StoreRefusedRequests, Downstream, request_key, cors_headers, is_capture_path, is_preflight, read_any_body, request_headers,
                            transport_credentials_removed, unavailable_answer)
 from . import dbclock
 from .db import connect
 from .errors import ConfigError, ConsentVaultError, NormalizationError
-from .gate import REASON_DB_DOWN, may_contact
+from .gate import NOTICE, REASON_DB_DOWN, contact_facts, unavailable
 from .ledger import record_event
 from .proof import lookup
 
@@ -387,10 +387,10 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
                 if verification == "none":
                     if "inbound_message" in payload:
                         return "bad_inbound_message", None
-                    ev = capture_and_release(conn, checked=payload.get("checked") is True, **fields)[0]
+                    ev = capture(conn, checked=payload.get("checked") is True, **fields)
                 else:
                     ev = capture_verified(conn, verification=verification, checked=payload.get("checked") is True,
-                                          inbound_message=payload.get("inbound_message"), **fields)[0]
+                                          inbound_message=payload.get("inbound_message"), **fields)
             else:
                 ev = record_event(conn, **fields)
         except ConsentVaultError as exc:
@@ -419,17 +419,14 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
                 return self._fail(400, "bad_contact", caller_detail(exc))
             except Exception as exc:  # the failure is named in the answer, never an empty proof
                 return self._fail(500, type(exc).__name__, caller_detail(exc))
-        channel, purpose = q.get("channel", ""), q.get("purpose", "")
-        if not channel or not purpose:
-            return self._fail(400, "missing_field", "'channel' and 'purpose' are required")
         try:
             with connect(self.settings.dsn) as conn:
-                decision = may_contact(conn, contact, channel, purpose, self.settings.default_region)
-        except Exception as exc:  # fail closed: any fault is the gate's named denial, never a guess
-            return self._send(503, {"allowed": False, "reason": f"{REASON_DB_DOWN}:{type(exc).__name__}",
-                                    "basis_event_ids": []})
-        self._send(200, {"allowed": decision.allowed, "reason": decision.reason,
-                         "basis_event_ids": list(decision.basis_event_ids)})
+                facts = contact_facts(conn, contact, self.settings.default_region)
+        except NormalizationError as exc:
+            return self._fail(400, "bad_contact", caller_detail(exc))
+        except Exception as exc:  # the record could not be reached: the answer says so, with the named cause
+            return self._send(503, {**unavailable(f"{REASON_DB_DOWN}:{type(exc).__name__}").as_dict(), "notice": NOTICE})
+        self._send(200 if facts.read else 503, {**facts.as_dict(), "notice": NOTICE})
 
 
 def make_server(settings: ApiSettings, host: str = "127.0.0.1", port: int = 8080) -> ThreadingHTTPServer:
@@ -459,7 +456,7 @@ def serve(settings: ApiSettings, host: str = "127.0.0.1", port: int = 8080) -> N
 #
 # POST /v1/oauth/token          private_key_jwt client credentials -> 5-minute access token   (contracts/auth.md)
 # POST /v1/events               capture, signed receipt                                       (contracts/capture.md)
-# POST /v1/permission[:batch]   evidence status and the client's approved policy action       (contracts/gate.md)
+# POST /v1/permission[:batch]   the recorded facts and history for a contact point                (contracts/gate.md)
 # POST /v1/proof                everything on record for one contact in the caller's org      (contracts/proof-export.md)
 # POST /v1/ebr-records          client-supplied EBR record, stored as evidence                (contracts/admin.md)
 # POST /v1/dnc-scrubs           client-supplied DNC registry scrub result, stored as evidence  (contracts/admin.md)
@@ -1179,7 +1176,6 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
         the reason (stored as a fact); the post is never touched."""
         from .errors import (ConsentRefusedError, InvalidEventError, LedgerError, NormalizationError, UnknownDisclosureError,
                              UnknownPurposeError)
-        from .release import release_after_tenant_grant
         from .tenancy.admin_base import ApiError
         from .tenancy.pipeline import EvidenceStoreUnavailable, RequestSeenBefore, parse_capture
 
@@ -1204,17 +1200,6 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
             req = parse_capture(payload, body, claims.scopes)
             token = self._tenant_token(claims)
             result = self.pipeline.capture(conn, self._enter(token), req, credential_id=claims.credential_id, claim=claim)
-            if req.fields["event_type"] == "grant" and req.fields.get("origin", "consumer") == "consumer":
-                reader = self._tenant_token(claims, ("capture", "gate_read"))
-                try:
-                    with self._enter(reader)(conn):
-                        release_after_tenant_grant(conn, self.settings.crypto, result.event_id)
-                except (ConsentVaultError, psycopg.Error) as exc:
-                    try:
-                        self._release_alarm(conn, token, result.event_id, exc)
-                    except ConsentVaultError as alarm_exc:  # the event stands; the missing alarm was logged critical by _release_alarm
-                        _log.critical("the event is recorded but neither its release decision nor its alarm was written",
-                                      event_id=result.event_id, request_id=self.request_id, error=type(alarm_exc).__name__)
         except RequestSeenBefore:
             return "request_seen_before", None
         except ApiError as exc:
@@ -1227,23 +1212,6 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
         except (ConsentVaultError, psycopg.Error) as exc:
             return "unavailable:" + type(exc).__name__, None
         return "derived", result.event_id
-
-    def _release_alarm(self, conn, token: str, event_id: str, exc: BaseException) -> None:
-        from .alarms import ALARM_RELEASE_NOT_WRITTEN, AlarmWriteError, raise_operator_alarm
-
-        _log.error("release decision not written", event_id=event_id, request_id=self.request_id,
-                   error=type(exc).__name__)
-        try:
-            with self._enter(token)(conn):
-                raise_operator_alarm(conn, name=ALARM_RELEASE_NOT_WRITTEN, error_class=type(exc).__name__,
-                                     ref_kind="event", ref_id=event_id, request_id=self.request_id)
-        except (AlarmWriteError, ConsentVaultError, psycopg.Error) as alarm_exc:
-            _log.critical("operator alarm NOT written; the release decision is missing and nothing in the database says so",
-                          alarm=ALARM_RELEASE_NOT_WRITTEN, event_id=event_id, request_id=self.request_id,
-                          error=type(alarm_exc).__name__)
-            # never only a log: the request fails with a named error (the grant itself stays recorded)
-            raise AlarmWriteError(f"event {event_id} was recorded, but neither its release decision nor the operator"
-                                  f" alarm could be written ({type(alarm_exc).__name__})") from alarm_exc
 
     def _gate_items(self, payload, many: bool):
         from .gate import MAX_BATCH, GateItem
@@ -1265,7 +1233,6 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
 
     def _gate(self, body: bytes, many: bool) -> None:
         from .gate import GateRecordError, TenantGate
-        from .gate_rules.engine import NOTICE
         from .tenancy.admin_base import ApiError
         from .tenancy.pipeline import require_serving
 
@@ -1275,13 +1242,11 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
         claims = claims or self._claims("gate_read")
         items = self._gate_items(self._json(body), many)
         token = self._tenant_token(claims)
-        loaded = None  # the gate, once it has read the organisation's approved policy
         try:
             with connect(self.settings.dsn) as conn, self._enter(token)(conn) as org:
                 require_serving(conn)
                 gate = TenantGate(conn, self.settings.crypto, org=org, requested_by=str(claims.credential_id),
                                   region=self.settings.region)
-                loaded = (gate.policy, frozenset(gate.channels), frozenset(gate.purposes))
                 if not many:
                     reply = gate.check(items[0])
                 else:
@@ -1294,29 +1259,16 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                             answers.append({"error": exc.name, "detail": caller_detail(exc)})
                     reply = (200, {"items": answers, "batch_id": batch_id})
             # the transaction has committed: only now does the caller hear an answer (a failed commit is the 503 below,
-            # with nothing recorded, never a 200 for a decision that was not kept)
+            # with nothing recorded, never a 200 for a check that was not kept)
             return self._send(*reply)
         except (GateRecordError, psycopg.Error, ServiceUnavailableError) as exc:
             _log.error("gate unavailable", request_id=self.request_id, error=type(exc).__name__)
             cause = "restore_in_progress" if self._restore_pending() else "database"
-            body = {"evidence_status": f"unavailable:{cause}", "policy_action": None, "policy_version": None,
+            body = {"status": "unavailable", "reason": cause,
                     **({"error": "restore_in_progress"} if cause == "restore_in_progress" else {}),
                     "notice": NOTICE, "request_id": self.request_id}
-            if loaded is not None and loaded[0] is not None:  # the approved policy's own cell for "unavailable"
-                from .gate_rules import engine
-
-                def unavailable(item):
-                    ch, pu = item.channel, item.purpose
-                    if not (isinstance(ch, str) and isinstance(pu, str) and ch in loaded[1]
-                            and pu.strip().lower() in loaded[2]):
-                        return {}
-                    out = engine.unavailable(cause, loaded[0], ch, pu.strip().lower())
-                    return {"policy_action": out.policy_action, "policy_version": out.policy_version}
-
-                if many:
-                    body["items"] = [{"evidence_status": body["evidence_status"], **unavailable(i)} for i in items]
-                else:
-                    body.update(unavailable(items[0]))
+            if many:
+                body["items"] = [{"status": "unavailable", "reason": cause} for _ in items]
             self._send(503, body)
 
     def _restore_pending(self) -> bool:
@@ -1355,7 +1307,6 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                               credential_id=MEMBER_CREDENTIAL_PREFIX + caller.member_id, ttl_seconds=60), caller.member_id
 
     def _proof(self, body: bytes) -> None:
-        from .gate_rules.policy import PolicyStoreError, approved_policy
         from .proof import tenant_lookup
         from .tenancy.pipeline import require_serving
 
@@ -1367,17 +1318,9 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
         token = portal or self._tenant_token(claims)
         with connect(self.settings.dsn) as conn, self._enter(token)(conn) as org:
             require_serving(conn)
-            try:
-                with conn.transaction():
-                    policy = approved_policy(conn)
-            except PolicyStoreError:
-                policy = None  # the permissions section is then marked partial below
-                policy_failed = True
-            else:
-                policy_failed = False
             answer = tenant_lookup(conn, self.settings.crypto, org=org, contact=payload.get("contact"),
                                    page=payload.get("page"), region=self.settings.region,
-                                   cursor_key=self.settings.cursor_key, policy=policy)
+                                   cursor_key=self.settings.cursor_key)
             if member_id:  # a portal read is tied to the person: the audit row names the member and a fingerprint prefix
                 from .tenancy import audit
                 from .tenancy.pipeline import normalize
@@ -1387,9 +1330,6 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                 with conn.transaction():
                     audit.append(conn, actor_kind="member", actor_id=member_id, action="proof.read", target_kind="contact",
                                  target_id=fp[:8], request_id=self.request_id)
-        if policy_failed and answer.get("found") and "permissions" in answer:
-            answer["permissions"] = None
-            answer["partial"] = sorted(set(answer.get("partial", [])) | {"permissions"})
         self._send(200, answer)
 
     def _client_evidence(self, body: bytes, kind: str) -> None:

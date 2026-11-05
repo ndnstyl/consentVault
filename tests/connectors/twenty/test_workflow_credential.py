@@ -402,7 +402,7 @@ def test_the_credential_checks_permission_only_and_every_check_names_it(env, clo
     tw = TwentyEnv(env, env.t.a)
     got = issue(env, env.t.a, tw.sys.system_id, now=datetime.now(timezone.utc))
     status, body = cloud.gate(cloud.a, "+15555552001", token=got["secret"])
-    assert status == 200 and body["evidence_status"] == "no_record"
+    assert status == 200 and body["status"] == "no_record_found"
     rows = env.q("SELECT requested_by FROM consentvault.gate_decision WHERE org_id = %s ORDER BY at DESC LIMIT 1",
                  [env.t.a.org_id])
     assert rows[0]["requested_by"] == str(got["credential_id"])

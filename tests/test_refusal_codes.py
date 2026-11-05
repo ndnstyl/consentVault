@@ -238,3 +238,32 @@ def test_every_trigger_guard_refusal_has_its_own_registered_code():
     assert len(raised) >= 15 and {s["template"].replace("'", "''") for s in sites} == raised
     codes = [s["code"] for s in json.loads(REGISTRY.read_text())["sites"]]
     assert len(codes) == len(set(codes))
+
+
+def test_no_registered_database_refusal_names_a_release_decision_that_can_no_longer_be_made():
+    templates = [s["template"] for s in json.loads(REGISTRY.read_text())["sites"]]
+    assert not [t for t in templates if "a release must decide" in t or "a release may name only" in t]
+    assert any("no release event can be written" in t for t in templates)
+    assert sum("stop lift:" in t for t in templates) == 3
+
+
+def test_every_registered_python_refusal_is_still_raised_and_the_release_failure_is_gone():
+    from consentvault import errors
+    assert not hasattr(errors, "ReleaseFailedError")
+    assert not any("release" in code for code in PYTHON_REFUSALS)
+
+
+def test_the_portal_help_lists_only_answers_a_capture_can_still_return():
+    """Every intake stores the post and answers 201, 202 or 503 store_unavailable (contracts/capture-api.md); the token request
+    can still answer 401 invalid_client. The refusals that were removed from intake are not in the help copy."""
+    copy = (ROOT / "portal" / "app" / "src" / "lib" / "copy.ts").read_text()
+    block = copy[copy.index("export const CAPTURE_REFUSALS"):]
+    block = block[:block.index("];")]
+    answers = re.findall(r"answer: '(\d{3}) (\w+)'", block)
+    assert answers == [("401", "invalid_client"), ("503", "store_unavailable")]
+    source = "".join(p.read_text() for p in SRC.rglob("*.py"))
+    for _status, name in answers:
+        assert name in source, f"the help names an answer no code returns: {name}"
+    for removed in ("UncheckedConsentError", "UnknownDisclosureError", "UnknownPurposeError", "GrantScopeError",
+                    "source_not_allowed", "brand_not_allowed", "org_not_active", "rate_limited", "key_unavailable"):
+        assert removed not in block, removed

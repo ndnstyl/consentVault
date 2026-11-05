@@ -263,22 +263,40 @@
    "defined_in": "0001_init.sql"
   },
   {
-   "code": "db_check_release_ref_tnxghq",
+   "code": "db_check_release_ref_jxwtng",
    "function": "consentvault.check_release_ref",
    "signature": "",
-   "line": 24,
-   "template": "consentvault release: a release may name only the channels and purposes of the grant it decides",
-   "meaning": "consentvault release: a release may name only the channels and purposes of the grant it decides",
-   "defined_in": "0068_release_needs_no_verification.sql"
+   "line": 6,
+   "template": "consentvault release: no release event can be written; a stop is lifted only by a later consent post from the person",
+   "meaning": "consentvault release: no release event can be written; a stop is lifted only by a later consent post from the person",
+   "defined_in": "0069_stop_lift.sql"
   },
   {
-   "code": "db_check_release_ref_zkmvqg",
-   "function": "consentvault.check_release_ref",
+   "code": "db_check_stop_lift_qrgzvq",
+   "function": "consentvault.check_stop_lift",
    "signature": "",
-   "line": 20,
-   "template": "consentvault release: a release must decide an earlier consumer grant of the same contact point",
-   "meaning": "consentvault release: a release must decide an earlier consumer grant of the same contact point",
-   "defined_in": "0068_release_needs_no_verification.sql"
+   "line": 13,
+   "template": "consentvault stop lift: the stop named is not a stop of this contact point",
+   "meaning": "consentvault stop lift: the stop named is not a stop of this contact point",
+   "defined_in": "0069_stop_lift.sql"
+  },
+  {
+   "code": "db_check_stop_lift_rgzzvt",
+   "function": "consentvault.check_stop_lift",
+   "signature": "",
+   "line": 28,
+   "template": "consentvault stop lift: the lifting post did not arrive after the stop",
+   "meaning": "consentvault stop lift: the lifting post did not arrive after the stop",
+   "defined_in": "0069_stop_lift.sql"
+  },
+  {
+   "code": "db_check_stop_lift_xkhskr",
+   "function": "consentvault.check_stop_lift",
+   "signature": "",
+   "line": 21,
+   "template": "consentvault stop lift: the lifting post is not matched to the same contact point",
+   "meaning": "consentvault stop lift: the lifting post is not matched to the same contact point",
+   "defined_in": "0069_stop_lift.sql"
   },
   {
    "code": "db_check_verified_claim_pznnzr",

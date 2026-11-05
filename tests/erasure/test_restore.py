@@ -95,6 +95,10 @@ def test_the_gate_answers_503_until_reconciliation_and_the_lost_work_comes_back(
             gap = su.execute("SELECT count(*) AS n FROM consentvault.audit_event WHERE org_id = %s"
                              " AND action = 'restore.stop_reingested'", (t.a.org_id,)).fetchone()["n"]
             assert gap == 1
+            cited = su.execute("SELECT count(*) AS n FROM consentvault.event_source_post s JOIN consentvault.raw_post p"
+                               " ON p.org_id = s.org_id AND p.post_id = s.post_id WHERE s.org_id = %s AND s.role = 'trigger'"
+                               " AND p.intake = 'restore'", (t.a.org_id,)).fetchone()["n"]
+            assert cited == 1  # the re-ingested stop is a stored post projected through the door, so a rebuild can reproduce it
     finally:
         if server2 is not None:
             server2.shutdown()

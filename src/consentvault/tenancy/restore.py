@@ -367,15 +367,18 @@ def _reingest(conn, crypto, *, key: str, object_id: str, fp: str, evidence: dict
         conn.execute("INSERT INTO consentvault.evidence_object (org_id, object_id, object_key, contact_fp, retain_until)"
                      " VALUES ((SELECT consentvault.current_org()), %s, %s, %s, %s)",
                      (object_id, key, fp, retain_until))
-    body = base64.urlsafe_b64decode(evidence["body_b64"] + "=" * (-len(evidence["body_b64"]) % 4))
-    ev = door.write_tenant_event(conn, crypto, payload=body, region=region, allowed_purposes=None, **_fields(evidence))
+    # the restored input goes in as a stored post of its own (the evidence's fields and the original bytes, whole) and through
+    # the door like every other post, so the event cites its post and a rebuild can reproduce it
+    outcome = door.record_observed(conn, crypto, intake="restore", region=region, allowed_purposes=None,
+                                   fields={**_fields(evidence), "payload_b64": evidence["body_b64"]})
+    event_id = outcome.event_id
     conn.execute("UPDATE consentvault.evidence_object SET status = 'committed', event_id = %s, sha256 = %s,"
                  " settled_at = clock_timestamp() WHERE org_id = (SELECT consentvault.current_org()) AND object_id = %s",
-                 (ev.event_id, sha256, object_id))
+                 (event_id, sha256, object_id))
     audit_org(conn, actor_kind="system", actor_id="restore", action="restore.stop_reingested", target_kind="event",
-              target_id=ev.event_id, reason=f"gap: object {object_id} was written after the restore point "
+              target_id=event_id, reason=f"gap: object {object_id} was written after the restore point "
               f"{restore_point.isoformat()} and had no ledger row; re-ingested as a new event", request_id=request_id)
-    return str(ev.event_id)
+    return str(event_id)
 
 
 def _objects(conn, *, crypto, store, inventory, org, restore_point, region, request_id: str) -> dict:

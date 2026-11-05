@@ -58,7 +58,8 @@ def test_a_store_failure_stores_the_post_and_derives_no_event_and_leaves_the_obj
     s, r = cloud.grant(cloud.a, X)
     assert s == 201 and r["stored"] is True and "event_id" not in r
     from .cloud_harness import facts_of, raw_posts
-    assert facts_of(cloud.t, raw_posts(cloud.t, cloud.a.org.org_id)[-1])["event_not_derived"] == "EvidenceStoreUnavailable"
+    last = facts_of(cloud.t, raw_posts(cloud.t, cloud.a.org.org_id)[-1])
+    assert "event_not_derived" not in last and "event_derived" not in last  # an outage passes: no outcome, the projection runs again
     with cloud.t.superuser() as su:
         assert su.execute("SELECT count(*) AS n FROM consentvault.event WHERE org_id = %s AND contact_fp IN"
                           " (SELECT contact_fp FROM consentvault.evidence_object)",
@@ -70,7 +71,7 @@ def test_a_failed_commit_leaves_the_object_pending_until_reconciled_by_the_worke
     assert cloud.grant(cloud.a, X)[0] == 201
 
     def broken(*a, **k):
-        raise psycopg.errors.QueryCanceled("simulated commit failure")
+        raise psycopg.errors.AdminShutdown("simulated commit failure: the server is shutting down")
     monkeypatch.setattr(capture_mod, "write_tenant_event", broken)
     s, r = cloud.grant(cloud.a, X)
     assert s == 201 and r["stored"] is True  # the post is stored before the event is tried; the event failing cannot remove it

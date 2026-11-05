@@ -37,6 +37,11 @@ $$;
 REVOKE ALL ON FUNCTION consentvault.arrival_at(uuid, uuid, timestamptz) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION consentvault.arrival_at(uuid, uuid, timestamptz) TO consentvault_app, consentvault_worker;
 
+-- Every login that may read the view needs the functions it calls: the operator console and the isolation self-test (which reads
+-- every tenant view and finds one it cannot read as a finding).
+GRANT EXECUTE ON FUNCTION consentvault.arrival_key(uuid, uuid, bigint, timestamptz), consentvault.arrival_key_seq(numeric),
+    consentvault.arrival_at(uuid, uuid, timestamptz) TO consentvault_console, consentvault_isolation_self_test;
+
 CREATE OR REPLACE VIEW consentvault.current_permission WITH (security_invoker = true) AS
 WITH exploded AS (
     SELECT e.org_id, e.contact_kind, e.contact_norm, e.contact_fp,

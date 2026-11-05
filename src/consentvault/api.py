@@ -1314,23 +1314,32 @@ def cloud_backends(settings: CloudApiSettings, pipeline):
                           **{i: ledger_backend for i in (*door.PROVIDER_INTAKES, *door.SYSTEM_INTAKES)}})
 
 
-def rebuild_cloud(settings: CloudApiSettings, org_ids, outcomes: list | None = None) -> int:
+def rebuild_cloud(settings: CloudApiSettings, org_ids, outcomes: list | None = None, failures: list | None = None) -> int:
     """The rebuild job for the multi-tenant vault: for each organisation, find every stored post that has no outcome and project
     it, in arrival order, with the credential the post was stored under. Safe to run twice and to run beside the live server.
-    Returns the number of posts it projected (events appended or reasons recorded)."""
+    Each organisation is isolated: one organisation's failure is logged by name, collected in ``failures`` (organisation id and
+    error class) and never ends the run for the organisations after it. When no list is given to collect them, the run still
+    goes through every organisation and then raises, naming each one that failed. Returns the number of posts it projected."""
     from . import door
     from .tenancy.tokens import mint_org_token, org_transaction
 
     pipeline, writer = _cloud_parts(settings)
     done = 0
+    failed: list = failures if failures is not None else []
     for org in org_ids:
-        read = mint_org_token(settings.token_key, org, ("gate_read",), credential_id=None, ttl_seconds=300)
-
-        with connect(settings.dsn) as conn:
-            projected = door.project_pending(writer, conn, lambda c: org_transaction(c, read), cloud_backends(settings, pipeline))
-            done += len(projected)
-            if outcomes is not None:
-                outcomes.extend(projected)
+        try:
+            read = mint_org_token(settings.token_key, org, ("gate_read",), credential_id=None, ttl_seconds=300)
+            with connect(settings.dsn) as conn:
+                projected = door.project_pending(writer, conn, lambda c: org_transaction(c, read), cloud_backends(settings, pipeline))
+        except Exception as exc:  # loud-failure-exempt: logged critical by name and returned in the failures; the other organisations still run
+            _log.critical("the rebuild of one organisation failed; the others go on", org_id=str(org), error=type(exc).__name__)
+            failed.append((org, type(exc).__name__))
+            continue
+        done += len(projected)
+        if outcomes is not None:
+            outcomes.extend(projected)
+    if failures is None and failed:
+        raise ConsentVaultError("the rebuild failed for organisation(s): " + ", ".join(f"{o} ({n})" for o, n in failed))
     return done
 
 

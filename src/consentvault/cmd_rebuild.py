@@ -35,16 +35,26 @@ def _run(args, cfg) -> int:
             failed = [o for o in outcomes if o.retry]
             print(json.dumps(_summary("single", outcomes, failed)))
             return EXIT_OK if not failed else _unfinished(len(failed))
-    from . import api, cmd_cloud, db
+    from . import api, cmd_cloud
 
     settings = cmd_cloud.build_cloud(cfg, os.environ)
-    with db.connect(cfg.require_operator_dsn()) as owner:
-        orgs = [r["org_id"] for r in owner.execute(
-            "SELECT org_id FROM consentvault.organization WHERE status <> 'closed' ORDER BY org_id").fetchall()]
+    with _connect(cfg) as listing:
+        orgs = [r["projection_org_ids"] for r in listing.execute("SELECT * FROM consentvault.projection_org_ids()").fetchall()]
+    if not orgs:
+        raise ConsentVaultError("the rebuild found no organisation to project; an empty list is never an answer here")
     outcomes: list = []
-    api.rebuild_cloud(settings, orgs, outcomes=outcomes)
+    org_failures: list = []
+    api.rebuild_cloud(settings, orgs, outcomes=outcomes, failures=org_failures)
     failed = [o for o in outcomes if o.retry]
-    print(json.dumps(_summary("multi-tenant", outcomes, failed)))
+    summary = _summary("multi-tenant", outcomes, failed)
+    summary["organisations_failed"] = len(org_failures)
+    print(json.dumps(summary))
+    if org_failures:
+        import sys
+
+        print("consentvault: the rebuild failed for " + ", ".join(f"{o} ({n})" for o, n in org_failures) +
+              "; every other organisation was projected", file=sys.stderr)
+        return EXIT_ERROR
     if failed:
         return _unfinished(len(failed))
     return EXIT_OK

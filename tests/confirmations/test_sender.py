@@ -1,5 +1,6 @@
 """confirmations.md sections 5 and 6: when a send happens, every skip, retries, the message, the contact log, billing."""
 
+import time
 import hashlib
 import threading
 from datetime import datetime, timedelta, timezone
@@ -467,7 +468,8 @@ def test_a_reply_from_a_number_with_no_record_is_kept_under_the_org_key_and_not_
     assert world.sql(o, "SELECT 1 FROM consentvault.contact_log WHERE org_id = %s AND recorded_by = 'confirmations'", (o.org_id,)) == []
     assert o.boss.ok("GET", "/v1/records", {})["items"] == []
     stack.clock.advance(days=31)
-    stack.service.purge(now=stack.clock())
+    # the reply is stamped on the database's clock (never the injected one), so the purge is run 31 days after that clock's time
+    stack.service.purge(now=time.time() + 31 * 86400)
     assert world.sql(o, "SELECT 1 FROM consentvault.confirmation_reply WHERE org_id = %s", (o.org_id,)) == []
 
 

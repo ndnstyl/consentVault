@@ -62,6 +62,11 @@ class Fact:
     value: Any
 
 
+def is_request_key(fact: Fact) -> bool:
+    """True for the fact that carries a request's own identity (its edge request id, request id header or signature)."""
+    return fact.source == "vault" and fact.name == "request_key" and isinstance(fact.value, str) and fact.value != ""
+
+
 @dataclass(frozen=True)
 class RawRequest:
     intake: str
@@ -319,6 +324,9 @@ class RawPostWriter:
                     conn.execute("INSERT INTO consentvault.raw_post_fact (org_id, post_id, fact_id, source, name, value_ct,"
                                  " arrival_ordinal) VALUES (%s, %s, %s, %s, %s, %s, %s)",
                                  (org, post_id, uuid.uuid4(), source, name, value_ct, i))
+                for fact in req.facts:
+                    if is_request_key(fact):
+                        self.record_request_key(conn, org, post_id, fact.value)
         except StoreUnavailable:
             raise
         except ConsentVaultError as exc:  # provider, key and store failures all mean the same: nothing was stored
@@ -335,6 +343,19 @@ class RawPostWriter:
                      " VALUES (%s, %s, %s, %s, %s, %s)",
                      (org, post_id, uuid.uuid4(), _db_text(fact.source), _db_text(fact.name),
                       self._seal(key, org, post_id, COL_FACT, raw)))
+        if is_request_key(fact):
+            self.record_request_key(conn, org, post_id, fact.value)
+
+    @staticmethod
+    def record_request_key(conn: psycopg.Connection, org: uuid.UUID, post_id: uuid.UUID, request_key: str) -> None:
+        """The request key beside the post as a column of its own, indexed: an event is placed by the earliest post that carries
+        its key. A post has one key; the first one recorded stays."""
+        try:
+            with conn.transaction():
+                conn.execute("INSERT INTO consentvault.raw_post_request (org_id, post_id, request_key) VALUES (%s, %s, %s)",
+                             (org, post_id, _db_text(request_key)))
+        except psycopg.errors.UniqueViolation:  # loud-failure-exempt: the post already carries a request key; the first one recorded stays
+            return
 
     def add_facts(self, conn: psycopg.Connection, enter: Callable, stored: StoredPost, facts: Iterable[Fact]) -> None:
         """Facts learned after the post committed (appended; never changes the post)."""

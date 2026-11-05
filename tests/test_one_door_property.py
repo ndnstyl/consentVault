@@ -9,7 +9,8 @@ lines. Each entry point is an adapter: it hands the request to the one door and 
   3. a stop always counts;
   4. only that person's later form consent lifts a stop;
   5. a duplicate (the same signed request again) changes nothing;
-  6. a crash at any point, then a re-run of the projection, gives the same history;
+  6. a crash at any point, then a re-run of the projection, gives the same history, and a replay of every post from an empty
+     projection gives the same history fingerprint (the record contract's third gate);
   7. every adapter gives the same answer for the same sequence (each is compared with the one reference, so with each other).
 
 The test talks only to the entry points and to the stored result (raw_post, event), so it survives the redesign. The re-run is
@@ -22,14 +23,17 @@ library's system intake, which brings every earlier post up to date before it is
 is stored, its own error is its own stored reason, and it never stops a later post from counting.
 """
 
+import hashlib
 import json
 import random
 import secrets
 import time
+import uuid
 
+import psycopg
 import pytest
 
-from consentvault import api, rawpost
+from consentvault import api, door, rawpost
 from consentvault.errors import ConsentVaultError
 from test_api import SECRET, TOKEN, VERIFIED_SECRET, PURPOSES, _call, _serve
 
@@ -139,23 +143,29 @@ class Library:
         common = dict(contact=CONTACTS[person], channels=["sms"], purposes=["marketing"], region="US", allowed_purposes=PURPOSES,
                       session_ref="lib-%d" % self.count)
         self.count += 1
-        if fail:  # a failure is raised to the caller in this process, after the post is stored or not
-            with pytest.raises(ConsentVaultError):
-                self.send(kind, person, ref)
+        if fail:  # a failure is raised to the caller in this process (or answered stored-and-waiting behind an unfinished earlier post)
+            try:
+                answer = self.send(kind, person, ref)
+            except ConsentVaultError:
+                return
+            assert isinstance(answer, door.StoredWaiting), answer
             return
         if kind == "stop":
-            revoke(self.conn, method="keyword", origin="consumer", **common)
+            return revoke(self.conn, method="keyword", origin="consumer", **common)
         elif kind == "start":
-            with pytest.raises(ConsentVaultError):  # a text is stored as a post and creates no consent
-                capture_verified(self.conn, verification="inbound_keyword", inbound_message="START", checked=True,
-                                 disclosure_sha256=self.disclosure, **common)
+            try:  # a text is stored as a post and creates no consent
+                answer = capture_verified(self.conn, verification="inbound_keyword", inbound_message="START", checked=True,
+                                          disclosure_sha256=self.disclosure, **common)
+            except ConsentVaultError:
+                return
+            assert isinstance(answer, door.StoredWaiting), answer
         else:
-            capture(self.conn, checked=True, disclosure_sha256=self.disclosure, **common)
+            return capture(self.conn, checked=True, disclosure_sha256=self.disclosure, **common)
 
 
 class Cli:
-    def __init__(self, dsn, disclosure, monkeypatch):
-        self.disclosure, self.count = disclosure, 0
+    def __init__(self, dsn, disclosure, monkeypatch, capsys):
+        self.disclosure, self.count, self.capsys = disclosure, 0, capsys
         monkeypatch.setenv("CONSENTVAULT_DSN", dsn)
         monkeypatch.setenv("CONSENTVAULT_DEFAULT_REGION", "US")
         monkeypatch.setenv("CONSENTVAULT_PURPOSES", "marketing")
@@ -178,7 +188,10 @@ class Cli:
             code = cli.main(argv)
         except SystemExit as exc:  # loud-failure-exempt: the exit code is the answer under test
             code = exc.code
-        assert (code not in (0, None)) if (kind == "start" or fail) else code == 0, (argv, code)
+        if kind == "start" or fail:   # an error exit, or stored-and-waiting behind an unfinished earlier post (exit 0, answered by name)
+            assert code in (0, None) and '"waiting": true' in self.capsys.readouterr().out or code not in (0, None), (argv, code)
+        else:
+            assert code == 0, (argv, code)
 
 
 def history(conn) -> dict[int, list[str]]:
@@ -189,17 +202,63 @@ def history(conn) -> dict[int, list[str]]:
     return out
 
 
+def fingerprint(conn) -> str:
+    """The history as the vault tells it, as one hash: every event in the order of the post that placed it (the earliest post
+    carrying its request key), with what the event says. Independent of the order the projection wrote the events in, of which
+    copy of a request produced one, and of the event's own sequence number."""
+    rows = conn.execute(
+        "SELECT consentvault.arrival_post_seq(e.org_id, e.event_id) AS place, e.contact_norm, e.event_type, e.channels,"
+        " e.purposes, e.method, e.origin, e.session_ref FROM consentvault.event e"
+        " WHERE e.event_type IN ('grant', 'revoke', 'suppress') ORDER BY place, e.contact_norm, e.event_type, e.session_ref").fetchall()
+    return hashlib.sha256(json.dumps([[r["place"], r["contact_norm"], r["event_type"], list(r["channels"]), list(r["purposes"]),
+                                       r["method"], r["origin"], r["session_ref"]] for r in rows]).encode()).hexdigest()
+
+
+def replay_from_empty(conn, pg_server) -> str:
+    """Every stored post is written again, in arrival order and with the facts known at arrival, into a database with nothing in
+    it, and projected there by the same rebuild. Returns that database's history fingerprint."""
+    import conftest
+    from consentvault import db, door
+    from consentvault.rawpost import Fact, RawPostWriter, RawRequest
+
+    port, name = pg_server["port"], "t_" + uuid.uuid4().hex[:12]
+    conftest.ensure_roles(port)
+    conftest.create_vault_database(port, name)
+    empty_dsn = conftest._dsn(port, name, conftest.MIGRATOR_ROLE)
+    try:
+        with db.connect(empty_dsn) as c:
+            db.migrate(c)
+        conftest.pin_as_superuser(empty_dsn)
+        with db.connect(empty_dsn) as empty:
+            from consentvault import disclosure as wording   # the registered wording the posts point to is reference data, not projection
+            wording.register(empty, "I agree to be contacted by text.", "test-form", "en", ["sms"], ["marketing"])
+            writer = RawPostWriter()
+            for p in conn.execute("SELECT * FROM consentvault.raw_post WHERE kind = 'post' ORDER BY seq").fetchall():
+                facts = tuple(Fact(f["source"], f["name"], json.loads(bytes(f["value_ct"]))) for f in conn.execute(
+                    "SELECT source, name, value_ct FROM consentvault.raw_post_fact WHERE post_id = %s AND arrival_ordinal IS NOT NULL"
+                    " ORDER BY arrival_ordinal", (p["post_id"],)).fetchall())
+                writer.write(empty, None, RawRequest(
+                    intake=p["intake"], method=p["method"], path=p["path"], query=bytes(p["query_ct"]),
+                    headers=tuple((n, v) for n, v in json.loads(bytes(p["headers_ct"]))), body=bytes(p["body_ct"]), facts=facts,
+                    headers_presented_by=p["headers_presented_by"]))
+            door.rebuild(empty)
+            door.rebuild(empty)
+            return fingerprint(empty)
+    finally:
+        with psycopg.connect(conftest._dsn(port, "postgres"), autocommit=True) as admin:
+            admin.execute(f'DROP DATABASE "{name}" WITH (FORCE)')
+
+
 @pytest.mark.parametrize("adapter_name", ["http", "library", "cli"])
 @pytest.mark.parametrize("seed", SEEDS)
-def test_every_adapter_gives_the_reference_history_for_a_random_sequence(adapter_name, seed, dsn, app_dsn, conn, disclosure, monkeypatch):
+def test_every_adapter_gives_the_reference_history_for_a_random_sequence(adapter_name, seed, dsn, app_dsn, conn, disclosure, monkeypatch, pg_server, capsys):
     ops = make_sequence(seed, adapter_name == "http")
     posts_seen: list = []
     adapter = {"http": lambda: Http(app_dsn, disclosure), "library": lambda: Library(conn, disclosure),
-               "cli": lambda: Cli(dsn, disclosure, monkeypatch)}[adapter_name]()
+               "cli": lambda: Cli(dsn, disclosure, monkeypatch, capsys)}[adapter_name]()
     try:
         for (kind, person, ref), base in zip(ops, base_kinds(ops)):
             if kind.startswith("crash"):
-                from consentvault import door  # the one door; absent before the redesign, which fails this test by name
 
                 def crash(*a, **k):
                     raise RuntimeError("crash between the answer and the projection")
@@ -212,7 +271,6 @@ def test_every_adapter_gives_the_reference_history_for_a_random_sequence(adapter
                             adapter.send(base, person, ref)
             elif kind.startswith("fault_"):
                 import psycopg
-                from consentvault import door
                 from consentvault.errors import LedgerError
                 real, calls = door.record_event, {"n": 0}
 
@@ -251,11 +309,14 @@ def test_every_adapter_gives_the_reference_history_for_a_random_sequence(adapter
                 if adapter_name == "http":
                     adapter.send_poison(poison)
                 else:
-                    from consentvault import door
-                    with pytest.raises(Exception):  # the caller in this process is told; the post is stored all the same
-                        door.submit(conn, intake="library", region="US", allowed_purposes=PURPOSES, payload=poison)
+                    try:  # the caller in this process is told (or answered stored-and-waiting behind an unfinished post); the post is stored all the same
+                        answer = door.submit(conn, intake="library", region="US", allowed_purposes=PURPOSES, payload=poison)
+                    except Exception:
+                        pass
+                    else:
+                        assert isinstance(answer, door.StoredWaiting), answer
             elif kind == "door_stop":
-                from consentvault import door  # a stop through another door: the library's system intake
+                # a stop through another door: the library's system intake
                 door.submit(conn, intake="system_stop", region="US", allowed_purposes=PURPOSES, payload={
                     "contact": CONTACTS[person], "event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"],
                     "method": "keyword", "origin": "consumer", "session_ref": "door-%d" % len(posts_seen)})
@@ -272,12 +333,15 @@ def test_every_adapter_gives_the_reference_history_for_a_random_sequence(adapter
     assert rawpost.verify_raw_chain(conn) == []
 
     # 2, 3, 5: a text creates nothing, a stop counts, a duplicate changes nothing: the history is the reference history
-    from consentvault import door
     monkeypatch.setattr(door, "HALT_CAP_SECONDS", 0)   # the history is compared once nothing waits behind an unfinished post (the halt is tested apart)
     door.rebuild(conn)  # 6. a crash, then a re-run of the projection: the same history; and a second re-run changes nothing
     assert history(conn) == want, f"{adapter_name}: history differs from the reference fold"
     door.rebuild(conn)
     assert history(conn) == want
+
+    # 3 (the record contract). The same history from empty: every post replayed into a database with nothing in it, in arrival
+    #    order, gives the identical history fingerprint, whichever copy of a request projected first here and whatever crashed.
+    assert replay_from_empty(conn, pg_server) == fingerprint(conn), f"{adapter_name}: a replay from empty gives another history"
 
     # 4. only that person's later form consent lifts a stop: the last event of each person is a grant only when their own consent
     #    post came after their last stop, and every event cites the one post it came from (events are a projection, never a source)

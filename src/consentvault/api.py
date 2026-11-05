@@ -1330,7 +1330,9 @@ def rebuild_cloud(settings: CloudApiSettings, org_ids, outcomes: list | None = N
         try:
             read = mint_org_token(settings.token_key, org, ("gate_read",), credential_id=None, ttl_seconds=300)
             with connect(settings.dsn) as conn:
-                projected = door.project_pending(writer, conn, lambda c: org_transaction(c, read), cloud_backends(settings, pipeline))
+                enter_org = lambda c: org_transaction(c, read)
+                door.backfill_request_keys(writer, conn, enter_org)
+                projected = door.project_pending(writer, conn, enter_org, cloud_backends(settings, pipeline))
         except Exception as exc:  # loud-failure-exempt: logged critical by name and returned in the failures; the other organisations still run
             _log.critical("the rebuild of one organisation failed; the others go on", org_id=str(org), error=type(exc).__name__)
             failed.append((org, type(exc).__name__))

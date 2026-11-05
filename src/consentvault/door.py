@@ -652,11 +652,39 @@ def _unreadable_post(conn, enter, row, exc: BaseException) -> Outcome:
     return Outcome(row["post_id"], reason=reason, retry=True, halts=True)
 
 
+def backfill_request_keys(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None) -> int:
+    """Record the request key of every stored post that carries one and has none recorded as a column yet: a post stored before the
+    column existed, or one whose key was learned in a way that bypassed the writer. The key is read from the post's own stored
+    facts (the database alone cannot open them), never recomputed. A post whose facts cannot be opened is logged by name and left
+    for the next run; it never stops the others. Returns how many were recorded."""
+    with _ctx(conn, enter):
+        todo = conn.execute(
+            "SELECT DISTINCT f.org_id::text AS org, f.post_id::text AS post_id FROM consentvault.raw_post_fact f"
+            " WHERE f.org_id = (SELECT consentvault.current_org()) AND f.source = 'vault' AND f.name = 'request_key'"
+            "   AND NOT EXISTS (SELECT 1 FROM consentvault.raw_post_request q WHERE q.org_id = f.org_id AND q.post_id = f.post_id)"
+            ).fetchall()
+    done = 0
+    for r in todo:
+        try:
+            with _ctx(conn, enter):
+                key = writer.read_facts(conn, uuid.UUID(r["org"]), r["post_id"]).get(("vault", "request_key"))
+                if isinstance(key, str) and key:
+                    RawPostWriter.record_request_key(conn, uuid.UUID(r["org"]), uuid.UUID(r["post_id"]), key)
+                    done += 1
+        except Exception as exc:  # loud-failure-exempt: logged by post; the next run tries again and no other post waits on it
+            _log.error("the request key of a stored post could not be recorded as a column; the next run tries again",
+                       post_id=r["post_id"], error=type(exc).__name__)
+    return done
+
+
 def rebuild(conn: psycopg.Connection, *, backend: Any = None, writer: RawPostWriter | None = None,
             enter: Callable | None = None) -> list[Outcome]:
     """Run the projection again over everything stored. A crash between a post's answer and its event is repaired by this and
-    nothing else; running it twice changes nothing."""
-    return project_pending(writer or RawPostWriter(), conn, enter, backend or SingleBackend())
+    nothing else; running it twice changes nothing. Every post's request key is a column first, so an event is placed by the
+    earliest post carrying its key."""
+    writer = writer or RawPostWriter()
+    backfill_request_keys(writer, conn, enter)
+    return project_pending(writer, conn, enter, backend or SingleBackend())
 
 
 class TenantLedgerBackend:

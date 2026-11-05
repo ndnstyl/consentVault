@@ -342,14 +342,15 @@ def tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None,
     def tl_shape(r):
         sealed_at = seals.get(str(r["event_id"]))
         return {"event_id": str(r["event_id"]), "seq": r["seq"], "event_type": r["event_type"],
-                "at": _iso_z(r["received_at"]), "channels": list(r["channels"]), "purposes": list(r["purposes"]),
+                "at": _iso_z(r["arrival_at"]), "channels": list(r["channels"]), "purposes": list(r["purposes"]),
                 "source_id": str(r["source_id"]) if r["source_id"] else None,
                 "brand_ids": [str(b) for b in (r["brand_ids"] or [])], "disclosure_sha256": r["disclosure_sha256"],
                 "sealed": sealed_at is not None, "sealed_at": _iso_z(sealed_at),
-                "recorded_during_trial": during_trial(r["received_at"])}
+                "recorded_during_trial": during_trial(r["arrival_at"])}
 
-    timeline = paged("timeline", "SELECT * FROM consentvault.event WHERE org_id = consentvault.current_org()"
-                     " AND event_id = ANY(%s::uuid[])", ([str(i) for i in ids],), ("received_at", "seq"), True,
+    timeline = paged("timeline", "SELECT * FROM (SELECT e.*, consentvault.arrival_at(e.org_id, e.event_id, e.received_at) AS arrival_at"
+                     " FROM consentvault.event e WHERE e.org_id = consentvault.current_org()"
+                     " AND e.event_id = ANY(%s::uuid[])) arrived WHERE true", ([str(i) for i in ids],), ("arrival_at", "seq"), True,
                      tl_shape) if "timeline" not in partial else None
     gate_decisions = paged(
         "gate_decisions", "SELECT * FROM consentvault.gate_decision WHERE org_id = consentvault.current_org()"

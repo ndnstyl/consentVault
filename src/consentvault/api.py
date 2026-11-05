@@ -172,14 +172,6 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
         except ValueError:
             sent = float("nan")
         finite = math.isfinite(sent)
-        fresh = False
-        if finite:
-            try:
-                with connect(self.settings.dsn) as conn:   # freshness is judged on the database's clock, never this host's
-                    fresh = abs(dbclock.epoch(conn) - sent) <= self.settings.replay_window
-            except psycopg.Error as exc:
-                _log.error("events clock unavailable; request refused", error=type(exc).__name__)
-                return f"clock_unavailable:{type(exc).__name__}", False
         by_verified = match_verified and not match_edge
         if not ts or not sig:
             return "unsigned", False
@@ -187,8 +179,15 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
             return "bad_signature", False
         if not finite:
             return "bad_timestamp", False
+        try:
+            with connect(self.settings.dsn) as conn:   # freshness is judged on the database's clock, never this host's
+                fresh = abs(dbclock.epoch(conn) - sent) <= self.settings.replay_window
+        except psycopg.Error as exc:
+            # the signature is valid and its age could not be read: a fact beside the post, never a reason to lose a stop
+            _log.error("events clock unavailable; the age of a signed request is stored as unchecked", error=type(exc).__name__)
+            return f"clock_unavailable:{type(exc).__name__}", by_verified
         if not fresh:
-            return "stale_timestamp", False
+            return "stale_timestamp", by_verified
         return None, by_verified
 
     def _guard(self) -> bool:
@@ -1303,7 +1302,7 @@ def cloud_backends(settings: CloudApiSettings, pipeline):
                           **{i: ledger_backend for i in (*door.PROVIDER_INTAKES, *door.SYSTEM_INTAKES)}})
 
 
-def rebuild_cloud(settings: CloudApiSettings, org_ids) -> int:
+def rebuild_cloud(settings: CloudApiSettings, org_ids, outcomes: list | None = None) -> int:
     """The rebuild job for the multi-tenant vault: for each organisation, find every stored post that has no outcome and project
     it, in arrival order, with the credential the post was stored under. Safe to run twice and to run beside the live server.
     Returns the number of posts it projected (events appended or reasons recorded)."""
@@ -1316,8 +1315,10 @@ def rebuild_cloud(settings: CloudApiSettings, org_ids) -> int:
         read = mint_org_token(settings.token_key, org, ("gate_read",), credential_id=None, ttl_seconds=300)
 
         with connect(settings.dsn) as conn:
-            done += len(door.project_pending(writer, conn, lambda c: org_transaction(c, read),
-                                             cloud_backends(settings, pipeline)))
+            projected = door.project_pending(writer, conn, lambda c: org_transaction(c, read), cloud_backends(settings, pipeline))
+            done += len(projected)
+            if outcomes is not None:
+                outcomes.extend(projected)
     return done
 
 

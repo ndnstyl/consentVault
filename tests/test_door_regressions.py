@@ -1,5 +1,6 @@
 import json, time
 import psycopg
+import pytest
 from consentvault import api, door, rawpost, ledger
 from consentvault.errors import LedgerError
 from test_api import SECRET, TOKEN, VERIFIED_SECRET, PURPOSES, _call, _serve
@@ -57,3 +58,48 @@ def test_a_transient_ledger_fault_is_never_projected_again(app_dsn, conn, monkey
     door.rebuild(conn); door.rebuild(conn)
     print("REPRO-B", s1, "revokes", _revokes(conn), _facts(conn))
     assert _revokes(conn) == 1
+
+
+def _signed(payload, age=0):
+    body = json.dumps(payload).encode()
+    ts = str(int(time.time()) - age)
+    return body, {"Content-Type": "application/json", api.TIMESTAMP_HEADER: ts, api.SIGNATURE_HEADER: api.sign(SECRET, ts, body)}
+
+
+def test_a_late_redelivered_stop_still_counts_but_a_late_grant_does_not(app_dsn, conn, disclosure):
+    gen = _serve(_settings(app_dsn)); base = next(gen)
+    stop = {"contact": "+12125550113", "event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"],
+            "method": "keyword", "origin": "consumer"}
+    grant = {"contact": "+12125550114", "event_type": "grant", "channels": ["sms"], "purposes": ["marketing"],
+             "method": "checkbox", "origin": "consumer", "checked": True, "disclosure_sha256": disclosure}
+    s1, _, _ = _call(base + "/v1/events", "POST", *_signed(stop, age=86400)); base.settle()
+    s2, _, _ = _call(base + "/v1/events", "POST", *_signed(grant, age=86400)); base.settle()
+    gen.close()
+    door.rebuild(conn)
+    assert (s1, s2) == (201, 201)
+    assert _revokes(conn) == 1
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE event_type='grant'").fetchone()["n"] == 0
+
+
+def test_a_stop_signed_while_the_clock_read_failed_still_counts(app_dsn, conn, monkeypatch):
+    from consentvault import dbclock
+    gen = _serve(_settings(app_dsn)); base = next(gen)
+    def down(_conn):
+        raise psycopg.OperationalError("the clock read failed")
+    monkeypatch.setattr(dbclock, "epoch", down)
+    body, headers = _stop("+12125550115")
+    s1, _, _ = _call(base + "/v1/events", "POST", body, headers); base.settle()
+    gen.close()
+    door.rebuild(conn)
+    assert s1 == 201 and _revokes(conn) == 1
+
+
+def test_every_projection_names_the_code_version_that_produced_it(app_dsn, conn):
+    gen = _serve(_settings(app_dsn)); base = next(gen)
+    body, headers = _stop("+12125550116")
+    _call(base + "/v1/events", "POST", body, headers); base.settle()
+    gen.close()
+    door.rebuild(conn)
+    versions = [r["n"] for r in conn.execute("SELECT count(*) AS n FROM consentvault.raw_post_fact WHERE name = 'projection_code_version'")]
+    assert versions == [1]
+

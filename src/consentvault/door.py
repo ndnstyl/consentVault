@@ -20,6 +20,7 @@ anything at intake.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import hashlib
 import json
@@ -54,7 +55,7 @@ CAPTURE_KEYS = frozenset({
     "checked", "inbound_message", "source_id", "brand_ids", "attribution", "display"})
 PROVIDER_INTAKES = ("sms_reply",)
 SYSTEM_INTAKES = ("system_stop", "signal", "stop_page", "restore", "erasure", "provider_refusal", "staff_marked")
-SYSTEM_FIELDS = (*EVENT_FIELDS, "source_id", "brand_ids", "attribution", "source_system_id")
+SYSTEM_FIELDS = (*EVENT_FIELDS, "source_id", "brand_ids", "attribution", "source_system_id", "payload_b64")
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -143,7 +144,9 @@ def _read_text_reply(body: bytes, code_version: str, sha: str) -> Reading:
 class Auth:
     """What the intake established about the sender, read from the facts stored beside the post."""
 
-    reason: str | None = None       # why this post cannot produce an event (not_authenticated:<why>, replay, stale_timestamp ...)
+    reason: str | None = None       # why this post cannot produce an event (not_authenticated:<why>, stale_timestamp ...)
+    soft: bool = False              # the reason is a fact about age or a lookup outage: a stop is counted anyway
+    pending: bool = False           # the intake could not finish its lookup: the post waits, it is neither refused nor counted
     key: str | None = None          # the request's own identity (its signature, the edge's request id, a request id header)
     verified_key: bool = False      # the verified-grant secret signed it (or a local caller the vault trusts)
     org_id: str = ""
@@ -160,27 +163,27 @@ def auth_from_facts(facts: Mapping[tuple[str, str], Any]) -> Auth:
     cred = vault("credential")
     cred = cred if isinstance(cred, dict) and cred.get("state") == "verified" else None
 
-    def auth(reason):
-        return Auth(reason, key, verified, credential=cred)
+    def auth(reason, soft=False, pending=False):
+        return Auth(reason, key=key, verified_key=verified, credential=cred, soft=soft, pending=pending)
 
-    if vault("request_signature") not in (None, "valid"):
-        return auth("not_authenticated:" + str(vault("request_signature")))
+    sig = vault("request_signature")
+    if sig not in (None, "valid"):
+        return auth("not_authenticated:" + str(sig), soft=str(sig) == "stale_timestamp" or str(sig).startswith("clock_unavailable:"))
     if vault("tenant") is True:
         if vault("edge_timestamp") == "stale":
-            return auth("stale_timestamp")
-        if vault("replay", "fresh") != "fresh":
-            return auth("replay")
+            return auth("stale_timestamp", soft=True)
+        if cred is None and str(vault("site_key_lookup", "")).startswith("failed:"):
+            return auth("site_key_lookup_failed", pending=True)
         return auth(None if cred is not None else "no_credential")
-    if vault("request_signature") is None:
+    if sig is None:
         return auth("not_authenticated:unsigned")
-    if vault("replay", "fresh") != "fresh":
-        return auth("replay")
     return auth(None)
 
 
 def decide(reading: Reading, auth: Auth, seen_keys: Callable[[str], bool] | set) -> str | None:
     """The fold rule for one post: None when it produces one event, else the plain reason it produces none. Pure."""
-    if auth.reason:
+    stop = reading.kind == "event" and reading.payload.get("event_type") in ("revoke", "suppress")
+    if auth.reason and not (auth.soft and stop):
         return auth.reason
     if reading.kind != "event":
         return reading.reason or REASON_TEXT
@@ -332,6 +335,7 @@ class Outcome:
     post_id: str
     event_id: str | None = None
     reason: str | None = None
+    retry: bool = False   # a passing fault: nothing was stored as refused, and the next projection repeats it
 
 
 def store_raw(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, req: RawRequest) -> StoredPost:
@@ -389,6 +393,9 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
     reading = read_post(view.body, field_map, CODE_VERSION, intake=view.intake, context=_view_context(view))
     auth = replace(auth_from_facts(view.facts), org_id=view.org_id)
     org = uuid.UUID(view.org_id)
+    if auth.pending:
+        _log.error("a stored post waits for its intake's lookup to be repeated; it is not refused", reason=auth.reason)
+        return Outcome(view.post_id, reason=auth.reason, retry=True)
 
     def link(c, event_id):
         c.execute("INSERT INTO consentvault.event_source_post (org_id, event_id, post_id, role, request_key)"
@@ -419,7 +426,7 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
             _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason))
         if raise_errors:
             raise
-        return Outcome(view.post_id, reason=reason)
+        return Outcome(view.post_id, reason=reason, retry=retryable(exc))
     _record(writer, conn, enter, view, outcome)
     if raise_errors and outcome.event_id is None:
         if outcome.reason == REASON_TEXT:
@@ -462,7 +469,8 @@ def _record(writer, conn, enter, view: PostView, outcome: Outcome) -> Outcome:
     try:
         fact = Fact("vault", "event_derived", outcome.event_id) if outcome.event_id is not None else \
             Fact("vault", "event_not_derived", outcome.reason)
-        writer.append_facts(conn, enter, view.org_id, view.post_id, view.facts.get(("__key__", "data_key")), [fact])
+        writer.append_facts(conn, enter, view.org_id, view.post_id, view.facts.get(("__key__", "data_key")),
+                            [fact, Fact("vault", "projection_code_version", CODE_VERSION)])
     except (ConsentVaultError, psycopg.Error) as exc:
         _log.error("the outcome of a stored post could not be recorded beside it", error=type(exc).__name__)
     return outcome
@@ -541,6 +549,9 @@ class TenantLedgerBackend:
                     return f"bad_{name}"
         fields.setdefault("method", "checkbox")
         fields.setdefault("origin", "consumer")
+        if "payload_b64" in fields:   # the original bytes a restore re-ingests, carried whole inside the post
+            text = str(fields.pop("payload_b64"))
+            fields["payload"] = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
         fields["region"], fields["allowed_purposes"] = self.region, self.allowed_purposes
         if self.enter_for_org is not None:
             fields["_org"] = auth.org_id

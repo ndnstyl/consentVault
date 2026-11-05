@@ -16,28 +16,31 @@ def _revokes(conn, contact):
 
 STOP = {"contact": "+12125550171", "event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"], "method": "keyword", "origin": "consumer"}
 
-def _run(app_dsn, conn, poison, monkeypatch):
-    monkeypatch.setattr(door, "HALT_CAP_SECONDS", 0)
+def _store_both(app_dsn, poison):
     gen = _serve(_settings(app_dsn)); base = next(gen)
     s1, _, _ = _call(base + "/v1/events", "POST", *_signed(poison)); base.settle()
     s2, _, _ = _call(base + "/v1/events", "POST", *_signed(STOP)); base.settle()
     gen.close()
-    errs = []
-    for _ in range(2):
-        try:
-            outs = door.rebuild(conn)
-            errs.append([(o.reason, o.retry, o.halts) for o in outs])
-        except Exception as exc:
-            errs.append("RAISED " + type(exc).__name__ + ": " + str(exc)[:120])
-    n = _revokes(conn, "+12125550171")
-    print("R2", s1, s2, "later stop revokes:", n, errs)
-    return n
+    assert (s1, s2) == (201, 201)
 
-def test_type_poison_stalls_later_stop(app_dsn, conn, disclosure, monkeypatch):
+def test_type_poison_is_the_readers_own_refusal_so_it_is_final_and_holds_nobody(app_dsn, conn, disclosure):
     poison = {"contact": "+12125550170", "event_type": "grant", "channels": 5, "purposes": ["marketing"], "method": "checkbox",
               "origin": "consumer", "checked": True, "disclosure_sha256": disclosure}
-    assert _run(app_dsn, conn, poison, monkeypatch) == 1
+    _store_both(app_dsn, poison)
+    door.rebuild(conn)
+    assert _revokes(conn, "+12125550171") == 1
+    door.rebuild(conn)
+    assert _revokes(conn, "+12125550171") == 1
 
-def test_index_size_poison_halts_later_stop(app_dsn, conn, monkeypatch):
+def test_index_size_poison_holds_the_stop_behind_it_for_the_bound_from_its_first_attempt_and_then_the_stop_goes_ahead(app_dsn, conn, monkeypatch):
     poison = dict(STOP, contact="+12125550172", subject_key=secrets.token_hex(6000))
-    assert _run(app_dsn, conn, poison, monkeypatch) == 1
+    _store_both(app_dsn, poison)
+    outs = door.rebuild(conn)   # the poison post fails at the database: no error is final, so it is unfinished and holds the stop
+    assert _revokes(conn, "+12125550171") == 0
+    assert [(o.retry, o.halts) for o in outs] == [(True, True), (True, False)]
+    monkeypatch.setattr(door, "HALT_CAP_SECONDS", 0)   # the bound since its first attempt has run out
+    outs = door.rebuild(conn)
+    assert _revokes(conn, "+12125550171") == 1
+    assert [o.retry for o in outs] == [True, False]
+    door.rebuild(conn)
+    assert _revokes(conn, "+12125550171") == 1

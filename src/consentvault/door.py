@@ -606,12 +606,16 @@ HALT_CAP_SECONDS = 900
 def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, backend: Any, *,
                     through_seq: int | None = None, intakes: tuple[str, ...] | None = None) -> list[Outcome]:
     """Run the projection for every stored post that has no outcome yet, in arrival order. Safe to run any number of times. A
-    post's own error is that post's outcome and never the queue's. A faulted post halts the posts behind it only while it is
-    younger than ``HALT_CAP_SECONDS``: past that, later posts go ahead, so no post blocks the others forever."""
+    post's own error is that post's outcome and never the queue's. A faulted post halts the posts behind it only until
+    ``HALT_CAP_SECONDS`` have passed since its first recorded attempt (not since it arrived): after that the posts behind it go
+    ahead, the faulted post is tried again on every run, and no post blocks the others for long. The posts held behind it are
+    returned as unfinished, named, never skipped silently."""
     with _ctx(conn, enter):
         rows = conn.execute(
             "SELECT p.org_id::text AS org, p.post_id::text AS post_id, p.seq, p.intake, p.method, p.path,"
-            " EXTRACT(EPOCH FROM p.received_at)::float8 AS arrived, EXTRACT(EPOCH FROM (clock_timestamp() - p.received_at))::float8 AS age_s FROM consentvault.raw_post p"
+            " EXTRACT(EPOCH FROM p.received_at)::float8 AS arrived,"
+            " (SELECT EXTRACT(EPOCH FROM (clock_timestamp() - min(a.attempted_at)))::float8 FROM consentvault.projection_attempt a"
+            "   WHERE a.org_id = p.org_id AND a.post_id = p.post_id) AS attempt_age_s FROM consentvault.raw_post p"
             " WHERE p.org_id = (SELECT consentvault.current_org()) AND p.kind = 'post'"
             "   AND (%s::bigint IS NULL OR p.seq <= %s) AND (%s::text[] IS NULL OR p.intake = ANY(%s))"
             "   AND NOT EXISTS (SELECT 1 FROM consentvault.event_source_post s WHERE s.org_id = p.org_id"
@@ -629,8 +633,9 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
             outcome = _unreadable_post(conn, enter, r, exc)
         else:
             outcome = project_view(writer, conn, enter, backend, view)
-        if outcome.halts and r["age_s"] >= HALT_CAP_SECONDS:
-            _log.error("a stored post has not been projectable for a long time; the posts behind it go ahead", elapsed_s=int(r["age_s"]))
+        elapsed = r["attempt_age_s"] if r["attempt_age_s"] is not None else 0.0   # this run's attempt is the first one recorded
+        if outcome.halts and elapsed >= HALT_CAP_SECONDS:
+            _log.error("a stored post has not been projectable for a long time; the posts behind it go ahead", elapsed_s=int(elapsed))
             outcome = replace(outcome, halts=False)
         out.append(outcome)
         if outcome.halts:   # a faulted post: nothing later is projected ahead of this post, the next run repeats it first

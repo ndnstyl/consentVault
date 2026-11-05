@@ -144,6 +144,8 @@ class InboundMixin:
             return Reply(401, {"error": "unauthenticated"})
         params = dict(pairs)
         is_report = "MessageStatus" in params
+        if not is_report and stored is not None and params.get("MessageSid"):
+            self._record_provider_authentication(org, stored, params)
         ours = params.get("From" if is_report else "To", "")
         try:
             number = normalize_phone(ours, "US")
@@ -155,6 +157,23 @@ class InboundMixin:
         if is_report:
             return self._delivery_report(conn, org, params, now)
         return self._inbound_text(conn, org, acct, params, now, pending, stored, body)
+
+    def _record_provider_authentication(self, org, stored, params: dict) -> None:
+        """The provider's signature checked out: record that beside the stored reply, committed on its own, for every validly
+        signed reply, before the seen-message check and before anything reads the text. A reply that is not a stop, and a second
+        copy of any reply, are then settled by the projection like every other post; none waits for authentication forever. A
+        reply that is a stop carries the settings it is projected with (the channels and the system source), made here, in this
+        committed transaction."""
+        from .. import door
+        from ..rawpost import RawPostWriter
+
+        defaults = None
+        with self.tx(org) as auth_conn:
+            if read_text(params.get("Body", ""))[2] == "stop":
+                defaults = {"channels": self._stop_channels(auth_conn), "source_id": self._system_source(auth_conn, SYSTEM_REPLIES),
+                            "recorded_by": RECORDED_BY}
+            door.authenticate_text(RawPostWriter(crypto=self.crypto), auth_conn, lambda c: c.transaction(), stored,
+                                   f"twilio:{params['MessageSid']}", defaults=defaults, region="US")
 
     # ---- a delivery report -------------------------------------------------------------------------------------------------
     def _delivery_report(self, conn, org, params: dict, now: datetime) -> Reply:

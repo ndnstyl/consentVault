@@ -261,18 +261,19 @@ def org_purposes(conn: psycopg.Connection) -> set[str]:
 
 
 def check_channel_purpose(conn: psycopg.Connection, channels: list[str], purposes: list[str], *,
-                          allow_star: bool) -> None:
-    have_ch = org_channels(conn)
+                          allow_star: bool, stored: Mapping[str, Any] | None = None) -> None:
+    have_ch = set(stored["channels"]) if stored and stored.get("channels") is not None else org_channels(conn)
     bad = [c for c in channels if c not in have_ch]
     if bad:
         raise ApiError("invalid_channel", f"channel(s) {bad} are not channels this organization has")
-    have_pu = org_purposes(conn)
+    have_pu = set(stored["purposes"]) if stored and stored.get("purposes") is not None else org_purposes(conn)
     bad = [p for p in purposes if p not in have_pu and not (allow_star and p == "*")]
     if bad:
         raise ApiError("UnknownPurposeError", f"purpose(s) {bad} are not in this organization's configured list")
 
 
-def _check_source_and_brands(conn: psycopg.Connection, f: dict, credential_id: uuid.UUID) -> None:
+def _check_source_and_brands(conn: psycopg.Connection, f: dict, credential_id: uuid.UUID,
+                             stored: Mapping[str, Any] | None = None) -> None:
     cred = conn.execute("SELECT source_id FROM consentvault.credential WHERE org_id = consentvault.current_org()"
                         " AND credential_id = %s", (credential_id,)).fetchone()
     held = str(cred["source_id"]) if cred and cred["source_id"] else None
@@ -282,7 +283,8 @@ def _check_source_and_brands(conn: psycopg.Connection, f: dict, credential_id: u
     f["source_id"] = held
     src = conn.execute("SELECT to_jsonb(s) AS s FROM consentvault.capture_source s"
                        " WHERE org_id = consentvault.current_org() AND source_id = %s", (held,)).fetchone()
-    if src is None or src["s"].get("status", "active") != "active":
+    status = stored.get("source_status") if stored and stored.get("source_status") is not None else src["s"].get("status", "active") if src else None
+    if src is None or status != "active":
         raise ApiError("source_not_allowed", "the source does not belong to the credential or is retired")
     brands = f.get("brand_ids") or []
     if brands:
@@ -371,8 +373,19 @@ class CapturePipeline:
         self.region = region
         self.clock = clock
 
+    def projection_settings(self, conn: psycopg.Connection, credential_id: uuid.UUID) -> dict:
+        """What this organisation's configuration said when a post arrived: the phone region, the channel and purpose lists and
+        the capture source's status. Stored beside the post, and the projection of that post reads these and never the live
+        configuration, so a later change (a retired source, a removed channel) never changes what an earlier post produces.
+        Call inside the organisation's entry."""
+        row = conn.execute("SELECT s.status AS status FROM consentvault.credential c JOIN consentvault.capture_source s"
+                           " ON s.org_id = c.org_id AND s.source_id = c.source_id WHERE c.org_id = consentvault.current_org()"
+                           " AND c.credential_id = %s", (credential_id,)).fetchone()
+        return {"region": org_region(conn, self.region), "channels": sorted(org_channels(conn)),
+                "purposes": sorted(org_purposes(conn)), "source_status": row["status"] if row else None}
+
     def capture(self, conn: psycopg.Connection, enter: Callable, req: CaptureRequest, *,
-                credential_id: uuid.UUID, link: Callable | None = None) -> CaptureResult:
+                credential_id: uuid.UUID, link: Callable | None = None, settings: Mapping[str, Any] | None = None) -> CaptureResult:
         """``enter(conn)`` is a context manager that opens a transaction inside the caller's tenant and yields its
         org id (``tenancy.tokens.org_transaction`` bound to the caller's token). ``link(conn, event_id)``, when given, writes the
         link from the event to the post it came from inside the transaction that writes the event, so the two stand or fall
@@ -385,10 +398,10 @@ class CapturePipeline:
         try:
             with enter(conn) as org:
                 require_serving(conn)
-                region = org_region(conn, self.region)
+                region = settings["region"] if settings and settings.get("region") is not None else org_region(conn, self.region)
                 kind, norm = normalize(f["contact"], region)
-                check_channel_purpose(conn, f["channels"], f["purposes"], allow_star=f["event_type"] != "grant")
-                _check_source_and_brands(conn, f, credential_id)
+                check_channel_purpose(conn, f["channels"], f["purposes"], allow_star=f["event_type"] != "grant", stored=settings)
+                _check_source_and_brands(conn, f, credential_id, settings)
                 _check_disclosure(conn, f)
                 fp, data_key = contact_key(conn, self.crypto, org, kind, norm, create=True)
                 retain = retention_until(conn, self.default_retain_years,

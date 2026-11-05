@@ -903,6 +903,7 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
         """Any request under a capture prefix, any method, any body: written whole to the raw post store before anything
         reads it, answered with the receipt, then read. Authentication, the site key, the origin, the signature and the
         bot check are facts beside the post, never reasons to refuse it (contracts/capture-api.md)."""
+        from . import door
         from .rawpost import Fact, RawRequest, StoreUnavailable
 
         self.request_id = self._rid()
@@ -947,6 +948,14 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                     else:
                         _, org_token = self._home_token(conn)
                     enter = self._enter(org_token)
+                    if identity["claims"] is not None:   # the configuration as it stands now, kept beside the post it will project
+                        try:
+                            with enter(conn):
+                                facts.append(Fact("vault", door.TENANT_SETTINGS_FACT,
+                                                  self.pipeline.projection_settings(conn, identity["claims"].credential_id)))
+                        except (ConsentVaultError, psycopg.Error) as exc:
+                            _log.error("the settings a post is projected with could not be read at intake; the live ones will be used",
+                                       request_id=self.request_id, error=type(exc).__name__)
                     # what is stored is what was received: for an edge post, the signed envelope bytes exactly
                     raw = RawRequest(
                         intake=identity["intake"], method=self.command, path=url.path, query=url.query,

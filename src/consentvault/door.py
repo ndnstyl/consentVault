@@ -43,6 +43,7 @@ _log = safelog.get("consentvault.door")
 CODE_VERSION = "door-1"
 REASON_TEXT = "a_text_is_not_consent"
 EDGE_INTAKES = ("edge_single", "edge_site_key")
+TENANT_SETTINGS_FACT = "tenant_projection_settings"
 
 EVENT_FIELDS = (
     "contact", "event_type", "channels", "purposes", "method", "origin", "disclosure_sha256",
@@ -292,8 +293,15 @@ class TenantBackend:
     """Writes the event of one post into the entered organisation's chain through the capture pipeline (evidence object, receipt,
     the tenant's own checks). The pipeline puts the link in the transaction that writes the event."""
 
-    def __init__(self, pipeline: Any, enter_for_credential: Callable[[str, Mapping[str, Any]], Callable]) -> None:
-        self.pipeline, self.enter_for_credential = pipeline, enter_for_credential
+    def __init__(self, pipeline: Any, enter_for_credential: Callable[[str, Mapping[str, Any]], Callable],
+                 settings: Mapping[str, Any] | None = None) -> None:
+        self.pipeline, self.enter_for_credential, self.settings = pipeline, enter_for_credential, settings
+
+    def for_post(self, facts: Mapping[tuple[str, str], Any]) -> "TenantBackend":
+        """The projection of a post reads the organisation's configuration as it stood when the post arrived (stored beside it
+        by the intake), never the live configuration. A post stored before the intake kept this reads the live one."""
+        stored = facts.get(("vault", TENANT_SETTINGS_FACT))
+        return TenantBackend(self.pipeline, self.enter_for_credential, stored if isinstance(stored, dict) else None)
 
     def prepare(self, conn, payload: Mapping[str, Any], body: bytes, auth: Auth) -> dict | str:
         from .tenancy.admin_base import ApiError
@@ -304,7 +312,8 @@ class TenantBackend:
             req = parse_capture(dict(payload), body, tuple(cred.get("scopes") or ()))
         except ApiError as exc:
             return exc.name
-        return {"req": req, "credential_id": uuid.UUID(str(cred.get("credential_id"))), "credential": dict(cred), "org_id": auth.org_id}
+        return {"req": req, "credential_id": uuid.UUID(str(cred.get("credential_id"))), "credential": dict(cred), "org_id": auth.org_id,
+                "settings": self.settings}
 
     def reroute(self, writer, conn, view: "PostView", owner, found: Mapping[tuple[str, str], Any]):
         """Store the post again in the organisation the site key belongs to, with everything known about it (the original facts,
@@ -325,7 +334,7 @@ class TenantBackend:
 
     def apply(self, conn, enter, fields: dict, link: Callable) -> str:
         result = self.pipeline.capture(conn, self.enter_for_credential(fields["org_id"], fields["credential"]), fields["req"], credential_id=fields["credential_id"],
-                                       link=link)
+                                       link=link, settings=fields.get("settings"))
         return result.event_id
 
 

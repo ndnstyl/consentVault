@@ -183,7 +183,7 @@ def test_a_stale_edge_timestamp_is_a_fact_not_a_refusal(hw):
     assert len(_events_of(hw, a.org)) == before  # an old signed request makes no consent event
 
 
-def test_a_replayed_edge_capture_is_stored_again_with_the_fact_and_makes_one_event(hw):
+def test_a_replayed_edge_capture_is_stored_again_and_the_fold_makes_one_event(hw):
     a = hw.cloud.a
     key = _site_key(hw, a)
     raw = _envelope(key, _edge_body(a, key))
@@ -194,7 +194,7 @@ def test_a_replayed_edge_capture_is_stored_again_with_the_fact_and_makes_one_eve
     status, body = _edge_post(hw, raw, ts=stamp, sig=sig)
     assert status == 201 and body["stored"] is True
     first, second = _posts_of(hw, a.org)[-2:]
-    assert _facts(hw, first)["replay"] == "fresh" and _facts(hw, second)["replay"] == "seen_before"
+    assert "replay" not in _facts(hw, first) and "replay" not in _facts(hw, second)
     assert len(_events_of(hw, a.org)) == before + 1
 
 

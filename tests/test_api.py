@@ -117,7 +117,7 @@ def test_a_stale_timestamp_is_stored_with_the_fact_and_writes_no_event(server, d
     assert _facts(conn, _posts(conn)[0]["post_id"])["request_signature"] == "stale_timestamp" and _events(conn) == 0
 
 
-def test_a_replayed_request_is_stored_again_with_the_fact_replay_and_makes_one_event_only(server, disclosure, conn):
+def test_a_replayed_request_is_stored_again_and_the_fold_makes_one_event_only(server, disclosure, conn):
     payload = _grant(disclosure)
     body = json.dumps(payload).encode()
     ts = str(int(time.time()))
@@ -128,7 +128,7 @@ def test_a_replayed_request_is_stored_again_with_the_fact_replay_and_makes_one_e
     server.settle()
     assert first[0] == 201 and second[0] == 201 and first[1]["post_id"] != second[1]["post_id"]
     a, b = _posts(conn)
-    assert _facts(conn, a["post_id"])["replay"] == "fresh" and _facts(conn, b["post_id"])["replay"] == "replay"
+    assert "replay" not in _facts(conn, a["post_id"]) and "replay" not in _facts(conn, b["post_id"])
     assert _events(conn) == 1 and first[1]["body_sha256"] == second[1]["body_sha256"]
 
 

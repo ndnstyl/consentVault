@@ -191,24 +191,6 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
             return "stale_timestamp", False
         return None, by_verified
 
-    def _claim_signature(self, sig: str) -> str | None:
-        """Record the signature in the shared replay guard (every process and every restart sees it). None when it was
-        fresh; the reason otherwise. A guard that cannot answer refuses the request: it never lets one through."""
-        from .tenancy.errors import ReplayError, TenancyError
-        from .tenancy.replay import claim_nonce
-
-        try:
-            with connect(self.settings.dsn) as conn:
-                org = conn.execute("SELECT consentvault.home_org() AS o").fetchone()["o"]
-                claim_nonce(conn, org, "events:" + sig,
-                            dbclock.now(conn) + timedelta(seconds=2 * self.settings.replay_window))
-        except ReplayError:
-            return "replay"
-        except (TenancyError, psycopg.Error) as exc:
-            _log.error("events replay guard unavailable; request refused", error=type(exc).__name__)
-            return f"replay_guard_unavailable:{type(exc).__name__}"
-        return None
-
     def _guard(self) -> bool:
         if not self._host_ok():
             self._fail(421, "host_not_allowed", "the Host header is not on the allowlist")
@@ -252,10 +234,8 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
         if sig.startswith("sha256="):
             sig = sig[7:]
         reason, by_verified_key = self._authentication_failure(ts, sig, body)
-        replay = self._claim_signature(sig) if reason is None else None
         facts += [Fact("vault", "host_on_list", self._host_ok()), Fact("vault", "origin_header", self.headers.get("Origin")),
-                  Fact("vault", "request_signature", reason or "valid"), Fact("vault", "replay", replay or "fresh"),
-                  Fact("vault", "authenticated_by", "verified_key" if by_verified_key else "shared_secret"),
+                  Fact("vault", "request_signature", reason or "valid"), Fact("vault", "authenticated_by", "verified_key" if by_verified_key else "shared_secret"),
                   Fact("vault", "peer_address", self.client_address[0])]
         if transport_credentials_removed(self):
             facts.append(Fact("vault", "gateway_service_credentials_not_stored", True))
@@ -1015,8 +995,6 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
         request (method, path, headers, exact bytes) is what is stored, with the edge's facts beside it. When it does not
         verify, the request as received (the envelope itself) is stored and nothing in it is trusted."""
         from .rawpost import Fact
-        from .tenancy.errors import ReplayError
-        from .tenancy.replay import claim_nonce
         from .tenancy.site_keys import resolve_site_key
 
         secret = self.settings.edge_signing_secret
@@ -1051,14 +1029,6 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                     facts.append(Fact("vault", "edge_timestamp", "fresh" if fresh else "stale"))
                 except ValueError:  # loud-failure-exempt: recorded as the fact edge_timestamp unreadable
                     facts.append(Fact("vault", "edge_timestamp", "unreadable"))
-                home = str(conn.execute("SELECT consentvault.home_org() AS h").fetchone()["h"])
-                try:
-                    claim_nonce(conn, owner.org_id if owner else home, "edge:" + sig,
-                                dbclock.now(conn) + timedelta(seconds=2 * window))
-                    facts.append(Fact("vault", "replay", "fresh"))
-                except ReplayError:  # loud-failure-exempt: recorded as the fact replay; the post is stored again
-                    facts.append(Fact("vault", "replay", "seen_before"))
-                    out["replayed"] = True
         except (ConsentVaultError, psycopg.Error) as exc:
             facts.append(Fact("vault", "site_key_lookup", "failed:" + type(exc).__name__))
             return

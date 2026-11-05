@@ -67,7 +67,7 @@ def test_the_specific_reason_is_in_the_server_log_and_in_the_post_never_in_the_a
     assert _signature_facts(conn) == ["bad_timestamp", "bad_signature"]
 
 
-def test_a_second_app_instance_stores_a_signed_request_the_first_accepted_and_flags_the_replay(app_dsn, disclosure, conn):
+def test_a_second_app_instance_stores_a_signed_request_the_first_accepted_and_the_fold_counts_it_once(app_dsn, disclosure, conn):
     body = json.dumps(_grant(disclosure)).encode()
     ts = str(int(time.time()))
     h = {api.TIMESTAMP_HEADER: ts, api.SIGNATURE_HEADER: api.sign(SECRET, ts, body)}
@@ -81,7 +81,7 @@ def test_a_second_app_instance_stores_a_signed_request_the_first_accepted_and_fl
         assert status == 201 and answer["stored"] is True
         from test_api import _facts, _posts
         first, second = _posts(conn)
-        assert _facts(conn, first["post_id"])["replay"] == "fresh" and _facts(conn, second["post_id"])["replay"] == "replay"
+        assert "replay" not in _facts(conn, first["post_id"]) and "replay" not in _facts(conn, second["post_id"])
         assert conn.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"] == 1
     finally:
         for g in (gen_a, gen_b):

@@ -14,7 +14,10 @@ lines. Each entry point is an adapter: it hands the request to the one door and 
 
 The test talks only to the entry points and to the stored result (raw_post, event), so it survives the redesign. The re-run is
 ``consentvault.door.rebuild(conn)``, the projection that appends the events of every stored post that has none, and a crash
-is ``consentvault.door.project_post`` failing once, after the answer is given.
+is ``consentvault.door.project_post`` failing once, after the answer is given. Three more operations (the first review round):
+``fail_store`` (the store fails, the sender resends the same signed request and the resend counts), ``fault_*`` (a passing
+database fault while the ledger appends the event; the rebuild repairs it) and ``door_stop`` (a stop through another door, the
+library's system intake, which brings every earlier post up to date before it is projected).
 """
 
 import json
@@ -28,8 +31,10 @@ from consentvault.errors import ConsentVaultError
 from test_api import SECRET, TOKEN, VERIFIED_SECRET, PURPOSES, _call, _serve
 
 CONTACTS = ("+12125550101", "+12125550102")
-KINDS = ("grant", "stop", "start", "form", "resend", "dup", "crash_grant", "crash_stop")
-BASE = {"form": "grant", "crash_grant": "grant", "crash_stop": "stop"}
+KINDS = ("grant", "stop", "start", "form", "resend", "dup", "crash_grant", "crash_stop", "fail_store", "fault_grant", "fault_stop",
+         "door_stop")
+BASE = {"form": "grant", "crash_grant": "grant", "crash_stop": "stop", "fail_store": "grant", "fault_grant": "grant",
+        "fault_stop": "stop", "door_stop": "stop"}
 SEEDS = list(range(12))
 LENGTH = 9
 
@@ -74,7 +79,7 @@ class Http:
     def close(self):
         self._gen.close()
 
-    def send(self, kind, person, ref):
+    def send(self, kind, person, ref, fail=False):
         if kind == "dup":
             body, headers = self.sent[ref]
         else:
@@ -91,6 +96,19 @@ class Http:
             headers = {"Content-Type": "application/json", api.TIMESTAMP_HEADER: ts, api.SIGNATURE_HEADER: api.sign(SECRET, ts, body)}
         self.count += 1
         self.sent.append((body, headers))
+        if kind == "fail_store":
+            real, calls = rawpost.RawPostWriter.write, {"n": 0}
+
+            def flaky(writer, *a, **k):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    raise rawpost.StoreUnavailable("the store failed once")
+                return real(writer, *a, **k)
+            with pytest.MonkeyPatch.context() as m:
+                m.setattr(rawpost.RawPostWriter, "write", flaky)
+                status, _, _ = _call(self.base + "/v1/events", "POST", body, headers)
+                self.base.settle()
+            assert status == 503, status
         status, answer, _ = _call(self.base + "/v1/events", "POST", body, headers)
         self.base.settle()
         assert status == 201 and answer["stored"] is True, (status, answer)
@@ -103,12 +121,16 @@ class Library:
     def close(self):
         pass
 
-    def send(self, kind, person, ref):
+    def send(self, kind, person, ref, fail=False):
         from consentvault.capture import capture, capture_verified, revoke
 
         common = dict(contact=CONTACTS[person], channels=["sms"], purposes=["marketing"], region="US", allowed_purposes=PURPOSES,
                       session_ref="lib-%d" % self.count)
         self.count += 1
+        if fail:  # a failure is raised to the caller in this process, after the post is stored or not
+            with pytest.raises(ConsentVaultError):
+                self.send(kind, person, ref)
+            return
         if kind == "stop":
             revoke(self.conn, method="keyword", origin="consumer", **common)
         elif kind == "start":
@@ -129,7 +151,7 @@ class Cli:
     def close(self):
         pass
 
-    def send(self, kind, person, ref):
+    def send(self, kind, person, ref, fail=False):
         from consentvault import cli
 
         self.count += 1
@@ -144,7 +166,7 @@ class Cli:
             code = cli.main(argv)
         except SystemExit as exc:  # loud-failure-exempt: the exit code is the answer under test
             code = exc.code
-        assert (code not in (0, None)) if kind == "start" else code == 0, (argv, code)
+        assert (code not in (0, None)) if (kind == "start" or fail) else code == 0, (argv, code)
 
 
 def history(conn) -> dict[int, list[str]]:
@@ -159,6 +181,7 @@ def history(conn) -> dict[int, list[str]]:
 @pytest.mark.parametrize("seed", SEEDS)
 def test_every_adapter_gives_the_reference_history_for_a_random_sequence(adapter_name, seed, dsn, app_dsn, conn, disclosure, monkeypatch):
     ops = make_sequence(seed, adapter_name == "http")
+    posts_seen: list = []
     adapter = {"http": lambda: Http(app_dsn, disclosure), "library": lambda: Library(conn, disclosure),
                "cli": lambda: Cli(dsn, disclosure, monkeypatch)}[adapter_name]()
     try:
@@ -175,6 +198,44 @@ def test_every_adapter_gives_the_reference_history_for_a_random_sequence(adapter
                     else:
                         with pytest.raises(RuntimeError):  # the caller in this process is told; the post is stored all the same
                             adapter.send(base, person, ref)
+            elif kind.startswith("fault_"):
+                import psycopg
+                from consentvault import door
+                from consentvault.errors import LedgerError
+                real, calls = door.record_event, {"n": 0}
+
+                def flaky(*a, **k):  # one passing database fault while the ledger appends the event
+                    calls["n"] += 1
+                    if calls["n"] > 1:
+                        return real(*a, **k)
+                    try:
+                        raise psycopg.errors.SerializationFailure("could not serialize")
+                    except psycopg.Error as exc:
+                        raise LedgerError("event refused by the database") from exc
+                with pytest.MonkeyPatch.context() as m:
+                    m.setattr(door, "record_event", flaky)
+                    adapter.send(base, person, ref, fail=adapter_name != "http")  # the server answers all the same
+            elif kind == "fail_store":
+                if adapter_name == "http":
+                    adapter.send("fail_store", person, ref)  # the store fails once (a 503), the sender resends the same request
+                else:
+                    real, calls = rawpost.RawPostWriter.write, {"n": 0}
+
+                    def flaky_store(writer, *a, **k):
+                        calls["n"] += 1
+                        if calls["n"] == 1:
+                            raise rawpost.StoreUnavailable("the store failed once")
+                        return real(writer, *a, **k)
+                    with pytest.MonkeyPatch.context() as m:
+                        m.setattr(rawpost.RawPostWriter, "write", flaky_store)
+                        adapter.send(base, person, ref, fail=True)
+                    adapter.send(base, person, ref)
+            elif kind == "door_stop":
+                from consentvault import door  # a stop through another door: the library's system intake
+                door.submit(conn, intake="system_stop", region="US", allowed_purposes=PURPOSES, payload={
+                    "contact": CONTACTS[person], "event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"],
+                    "method": "keyword", "origin": "consumer", "session_ref": "door-%d" % len(posts_seen)})
+                posts_seen.append(1)
             else:
                 adapter.send("dup" if kind == "dup" else base, person, ref)
     finally:

@@ -336,6 +336,7 @@ class Outcome:
     event_id: str | None = None
     reason: str | None = None
     retry: bool = False   # a passing fault: nothing was stored as refused, and the next projection repeats it
+    halts: bool = False   # a passing database or store fault: no later post is projected before this one, so arrival order holds
 
 
 def store_raw(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, req: RawRequest) -> StoredPost:
@@ -426,7 +427,7 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
             _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason))
         if raise_errors:
             raise
-        return Outcome(view.post_id, reason=reason, retry=retryable(exc))
+        return Outcome(view.post_id, reason=reason, retry=retryable(exc), halts=retryable(exc))
     _record(writer, conn, enter, view, outcome)
     if raise_errors and outcome.event_id is None:
         if outcome.reason == REASON_TEXT:
@@ -484,8 +485,13 @@ def project_post(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
     first, in arrival order (a ``Backends`` holds the writer of each intake this process owns), so a crash before this call never
     changes which of two copies of one request counts or the order of a person's history."""
     if catch_up:
-        project_pending(writer, conn, None if catch_up is True else catch_up, backend, through_seq=view.seq - 1,
-                        intakes=intakes)
+        earlier = project_pending(writer, conn, None if catch_up is True else catch_up, backend, through_seq=view.seq - 1,
+                                  intakes=intakes)
+        if any(o.halts for o in earlier):   # an earlier post could not be projected yet: this one waits behind it, in arrival order
+            if raise_errors:
+                raise InvalidEventError("an earlier stored post could not be projected yet (a passing fault); this post is "
+                                        "stored and is projected after it, in arrival order")
+            return Outcome(view.post_id, reason="waiting_for_an_earlier_post", retry=True)
     return project_view(writer, conn, enter, backend, view, field_map=field_map, raise_errors=raise_errors)
 
 
@@ -510,7 +516,14 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
             "                   AND f.post_id = p.post_id AND f.name = 'event_not_derived')"
             " ORDER BY p.seq", (through_seq, through_seq, intakes and list(intakes), intakes and list(intakes))).fetchall()
         views = [read_view(writer, conn, r["org"], r["post_id"], r["seq"], r["intake"], r["method"], r["path"]) for r in rows]
-    return [project_view(writer, conn, enter, backend, v) for v in views if _backend_for(backend, v.intake) is not None]
+    out: list[Outcome] = []
+    for v in views:
+        if _backend_for(backend, v.intake) is None:
+            continue
+        out.append(project_view(writer, conn, enter, backend, v))
+        if out[-1].halts:   # a passing fault: nothing later is projected ahead of this post, the next run repeats it first
+            break
+    return out
 
 
 def rebuild(conn: psycopg.Connection, *, backend: Any = None, writer: RawPostWriter | None = None,

@@ -166,7 +166,7 @@ class ConfigMixin:
         """The counts on screen 25, or None when any of them cannot be read: a count that failed is never 0."""
         if "confirmations.counts" in testing.fail_reads:
             return None
-        at = self._when(ctx.conn)
+        at = self._dt()   # the injected clock stamps every send and receipt this window is counted over
         day, hour = at - timedelta(hours=24), at - timedelta(hours=1)
         try:
             with ctx.conn.transaction():

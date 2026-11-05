@@ -249,11 +249,11 @@ class InboundMixin:
         conn.execute(
             "INSERT INTO consentvault.confirmation_reply (org_id, reply_id, account_id, from_fp, matched_record_id, body_ct, from_ct,"
             " key_kind, received_at, provider_message_id, verdict, reason, matched_words, state, event_id)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s,"   # the receipt time is the database's, strictly after the last reply's so the list keeps their order
-            " greatest(clock_timestamp(), coalesce((SELECT max(r.received_at) FROM consentvault.confirmation_reply r WHERE r.org_id = %s)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s,"   # the receipt time is the injected clock's, strictly after the last reply's so the list keeps their order
+            " greatest(%s::timestamptz, coalesce((SELECT max(r.received_at) FROM consentvault.confirmation_reply r WHERE r.org_id = %s)"
             " + interval '1 microsecond', '-infinity'::timestamptz)), %s, %s, %s, %s, %s, %s)",
             (org, reply_id, acct["account_id"], fp, record["record_id"] if record else None, body_ct, from_ct, key_kind,
-             org, sid, verdict, reason[:300], matched_words, state, event_id))
+             self._dt(), org, sid, verdict, reason[:300], matched_words, state, event_id))
         for kind, message in queued:
             pending.append(self._queue_reply(conn, org, kind=kind, reply_id=reply_id, fp=fp, dest=norm, body=message, now=now))
         return Reply(200, {"status": state})

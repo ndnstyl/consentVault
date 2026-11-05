@@ -374,9 +374,17 @@ def reason_of(exc: BaseException) -> str:
         return "LedgerError:" + type(exc.__cause__).__name__ if exc.__cause__ is not None else "LedgerError"
     if isinstance(exc, ConsentVaultError):
         return type(exc).__name__
-    if isinstance(exc, psycopg.Error) and not retryable(exc):
-        return "refused:" + type(exc).__name__
-    return "unavailable:" + type(exc).__name__
+    if retryable(exc):
+        return "unavailable:" + type(exc).__name__
+    return "refused:" + type(exc).__name__
+
+
+def _is_uuid(value: Any) -> bool:
+    try:
+        uuid.UUID(str(value))
+    except ValueError:  # loud-failure-exempt: a malformed id is stored as that post's reason by the caller
+        return False
+    return True
 
 
 def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, backend: Any, view: PostView, *,
@@ -389,20 +397,21 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
         return Outcome(view.post_id, reason="no_writer_for_intake")
     if view.intake in PROVIDER_INTAKES and view.facts.get(("vault", "request_signature")) is None:
         return Outcome(view.post_id, reason="awaiting_authentication")   # not yet judged by its intake: neither refused nor counted
-    if hasattr(backend, "for_post"):
-        backend = backend.for_post(view.facts)
-    reading = read_post(view.body, field_map, CODE_VERSION, intake=view.intake, context=_view_context(view))
-    auth = replace(auth_from_facts(view.facts), org_id=view.org_id)
-    org = uuid.UUID(view.org_id)
-    if auth.pending:
-        _log.error("a stored post waits for its intake's lookup to be repeated; it is not refused", reason=auth.reason)
-        return Outcome(view.post_id, reason=auth.reason, retry=True)
-
-    def link(c, event_id):
-        c.execute("INSERT INTO consentvault.event_source_post (org_id, event_id, post_id, role, request_key)"
-                  " VALUES (%s, %s, %s, 'trigger', %s)", (org, uuid.UUID(str(event_id)), uuid.UUID(view.post_id), auth.key))
+    org = uuid.UUID(view.org_id) if _is_uuid(view.org_id) else None
 
     try:
+        if hasattr(backend, "for_post"):
+            backend = backend.for_post(view.facts)
+        reading = read_post(view.body, field_map, CODE_VERSION, intake=view.intake, context=_view_context(view))
+        auth = replace(auth_from_facts(view.facts), org_id=view.org_id)
+        if auth.pending:
+            _log.error("a stored post waits for its intake's lookup to be repeated; it is not refused", reason=auth.reason)
+            return Outcome(view.post_id, reason=auth.reason, retry=True)
+
+        def link(c, event_id):
+            c.execute("INSERT INTO consentvault.event_source_post (org_id, event_id, post_id, role, request_key)"
+                      " VALUES (%s, %s, %s, 'trigger', %s)", (org, uuid.UUID(str(event_id)), uuid.UUID(view.post_id), auth.key))
+
         with _ctx(conn, enter):
             reason = decide(reading, auth, _seen(conn, view.org_id))
         fields = backend.prepare(conn, reading.payload, view.body, auth) if reason is None else None
@@ -417,17 +426,17 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
         outcome = _already(conn, enter, view)
         if outcome.event_id is not None:
             return outcome
-    except Exception as exc:  # loud-failure-exempt: classified below; a passing fault is logged and retried, a repeating refusal is stored
-        if not isinstance(exc, (ConsentVaultError, psycopg.Error)) and not retryable(exc):
-            raise
+    except Exception as exc:  # loud-failure-exempt: classified below; a passing fault is logged and retried, any other error is that post's stored reason
         reason = reason_of(exc)
-        if retryable(exc):
+        passing = retryable(exc)
+        if passing:
             _log.error("the event of a stored post could not be written; the projection will run again for it", error=reason)
         else:
+            _log.error("a stored post produces no event; the reason is stored beside it", error=reason)
             _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason))
         if raise_errors:
             raise
-        return Outcome(view.post_id, reason=reason, retry=retryable(exc), halts=retryable(exc))
+        return Outcome(view.post_id, reason=reason, retry=passing, halts=passing)
     _record(writer, conn, enter, view, outcome)
     if raise_errors and outcome.event_id is None:
         if outcome.reason == REASON_TEXT:
@@ -449,17 +458,30 @@ def _already(conn, enter, view: PostView) -> Outcome:
     return Outcome(view.post_id, event_id=row["event_id"]) if row else Outcome(view.post_id, reason="request_seen_before")
 
 
+PASSING_SQLSTATES = frozenset({"40001", "40P01", "57P01", "57P02", "57P03", "53300", "53400"})
+
+
 def retryable(exc: BaseException) -> bool:
-    """True for a fault that is passing, never a refusal of these bytes: the database or the evidence store was unreachable, busy
-    or rolled the transaction back. Only a refusal that would repeat on the same bytes may be stored as final."""
+    """True for a fault that is passing, never a refusal of these bytes: the connection dropped, the transaction was rolled back
+    (serialization, deadlock), the server is shutting down, or the key provider or the evidence store was unreachable. An explicit
+    allowlist: a size limit, a query timeout, a missing file, a bad type or any other error is final for that post."""
     from .rawpost import StoreUnavailable
 
     seen: set[int] = set()
     while exc is not None and id(exc) not in seen:
         seen.add(id(exc))
-        if isinstance(exc, (StoreUnavailable, psycopg.OperationalError, psycopg.InterfaceError, OSError, TimeoutError)):
+        if isinstance(exc, StoreUnavailable) or {c.__name__ for c in type(exc).__mro__} & {"KeyProviderError"}:
             return True
-        if type(exc).__name__ == "KeyProviderError" or getattr(exc, "name", None) in ("key_unavailable", "service_unavailable", "audit_unavailable"):
+        if getattr(exc, "name", None) in ("key_unavailable", "service_unavailable", "audit_unavailable"):
+            return True
+        if isinstance(exc, psycopg.Error):
+            state = exc.sqlstate
+            if state is None:
+                if isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError)):
+                    return True
+            elif state in PASSING_SQLSTATES or state.startswith("08"):
+                return True
+        elif isinstance(exc, ConnectionError):
             return True
         exc = exc.__cause__ or exc.__context__
     return False
@@ -502,12 +524,18 @@ def read_view(writer: RawPostWriter, conn: psycopg.Connection, org: str, post_id
                     {**writer.read_facts(conn, uuid.UUID(org), post_id), ("__key__", "data_key"): data_key}, method, path)
 
 
+HALT_CAP_SECONDS = 900
+
+
 def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, backend: Any, *,
                     through_seq: int | None = None, intakes: tuple[str, ...] | None = None) -> list[Outcome]:
-    """Run the projection for every stored post that has no outcome yet, in arrival order. Safe to run any number of times."""
+    """Run the projection for every stored post that has no outcome yet, in arrival order. Safe to run any number of times. A
+    post's own error is that post's outcome and never the queue's. A passing fault halts the posts behind it only while the
+    faulted post is younger than ``HALT_CAP_SECONDS``: past that, later posts go ahead, so no post blocks the others forever."""
     with _ctx(conn, enter):
         rows = conn.execute(
-            "SELECT p.org_id::text AS org, p.post_id::text AS post_id, p.seq, p.intake, p.method, p.path FROM consentvault.raw_post p"
+            "SELECT p.org_id::text AS org, p.post_id::text AS post_id, p.seq, p.intake, p.method, p.path,"
+            " EXTRACT(EPOCH FROM (clock_timestamp() - p.received_at))::float8 AS age_s FROM consentvault.raw_post p"
             " WHERE p.org_id = (SELECT consentvault.current_org()) AND p.kind = 'post'"
             "   AND (%s::bigint IS NULL OR p.seq <= %s) AND (%s::text[] IS NULL OR p.intake = ANY(%s))"
             "   AND NOT EXISTS (SELECT 1 FROM consentvault.event_source_post s WHERE s.org_id = p.org_id"
@@ -515,15 +543,42 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
             "   AND NOT EXISTS (SELECT 1 FROM consentvault.raw_post_fact f WHERE f.org_id = p.org_id"
             "                   AND f.post_id = p.post_id AND f.name = 'event_not_derived')"
             " ORDER BY p.seq", (through_seq, through_seq, intakes and list(intakes), intakes and list(intakes))).fetchall()
-        views = [read_view(writer, conn, r["org"], r["post_id"], r["seq"], r["intake"], r["method"], r["path"]) for r in rows]
     out: list[Outcome] = []
-    for v in views:
-        if _backend_for(backend, v.intake) is None:
+    for r in rows:
+        if _backend_for(backend, r["intake"]) is None:
             continue
-        out.append(project_view(writer, conn, enter, backend, v))
-        if out[-1].halts:   # a passing fault: nothing later is projected ahead of this post, the next run repeats it first
+        try:
+            with _ctx(conn, enter):
+                view = read_view(writer, conn, r["org"], r["post_id"], r["seq"], r["intake"], r["method"], r["path"])
+        except Exception as exc:  # loud-failure-exempt: classified; a passing fault is retried, any other error is that post's stored reason
+            outcome = _unreadable_post(writer, conn, enter, r, exc)
+        else:
+            outcome = project_view(writer, conn, enter, backend, view)
+        if outcome.halts and r["age_s"] >= HALT_CAP_SECONDS:
+            _log.error("a stored post has not been projectable for a long time; the posts behind it go ahead", post_age_s=int(r["age_s"]))
+            outcome = replace(outcome, halts=False)
+        out.append(outcome)
+        if outcome.halts:   # a passing fault: nothing later is projected ahead of this post, the next run repeats it first
             break
     return out
+
+
+def _unreadable_post(writer, conn, enter, row, exc: BaseException) -> Outcome:
+    """A stored post whose bytes or facts could not be read: a passing fault is repeated, anything else is that post's reason."""
+    reason, passing = reason_of(exc), retryable(exc)
+    if passing:
+        _log.error("a stored post could not be read; the projection will run again for it", error=reason)
+        return Outcome(row["post_id"], reason=reason, retry=True, halts=True)
+    _log.error("a stored post cannot be read; the reason is stored beside it", error=reason)
+    key = None
+    try:
+        with _ctx(conn, enter):
+            key = writer.open_key(conn, uuid.UUID(row["org"]), row["post_id"])
+    except Exception as key_exc:  # loud-failure-exempt: logged; the reason is then written without the key
+        _log.error("the key of an unreadable post could not be opened", error=type(key_exc).__name__)
+    _record(writer, conn, enter, PostView(row["org"], row["post_id"], row["seq"], row["intake"], b"", {("__key__", "data_key"): key}),
+            Outcome(row["post_id"], reason=reason))
+    return Outcome(row["post_id"], reason=reason)
 
 
 def rebuild(conn: psycopg.Connection, *, backend: Any = None, writer: RawPostWriter | None = None,

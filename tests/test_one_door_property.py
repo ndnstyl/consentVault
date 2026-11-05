@@ -17,11 +17,14 @@ The test talks only to the entry points and to the stored result (raw_post, even
 is ``consentvault.door.project_post`` failing once, after the answer is given. Three more operations (the first review round):
 ``fail_store`` (the store fails, the sender resends the same signed request and the resend counts), ``fault_*`` (a passing
 database fault while the ledger appends the event; the rebuild repairs it) and ``door_stop`` (a stop through another door, the
-library's system intake, which brings every earlier post up to date before it is projected).
+library's system intake, which brings every earlier post up to date before it is projected). The second round adds ``poison``
+(a post no event can come from: a grant whose channels are a number, or a stop whose subject key is far past the index limit): it
+is stored, its own error is its own stored reason, and it never stops a later post from counting.
 """
 
 import json
 import random
+import secrets
 import time
 
 import pytest
@@ -32,9 +35,9 @@ from test_api import SECRET, TOKEN, VERIFIED_SECRET, PURPOSES, _call, _serve
 
 CONTACTS = ("+12125550101", "+12125550102")
 KINDS = ("grant", "stop", "start", "form", "resend", "dup", "crash_grant", "crash_stop", "fail_store", "fault_grant", "fault_stop",
-         "door_stop")
+         "door_stop", "poison")
 BASE = {"form": "grant", "crash_grant": "grant", "crash_stop": "stop", "fail_store": "grant", "fault_grant": "grant",
-        "fault_stop": "stop", "door_stop": "stop"}
+        "fault_stop": "stop", "door_stop": "stop", "poison": "poison"}
 SEEDS = list(range(12))
 LENGTH = 9
 
@@ -63,7 +66,7 @@ def reference_fold(ops) -> dict[int, list[str]]:
     again) produces none, a resend (a new signed request with the same content) counts again."""
     history: dict[int, list[str]] = {i: [] for i in range(len(CONTACTS))}
     for (kind, person, _), base in zip(ops, base_kinds(ops)):
-        if kind != "dup" and base != "start":
+        if kind != "dup" and base not in ("start", "poison"):
             history[person].append("grant" if base == "grant" else "revoke")
     return history
 
@@ -78,6 +81,15 @@ class Http:
 
     def close(self):
         self._gen.close()
+
+    def send_poison(self, payload):
+        body = json.dumps(payload).encode()
+        ts = str(int(time.time()))
+        headers = {"Content-Type": "application/json", api.TIMESTAMP_HEADER: ts, api.SIGNATURE_HEADER: api.sign(SECRET, ts, body)}
+        self.count += 1
+        status, answer, _ = _call(self.base + "/v1/events", "POST", body, headers)
+        self.base.settle()
+        assert status == 201 and answer["stored"] is True, (status, answer)
 
     def send(self, kind, person, ref, fail=False):
         if kind == "dup":
@@ -230,6 +242,18 @@ def test_every_adapter_gives_the_reference_history_for_a_random_sequence(adapter
                         m.setattr(rawpost.RawPostWriter, "write", flaky_store)
                         adapter.send(base, person, ref, fail=True)
                     adapter.send(base, person, ref)
+            elif kind == "poison":
+                poison = ({"contact": CONTACTS[person], "event_type": "grant", "channels": 5, "purposes": ["marketing"],
+                           "method": "checkbox", "origin": "consumer", "checked": True, "disclosure_sha256": disclosure}
+                          if person == 0 else
+                          {"contact": CONTACTS[person], "event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"],
+                           "method": "keyword", "origin": "consumer", "subject_key": secrets.token_hex(6000)})
+                if adapter_name == "http":
+                    adapter.send_poison(poison)
+                else:
+                    from consentvault import door
+                    with pytest.raises(Exception):  # the caller in this process is told; the post is stored all the same
+                        door.submit(conn, intake="library", region="US", allowed_purposes=PURPOSES, payload=poison)
             elif kind == "door_stop":
                 from consentvault import door  # a stop through another door: the library's system intake
                 door.submit(conn, intake="system_stop", region="US", allowed_purposes=PURPOSES, payload={

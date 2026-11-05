@@ -26,20 +26,25 @@ def _summary(mode: str, outcomes, failed) -> dict:
 
 def _run(args, cfg) -> int:
     from . import door
-    from .errors import ConsentVaultError
 
-    with _connect(cfg) as conn:
+    with _connect(cfg) as conn:   # the lock is held on this connection for the whole run and goes when it closes
+        if not conn.execute("SELECT pg_try_advisory_lock(hashtext('consentvault.projection-rebuild')) AS got").fetchone()["got"]:
+            return _already_running()
         multi = conn.execute("SELECT consentvault.current_org() AS o").fetchone()["o"] is None
         if not multi:
             outcomes = door.rebuild(conn, backend=door.SingleBackend(cfg.default_region, cfg.purposes or None))
             failed = [o for o in outcomes if o.retry]
             print(json.dumps(_summary("single", outcomes, failed)))
             return EXIT_OK if not failed else _unfinished(len(failed))
+        return _run_multi_tenant(cfg, conn)
+
+
+def _run_multi_tenant(cfg, conn) -> int:
     from . import api, cmd_cloud
+    from .errors import ConsentVaultError
 
     settings = cmd_cloud.build_cloud(cfg, os.environ)
-    with _connect(cfg) as listing:
-        orgs = [r["projection_org_ids"] for r in listing.execute("SELECT * FROM consentvault.projection_org_ids()").fetchall()]
+    orgs = [r["projection_org_ids"] for r in conn.execute("SELECT * FROM consentvault.projection_org_ids()").fetchall()]
     if not orgs:
         raise ConsentVaultError("the rebuild found no organisation to project; an empty list is never an answer here")
     outcomes: list = []
@@ -58,6 +63,14 @@ def _run(args, cfg) -> int:
     if failed:
         return _unfinished(len(failed))
     return EXIT_OK
+
+
+def _already_running() -> int:
+    import sys
+
+    print("consentvault: another projection-rebuild is running; two runs at once could pick different winners between copies of "
+          "one request, so this one did nothing and the next scheduled run will go ahead", file=sys.stderr)
+    return EXIT_ERROR
 
 
 def _unfinished(n: int) -> int:

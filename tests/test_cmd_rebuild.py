@@ -63,3 +63,19 @@ def test_a_passing_fault_leaves_the_post_pending_with_exit_2_and_the_next_run_fi
     assert conn.execute("SELECT count(*) AS n FROM consentvault.raw_post_fact WHERE name = 'event_not_derived'").fetchone()["n"] == 0
     monkeypatch.setattr(door, "record_event", real)
     assert cli.main(["projection-rebuild"]) == 0 and _revokes(conn) == 1
+
+
+def test_two_runs_at_once_do_not_both_project(dsn, app_dsn, conn, monkeypatch, capsys):
+    monkeypatch.setenv("CONSENTVAULT_DSN", dsn)
+    monkeypatch.setenv("CONSENTVAULT_DEFAULT_REGION", "US")
+    monkeypatch.setenv("CONSENTVAULT_PURPOSES", "marketing")
+    _store_a_stop_whose_projection_crashed(app_dsn, "+12125550123")
+    holder = psycopg.connect(dsn, autocommit=True)
+    try:
+        assert holder.execute("SELECT pg_try_advisory_lock(hashtext('consentvault.projection-rebuild'))").fetchone()[0]
+        assert cli.main(["projection-rebuild"]) != 0
+        assert "another projection-rebuild is running" in capsys.readouterr().err
+        assert _revokes(conn) == 0
+    finally:
+        holder.close()
+    assert cli.main(["projection-rebuild"]) == 0 and _revokes(conn) == 1

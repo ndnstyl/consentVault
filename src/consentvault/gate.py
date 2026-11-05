@@ -77,9 +77,12 @@ _LINE_COLUMNS = ("seq, event_id::text AS event_id, event_type, origin, method, s
 
 # A person's history is read in the order the posts arrived, never the order the projection happened to write their events (a
 # crash can project an earlier post after a later one). An event that cites no post is placed by its own receipt time.
-_ARRIVAL_ORDER = ("coalesce((SELECT p.received_at FROM consentvault.event_source_post s JOIN consentvault.raw_post p"
+_POST_OF_EVENT = ("(SELECT {col} FROM consentvault.event_source_post s JOIN consentvault.raw_post p"
                   " ON p.org_id = s.org_id AND p.post_id = s.post_id WHERE s.org_id = event.org_id AND s.event_id = event.event_id"
-                  " AND s.role = 'trigger' LIMIT 1), received_at), seq")
+                  " AND s.role = 'trigger' LIMIT 1)")
+# Equal arrival times fall back to the post's own seq (its place in the arrival chain), then the event's seq.
+_ARRIVAL_ORDER = (f"coalesce({_POST_OF_EVENT.format(col='p.received_at')}, received_at), "
+                  f"coalesce({_POST_OF_EVENT.format(col='p.seq')}, 0), seq")
 
 
 def _line(row) -> dict:

@@ -169,3 +169,18 @@ def classify(message: str) -> Classification:
             return Classification(START, "start_keyword", " ".join(core))
         return Classification(NEEDS_REVIEW, "start_word_in_longer_message", " ".join(core))
     return Classification(NOT_STOP, "no_stop_signal")
+
+
+def read_text(text: str) -> tuple[str, str, str, list[str]]:
+    """(verdict, reason, action, matched words). The action is stop, start, help or read (a person reads it)."""
+    c = classify(text)
+    matched = [c.matched] if c.matched else []
+    if c.verdict == STOP or (c.verdict == NEEDS_REVIEW and c.reason == "stop_word_in_longer_message"):
+        return c.verdict, c.reason, "stop", matched
+    if c.verdict == START:
+        if is_whole_start_word(text):
+            return c.verdict, c.reason, "start", matched
+        return NEEDS_REVIEW, "start_word_in_longer_message", "read", matched
+    if c.verdict == NOT_STOP and fold(text) in ("help", "info"):
+        return "help", "help_keyword", "help", matched
+    return c.verdict, c.reason, "read", matched

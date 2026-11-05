@@ -28,7 +28,7 @@ from typing import Optional
 
 import psycopg
 
-from ..ledger import record_tenant_event
+from .. import door
 from ..tenancy import crypto as tc
 from . import texts, zones
 from .core import (KEY_ERRORS, RECORDED_BY, SYSTEM_REPLIES, ProviderError, log)
@@ -429,9 +429,9 @@ class SenderMixin:
         stop_recorded = False
         if plan.channel == "sms" and code == "21610":
             channels = self._stop_channels(conn)
-            record_tenant_event(conn, self.crypto, contact=plan.to, event_type="revoke", channels=channels, purposes=["*"],
-                                method="keyword", origin="consumer", source_id=self._system_source(conn, SYSTEM_REPLIES),
-                                recorded_by="provider_refusal")
+            door.record_observed(conn, self.crypto, intake="provider_refusal", fields=dict(
+                contact=plan.to, event_type="revoke", channels=channels, purposes=["*"], method="keyword", origin="consumer",
+                source_id=self._system_source(conn, SYSTEM_REPLIES), recorded_by="provider_refusal"))
             stop_recorded = True
         conn.execute("UPDATE consentvault.confirmation_send_intent SET status = 'failed', failed_code = %s, at = %s, last_error = NULL,"
                      " next_attempt_at = NULL, provider_refusal_stop = %s WHERE org_id = %s AND send_id = %s",

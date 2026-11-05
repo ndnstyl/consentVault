@@ -4,6 +4,16 @@ All notable changes are listed here. Format follows Keep a Changelog; versions f
 
 ## Unreleased
 
+- One door: every entry point (the single-company server, the multi-tenant server, the text reply, the command line, the
+  library, the stop page, a connected system's signal) stores the request whole and hands it to one projection. The events are
+  a rebuildable projection of the posts with one writer; each event cites the one post it came from, and the database refuses
+  a second event for the same post or the same signed request (migration 0073), so running the projection again after a crash is
+  always safe. A duplicate is a fold rule, not a claim: the seen-request record and the transaction choreography around it are
+  gone, as are the two copies of the step that parsed and judged a post while its request was open. The property test in
+  `tests/test_one_door_property.py` drives random grants, stops, START texts, form consents, resends, duplicates and crashes
+  through every adapter and compares the result with a reference fold; `tests/test_one_writer.py` fails if any code outside the
+  door appends an event. The anchor sink now lists the raw post chain's head beside the event head (marked `chain: raw_post`) and
+  the bundle verifier skips it when it checks the event path.
 - Raw post store: every request that reaches a capture path (any method, headers, body, size or origin, signed or not) is
   written whole to an append-only, per-organisation hash chain before anything reads it, and answered with a signed
   receipt carrying the fingerprint of the whole body. Large bodies are kept whole in the write-once evidence store. The

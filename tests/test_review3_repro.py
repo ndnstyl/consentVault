@@ -60,7 +60,8 @@ def test_r6_a_failed_derive_burns_the_request_id_so_the_safe_resend_is_dropped(s
     from consentvault import api
     now = int(time.time())
     assert T._post(server, T._grant(disclosure), ts=now - 60)[0] == 201
-    real = api._Handler._derive_event
+    from consentvault import door
+    real = door.SingleBackend.apply
     calls = {"n": 0}
 
     def flaky(self, *a, **k):
@@ -68,7 +69,7 @@ def test_r6_a_failed_derive_burns_the_request_id_so_the_safe_resend_is_dropped(s
         if calls["n"] == 1:
             raise psycopg.OperationalError("connection lost mid-derive")
         return real(self, *a, **k)
-    monkeypatch.setattr(api._Handler, "_derive_event", flaky)
+    monkeypatch.setattr(door.SingleBackend, "apply", flaky)
     h = {"X-ConsentVault-Request-Id": "stop-7"}
     assert T._post(server, STOP, ts=now - 30, headers=h)[0] == 201
     assert T._post(server, STOP, ts=now - 20, headers=h)[0] == 201  # the documented safe resend

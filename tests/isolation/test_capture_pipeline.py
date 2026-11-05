@@ -8,7 +8,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from consentvault import capture as capture_mod
+from consentvault import door as capture_mod
 from consentvault.anchor import anchor
 from consentvault.providers.errors import EvidenceStoreError
 from consentvault.tenancy import crypto as tc
@@ -71,11 +71,12 @@ def test_a_failed_commit_leaves_the_object_pending_until_reconciled_by_the_worke
 
     def broken(*a, **k):
         raise psycopg.errors.QueryCanceled("simulated commit failure")
-    monkeypatch.setattr(capture_mod, "tenant_capture", broken)
+    monkeypatch.setattr(capture_mod, "write_tenant_event", broken)
     s, r = cloud.grant(cloud.a, X)
     assert s == 201 and r["stored"] is True  # the post is stored before the event is tried; the event failing cannot remove it
     from .cloud_harness import facts_of, raw_posts
-    assert facts_of(cloud.t, raw_posts(cloud.t, cloud.a.org.org_id)[-1])["event_not_derived"].startswith("unavailable:")
+    last = facts_of(cloud.t, raw_posts(cloud.t, cloud.a.org.org_id)[-1])
+    assert "event_not_derived" not in last and "event_derived" not in last  # no outcome is left, so the projection runs again for it
     objs = _objects(cloud, cloud.a.org.org_id)
     assert [o["status"] for o in objs] == ["committed", "pending"]
     assert cloud.store.get(str(cloud.a.org.org_id), objs[1]["object_key"])  # the object itself is kept

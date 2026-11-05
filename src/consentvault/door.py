@@ -23,16 +23,17 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import urllib.parse
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Callable, Mapping
 
 import psycopg
 
-from . import edge_envelope, rawpost, safelog
+from . import edge_envelope, safelog, stopwords
 from .errors import (ConsentVaultError, EmptyConsentError, InvalidEventError, UncheckedConsentError)
-from .ledger import Event, record_event
+from .ledger import Event, record_event, record_tenant_event
 from .rawpost import Fact, RawPostWriter, RawRequest, StoredPost
 
 _log = safelog.get("consentvault.door")
@@ -50,6 +51,8 @@ CAPTURE_KEYS = frozenset({
     "contact", "event_type", "channels", "purposes", "method", "origin", "disclosure_sha256", "subject_key", "captured_at",
     "page_url", "client_ip", "user_agent", "session_ref", "bot_check", "source", "edge_received_at", "contact_verification",
     "checked", "inbound_message", "source_id", "brand_ids", "attribution", "display"})
+SYSTEM_INTAKES = ("system_stop", "signal", "stop_page", "restore", "erasure", "provider_refusal", "staff_marked")
+SYSTEM_FIELDS = (*EVENT_FIELDS, "source_id", "brand_ids", "attribution", "source_system_id")
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -74,6 +77,8 @@ def read_post(body: bytes, field_map: Any = None, code_version: str = CODE_VERSI
     post as facts."""
     ctx = dict(context or {})
     sha = hashlib.sha256(body).hexdigest()
+    if intake == "sms_reply":
+        return _read_text_reply(body, code_version, sha)
     try:
         if intake in EDGE_INTAKES:
             env = edge_envelope.unpack(body)
@@ -88,6 +93,8 @@ def read_post(body: bytes, field_map: Any = None, code_version: str = CODE_VERSI
     if not isinstance(payload, dict):
         return Reading(code_version, "unreadable", reason="not_a_json_object", body_sha256=sha)
     tenant = bool(ctx.get("tenant"))
+    if intake in SYSTEM_INTAKES:
+        return Reading(code_version, "event", {k: payload[k] for k in SYSTEM_FIELDS if k in payload}, body_sha256=sha)
     if (env.method if env is not None else ctx.get("method", "POST")).upper() != "POST" or (
             env is None and ctx.get("path", "/v1/events") != "/v1/events"):
         return Reading(code_version, "unreadable", reason="not_an_event_post", body_sha256=sha)
@@ -110,6 +117,24 @@ def read_post(body: bytes, field_map: Any = None, code_version: str = CODE_VERSI
     return Reading(code_version, "event", payload, body_sha256=sha)
 
 
+def _read_text_reply(body: bytes, code_version: str, sha: str) -> Reading:
+    """A reply the text provider posted (a form body). A whole stop word is a stop and always counts; any other text, START
+    included, is stored as received and creates nothing."""
+    try:
+        params = dict(urllib.parse.parse_qsl(body.decode("utf-8"), keep_blank_values=True))
+    except UnicodeError:  # loud-failure-exempt: the reading says not_a_form; the bytes stay stored
+        return Reading(code_version, "unreadable", reason="not_a_form", body_sha256=sha)
+    sender, text = params.get("From", ""), params.get("Body", "")
+    if not sender or "MessageStatus" in params:
+        return Reading(code_version, "unreadable", reason="not_a_reply", body_sha256=sha)
+    action = stopwords.read_text(text)[2]
+    if action != "stop":
+        return Reading(code_version, "text", reason=REASON_TEXT if action == "start" else "not_a_stop", body_sha256=sha)
+    return Reading(code_version, "event", {"contact": sender, "event_type": "revoke", "purposes": ["*"], "method": "keyword",
+                                           "origin": "consumer", "session_ref": f"twilio:{params.get('MessageSid', '')}"[:200]},
+                   body_sha256=sha)
+
+
 # ---- the pure rule set --------------------------------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -119,6 +144,8 @@ class Auth:
     reason: str | None = None       # why this post cannot produce an event (not_authenticated:<why>, replay, stale_timestamp ...)
     key: str | None = None          # the request's own identity (its signature, the edge's request id, a request id header)
     verified_key: bool = False      # the verified-grant secret signed it (or a local caller the vault trusts)
+    org_id: str = ""
+    credential: Mapping[str, Any] | None = None   # the verified credential a multi-tenant intake established (id, scopes)
 
 
 def auth_from_facts(facts: Mapping[tuple[str, str], Any]) -> Auth:
@@ -129,21 +156,24 @@ def auth_from_facts(facts: Mapping[tuple[str, str], Any]) -> Auth:
     key = vault("request_key")
     verified = vault("authenticated_by") in ("verified_key", "local")
     cred = vault("credential")
+    cred = cred if isinstance(cred, dict) and cred.get("state") == "verified" else None
+
+    def auth(reason):
+        return Auth(reason, key, verified, credential=cred)
+
     if vault("request_signature") not in (None, "valid"):
-        return Auth("not_authenticated:" + str(vault("request_signature")), key, verified)
+        return auth("not_authenticated:" + str(vault("request_signature")))
     if vault("tenant") is True:
         if vault("edge_timestamp") == "stale":
-            return Auth("stale_timestamp", key, verified)
+            return auth("stale_timestamp")
         if vault("replay", "fresh") != "fresh":
-            return Auth("replay", key, verified)
-        if not (isinstance(cred, dict) and cred.get("state") == "verified"):
-            return Auth("no_credential", key, verified)
-        return Auth(None, key, verified)
+            return auth("replay")
+        return auth(None if cred is not None else "no_credential")
     if vault("request_signature") is None:
-        return Auth("not_authenticated:unsigned", key, verified)
+        return auth("not_authenticated:unsigned")
     if vault("replay", "fresh") != "fresh":
-        return Auth("replay", key, verified)
-    return Auth(None, key, verified)
+        return auth("replay")
+    return auth(None)
 
 
 def decide(reading: Reading, auth: Auth, seen_keys: Callable[[str], bool] | set) -> str | None:
@@ -211,8 +241,36 @@ class SingleBackend:
             fields["channels"], fields["purposes"] = chans, purps
         return fields
 
-    def apply(self, conn, fields: dict) -> Event:
-        return record_event(conn, **fields)
+    def apply(self, conn, enter, fields: dict, link: Callable) -> str:
+        """Append the event and the link to its post in one transaction; returns the event id."""
+        with conn.transaction():
+            event = record_event(conn, **fields)
+            link(conn, event.event_id)
+        return event.event_id
+
+
+class TenantBackend:
+    """Writes the event of one post into the entered organisation's chain through the capture pipeline (evidence object, receipt,
+    the tenant's own checks). The pipeline puts the link in the transaction that writes the event."""
+
+    def __init__(self, pipeline: Any, enter_for_credential: Callable[[str, Mapping[str, Any]], Callable]) -> None:
+        self.pipeline, self.enter_for_credential = pipeline, enter_for_credential
+
+    def prepare(self, conn, payload: Mapping[str, Any], body: bytes, auth: Auth) -> dict | str:
+        from .tenancy.admin_base import ApiError
+        from .tenancy.pipeline import parse_capture
+
+        cred = auth.credential or {}
+        try:
+            req = parse_capture(dict(payload), body, tuple(cred.get("scopes") or ()))
+        except ApiError as exc:
+            return exc.name
+        return {"req": req, "credential_id": uuid.UUID(str(cred.get("credential_id"))), "credential": dict(cred), "org_id": auth.org_id}
+
+    def apply(self, conn, enter, fields: dict, link: Callable) -> str:
+        result = self.pipeline.capture(conn, self.enter_for_credential(fields["org_id"], fields["credential"]), fields["req"], credential_id=fields["credential_id"],
+                                       link=link)
+        return result.event_id
 
 
 # ---- the door ------------------------------------------------------------------------------------------------------------
@@ -233,10 +291,10 @@ class PostView:
 
 @dataclass(frozen=True)
 class Outcome:
-    """What the projection did for one post: an event, or the plain reason it produced none."""
+    """What the projection did for one post: the event it appended, or the plain reason it produced none."""
 
     post_id: str
-    event: Event | None = None
+    event_id: str | None = None
     reason: str | None = None
 
 
@@ -259,9 +317,23 @@ def _ctx(conn, enter):
 
 def _seen(conn, org: str) -> Callable[[str], bool]:
     def seen(key: str) -> bool:
-        return conn.execute("SELECT 1 FROM consentvault.event_source_post WHERE org_id = %s AND request_key = %s"
-                            " AND role = 'trigger'", (uuid.UUID(org), key)).fetchone() is not None
+        return conn.execute("SELECT consentvault.request_counted(%s) AS counted", (key,)).fetchone()["counted"]
     return seen
+
+
+def reason_of(exc: BaseException) -> str:
+    """The plain reason a refusal is stored under: the contract name of an API error, the class of a vault error, the class of a
+    database fault behind a ledger error. Never the text."""
+    from .errors import LedgerError
+    from .tenancy.admin_base import ApiError
+
+    if isinstance(exc, ApiError):
+        return exc.name
+    if isinstance(exc, LedgerError):
+        return "LedgerError:" + type(exc.__cause__).__name__ if exc.__cause__ is not None else "LedgerError"
+    if isinstance(exc, ConsentVaultError):
+        return type(exc).__name__
+    return "unavailable:" + type(exc).__name__
 
 
 def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, backend: Any, view: PostView, *,
@@ -270,38 +342,37 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
     already projected, or a request already counted, appends nothing. Never judges the sender. A caller in this process
     (``raise_errors``) is also given the error that names why no event was written, after the reason is stored."""
     reading = read_post(view.body, field_map, CODE_VERSION, intake=view.intake, context=_view_context(view))
-    auth = auth_from_facts(view.facts)
+    auth = replace(auth_from_facts(view.facts), org_id=view.org_id)
+    org = uuid.UUID(view.org_id)
+
+    def link(c, event_id):
+        c.execute("INSERT INTO consentvault.event_source_post (org_id, event_id, post_id, role, request_key)"
+                  " VALUES (%s, %s, %s, 'trigger', %s)", (org, uuid.UUID(str(event_id)), uuid.UUID(view.post_id), auth.key))
+
     try:
         with _ctx(conn, enter):
             reason = decide(reading, auth, _seen(conn, view.org_id))
-            fields = backend.prepare(conn, reading.payload, view.body, auth) if reason is None else None
-            if reason is not None or isinstance(fields, str):
-                outcome = Outcome(view.post_id, reason=reason or fields)
-            else:
-                try:
-                    event = backend.apply(conn, fields)
-                    conn.execute(
-                        "INSERT INTO consentvault.event_source_post (org_id, event_id, post_id, role, request_key)"
-                        " VALUES (%s, %s, %s, 'trigger', %s)",
-                        (uuid.UUID(view.org_id), uuid.UUID(event.event_id), uuid.UUID(view.post_id), auth.key))
-                except psycopg.errors.UniqueViolation:
-                    raise _AlreadyProjected() from None
-                outcome = Outcome(view.post_id, event=event)
+        fields = backend.prepare(conn, reading.payload, view.body, auth) if reason is None else None
+        if reason is not None or isinstance(fields, str):
+            outcome = Outcome(view.post_id, reason=reason or fields)
+        else:
+            try:
+                outcome = Outcome(view.post_id, event_id=backend.apply(conn, enter, fields, link))
+            except psycopg.errors.UniqueViolation:
+                raise _AlreadyProjected() from None
     except _AlreadyProjected:
         outcome = Outcome(view.post_id, reason="request_seen_before")
-    except ConsentVaultError as exc:
-        _record(writer, conn, enter, view, Outcome(view.post_id, reason=type(exc).__name__))
+    except (ConsentVaultError, psycopg.Error) as exc:
+        reason = reason_of(exc)
+        if not reason.startswith("unavailable:"):
+            _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason))
+        else:
+            _log.error("the event of a stored post could not be written; the projection will run again for it", error=reason)
         if raise_errors:
             raise
-        return Outcome(view.post_id, reason=type(exc).__name__)
-    except psycopg.Error as exc:
-        _log.error("the event of a stored post could not be written; the projection will run again for it",
-                   error=type(exc).__name__)
-        if raise_errors:
-            raise
-        return Outcome(view.post_id, reason="unavailable:" + type(exc).__name__)
+        return Outcome(view.post_id, reason=reason)
     _record(writer, conn, enter, view, outcome)
-    if raise_errors and outcome.event is None:
+    if raise_errors and outcome.event_id is None:
         if outcome.reason == REASON_TEXT:
             raise InvalidEventError("a START text restores nothing; the way back is a form (verification 'otp' or none)")
         raise InvalidEventError(f"the post is stored and no event was written: {outcome.reason}")
@@ -315,9 +386,7 @@ class _AlreadyProjected(Exception):
 def _record(writer, conn, enter, view: PostView, outcome: Outcome) -> Outcome:
     """Leave the plain outcome beside the post as a fact (appended; the post is never touched)."""
     try:
-        if outcome.event is None and (outcome.reason or "").startswith("unavailable:"):
-            return outcome
-        fact = Fact("vault", "event_derived", outcome.event.event_id) if outcome.event is not None else \
+        fact = Fact("vault", "event_derived", outcome.event_id) if outcome.event_id is not None else \
             Fact("vault", "event_not_derived", outcome.reason)
         writer.append_facts(conn, enter, view.org_id, view.post_id, view.facts.get(("__key__", "data_key")), [fact])
     except (ConsentVaultError, psycopg.Error) as exc:
@@ -326,11 +395,15 @@ def _record(writer, conn, enter, view: PostView, outcome: Outcome) -> Outcome:
 
 
 def project_post(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, backend: Any, view: PostView, *,
-                 field_map: Any = None, raise_errors: bool = False) -> Outcome:
-    """Project one post just stored. A vault that can read its own posts first brings every earlier post that has no outcome up
-    to date, in arrival order, so a crash before this call never changes which of two copies of one request counts."""
-    if view.facts.get(("__can_read__", "catch_up")) is True:
-        project_pending(writer, conn, enter, backend, through_seq=view.seq - 1)
+                 field_map: Any = None, raise_errors: bool = False, catch_up: Callable | bool = False,
+                 intakes: tuple[str, ...] | None = None) -> Outcome:
+    """Project one post just stored. When the caller can read its own posts (``catch_up``: True for the single-company vault, or
+    the tenant entry that holds a read scope), every earlier post that has no outcome is brought up to date first, in arrival
+    order, so a crash before this call never changes which of two copies of one request counts or the order of a person's
+    history."""
+    if catch_up:
+        project_pending(writer, conn, None if catch_up is True else catch_up, backend, through_seq=view.seq - 1,
+                        intakes=intakes)
     return project_view(writer, conn, enter, backend, view, field_map=field_map, raise_errors=raise_errors)
 
 
@@ -342,18 +415,18 @@ def read_view(writer: RawPostWriter, conn: psycopg.Connection, org: str, post_id
 
 
 def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, backend: Any, *,
-                    through_seq: int | None = None) -> list[Outcome]:
+                    through_seq: int | None = None, intakes: tuple[str, ...] | None = None) -> list[Outcome]:
     """Run the projection for every stored post that has no outcome yet, in arrival order. Safe to run any number of times."""
     with _ctx(conn, enter):
         rows = conn.execute(
             "SELECT p.org_id::text AS org, p.post_id::text AS post_id, p.seq, p.intake, p.method, p.path FROM consentvault.raw_post p"
             " WHERE p.org_id = (SELECT consentvault.current_org()) AND p.kind = 'post'"
-            "   AND (%s::bigint IS NULL OR p.seq <= %s)"
+            "   AND (%s::bigint IS NULL OR p.seq <= %s) AND (%s::text[] IS NULL OR p.intake = ANY(%s))"
             "   AND NOT EXISTS (SELECT 1 FROM consentvault.event_source_post s WHERE s.org_id = p.org_id"
             "                   AND s.post_id = p.post_id AND s.role = 'trigger')"
             "   AND NOT EXISTS (SELECT 1 FROM consentvault.raw_post_fact f WHERE f.org_id = p.org_id"
             "                   AND f.post_id = p.post_id AND f.name = 'event_not_derived')"
-            " ORDER BY p.seq", (through_seq, through_seq)).fetchall()
+            " ORDER BY p.seq", (through_seq, through_seq, intakes and list(intakes), intakes and list(intakes))).fetchall()
         views = [read_view(writer, conn, r["org"], r["post_id"], r["seq"], r["intake"], r["method"], r["path"]) for r in rows]
     return [project_view(writer, conn, enter, backend, v) for v in views]
 
@@ -365,6 +438,128 @@ def rebuild(conn: psycopg.Connection, *, backend: Any = None, writer: RawPostWri
     return project_pending(writer or RawPostWriter(), conn, enter, backend or SingleBackend())
 
 
+class TenantLedgerBackend:
+    """Writes the event of one post into the entered organisation's chain with the ledger's tenant append (no capture pipeline:
+    the stops and the system events whose evidence is the post itself). ``defaults`` fill fields the post does not carry."""
+
+    def __init__(self, crypto: Any, *, defaults: Mapping[str, Any] | None = None, region: str | None = None,
+                 allowed_purposes=None) -> None:
+        self.crypto, self.defaults, self.region, self.allowed_purposes = crypto, dict(defaults or {}), region, allowed_purposes
+
+    def prepare(self, conn, payload: Mapping[str, Any], body: bytes, auth: Auth) -> dict | str:
+        fields = {**self.defaults, **{k: v for k, v in payload.items() if v is not None}}
+        for required in ("contact", "event_type", "channels", "purposes"):
+            if required not in fields:
+                return f"missing_field:{required}"
+        for name in ("captured_at", "edge_received_at"):
+            if isinstance(fields.get(name), str):
+                try:
+                    fields[name] = datetime.fromisoformat(fields[name].replace("Z", "+00:00"))
+                except ValueError:  # loud-failure-exempt: returned as the stored reason bad_<field>
+                    return f"bad_{name}"
+        fields.setdefault("method", "checkbox")
+        fields.setdefault("origin", "consumer")
+        fields["region"], fields["allowed_purposes"] = self.region, self.allowed_purposes
+        return fields
+
+    def apply(self, conn, enter, fields: dict, link: Callable) -> str:
+        with conn.transaction():
+            event = record_tenant_event(conn, self.crypto, **fields)
+            link(conn, event.event_id)
+        return event.event_id
+
+
+def write_tenant_event(conn: psycopg.Connection, crypto, *, contact: str, event_type: str, channels, purposes,
+                       method: str = "checkbox", origin: str = "consumer", checked: bool | None = None,
+                       contact_verification: str = "none", inbound_message: str | None = None,
+                       disclosure_sha256: str | None = None, payload: bytes | None = None, **fields) -> Event:
+    """The capture pipeline's append: one event in the entered organisation's chain (hash version 2), with the capture rules. A
+    grant needs the consent box checked, a channel, a purpose and wording; a verified grant needs the integrator's one-time code
+    (``otp``); a text is refused as consent; a stop carries no wording and always records. Called by the pipeline and the restore
+    job, the only code that reaches the ledger from here."""
+    if event_type == "grant":
+        if checked is not True:
+            raise UncheckedConsentError("the consent box was not checked; no grant recorded")
+        chans, purps = _list(channels), _list(purposes)
+        if not chans or not purps:
+            raise EmptyConsentError("a grant must name at least one channel and one purpose")
+        if not disclosure_sha256:
+            raise EmptyConsentError("a grant must carry the hash of the disclosure the person saw")
+        channels, purposes = chans, purps
+    elif checked is not None:
+        raise InvalidEventError("'checked' belongs only to a grant")
+    if event_type != "grant":
+        contact_verification, inbound_message = "none", None  # a stop always records, whatever text came with it
+    elif contact_verification == "inbound_keyword" or inbound_message is not None:
+        raise InvalidEventError("a START text restores nothing; the way back is a form")
+    return record_tenant_event(
+        conn, crypto, contact=contact, event_type=event_type, channels=channels, purposes=purposes, method=method,
+        origin=origin, disclosure_sha256=disclosure_sha256 or None, contact_verification=contact_verification,
+        payload=payload, **fields)
+
+
+def write_system_event(conn: psycopg.Connection, crypto: Any, **fields) -> Event:
+    """An event the vault writes with no post of its own because the post would hold the very data it is erasing (an erasure's
+    stop). The one use; every other event cites its post."""
+    return record_tenant_event(conn, crypto, **fields)
+
+
+def authenticate_text(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, stored: StoredPost,
+                      request_key: str) -> None:
+    """Record, beside a stored reply, that the provider's signature checked out. Written on its own connection and committed
+    before anything is projected, so the rebuild can project the reply after a crash."""
+    facts = (Fact("vault", "request_signature", "valid"), Fact("vault", "replay", "fresh"),
+             Fact("vault", "authenticated_by", "provider"), Fact("vault", "request_key", request_key))
+    writer.append_facts(conn, enter, stored.org_id, stored.post_id, stored.data_key, facts)
+
+
+def project_text_reply(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, crypto: Any, stored: StoredPost,
+                       body: bytes, *, request_key: str, defaults: Mapping[str, Any], region: str | None = None) -> Outcome:
+    """A reply the text provider posted, already stored whole and already authenticated (``authenticate_text``): project it. A
+    stop word makes the stop; anything else makes nothing. A failure to write raises, so the caller's transaction (the reply row,
+    our answer) stands or falls with the stop. A stop the rebuild already projected is returned as the event it made."""
+    with _ctx(conn, enter):
+        row = conn.execute("SELECT event_id::text AS event_id FROM consentvault.event_source_post"
+                           " WHERE request_key = %s AND role = 'trigger'", (request_key,)).fetchone()
+    if row is not None:
+        return Outcome(stored.post_id, event_id=row["event_id"])
+    facts = {("vault", "request_signature"): "valid", ("vault", "replay"): "fresh", ("vault", "authenticated_by"): "provider",
+             ("vault", "request_key"): request_key, ("__key__", "data_key"): stored.data_key}
+    view = PostView(stored.org_id, stored.post_id, stored.seq, "sms_reply", body, facts)
+    return project_post(writer, conn, enter, TenantLedgerBackend(crypto, defaults=defaults, region=region), view,
+                        raise_errors=True)
+
+
+def record_observed(conn: psycopg.Connection, crypto: Any, *, intake: str, fields: Mapping[str, Any], enter: Callable | None = None,
+                    region: str | None = None, allowed_purposes=None, request_key: str | None = None) -> Outcome:
+    """An event the vault itself observed (a stop page click, a carrier's refusal, an erasure's stop, a connected system's signal,
+    a person marking a reply): the observation is stored whole as a post of its own, then projected, so every event cites a post.
+    Raises when the event cannot be written, exactly as the ledger append does."""
+    writer = RawPostWriter(crypto=crypto)
+    enter = enter or (lambda c: c.transaction())
+    body = json.dumps(dict(fields), sort_keys=True, default=_json_default).encode("utf-8")
+    facts = [Fact("vault", "request_signature", "valid"), Fact("vault", "replay", "fresh"),
+             Fact("vault", "authenticated_by", "system")]
+    if request_key:
+        facts.append(Fact("vault", "request_key", request_key))
+    req = RawRequest(intake=intake, method="POST", path="/v1/events", query="", headers=(("content-type", "application/json"),),
+                     body=body, headers_presented_by="local-process", facts=tuple(facts))
+    stored = store_raw(writer, conn, enter, req)
+    view = PostView(stored.org_id, stored.post_id, stored.seq, intake, body,
+                    {**{("vault", f.name): f.value for f in facts}, ("__key__", "data_key"): stored.data_key})
+    backend = TenantLedgerBackend(crypto, region=region, allowed_purposes=allowed_purposes)
+    outcome = project_post(writer, conn, enter, backend, view, raise_errors=True)
+    return outcome
+
+
+def _json_default(v: Any) -> Any:
+    if isinstance(v, datetime):
+        return v.isoformat()
+    if isinstance(v, uuid.UUID):
+        return str(v)
+    raise TypeError(f"{type(v).__name__} is not JSON")
+
+
 # ---- the library and command line adapters' way in -----------------------------------------------------------------------
 
 def submit(conn: psycopg.Connection, *, intake: str, payload: Mapping[str, Any], region: str | None = None,
@@ -372,20 +567,22 @@ def submit(conn: psycopg.Connection, *, intake: str, payload: Mapping[str, Any],
     """A caller in this process (the library, the command line) hands its request to the door. The request is stored whole as
     JSON, then projected; the event is returned, or the error that names why none was written is raised, after the post is
     stored either way."""
-    def default(v):
-        if isinstance(v, datetime):
-            return v.isoformat()
-        raise TypeError(f"{type(v).__name__} is not JSON")
-
     writer = writer or RawPostWriter()
-    body = json.dumps(dict(payload), default=default, sort_keys=True).encode("utf-8")
+    body = json.dumps(dict(payload), default=_json_default, sort_keys=True).encode("utf-8")
     facts = (Fact("vault", "request_signature", "valid"), Fact("vault", "replay", "fresh"),
              Fact("vault", "authenticated_by", "local" if verified else "shared_secret"))
     req = RawRequest(intake=intake, method="POST", path="/v1/events", query="", headers=(("content-type", "application/json"),),
                      body=body, headers_presented_by="local-process", facts=facts)
     stored = store_raw(writer, conn, None, req)
     all_facts = {("vault", f.name): f.value for f in facts}
-    all_facts[("__can_read__", "catch_up")] = True
     all_facts[("__key__", "data_key")] = stored.data_key
     view = PostView(stored.org_id, stored.post_id, stored.seq, intake, body, all_facts)
-    return project_post(writer, conn, None, SingleBackend(region, allowed_purposes), view, raise_errors=True).event
+    event_id = project_post(writer, conn, None, SingleBackend(region, allowed_purposes), view, raise_errors=True,
+                           catch_up=True).event_id
+    return event_by_id(conn, event_id)
+
+
+def event_by_id(conn: psycopg.Connection, event_id: str) -> Event:
+    row = conn.execute("SELECT seq, event_id::text AS event_id, row_hash, prev_hash FROM consentvault.event WHERE event_id = %s",
+                       (uuid.UUID(event_id),)).fetchone()
+    return Event(seq=row["seq"], event_id=row["event_id"], row_hash=row["row_hash"], prev_hash=row["prev_hash"])

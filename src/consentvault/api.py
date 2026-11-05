@@ -29,14 +29,12 @@ from urllib.parse import parse_qs, urlsplit
 from .safelog import caller_detail, db_code, describe, refusal_code
 from . import config as config_mod
 from . import edge_envelope
-from .capture import capture, capture_verified
 from .capture_http import (StoreRefusedRequests, Downstream, request_key, cors_headers, is_capture_path, is_preflight, read_any_body, request_headers,
                            transport_credentials_removed, unavailable_answer)
 from . import dbclock
 from .db import connect
 from .errors import ConfigError, ConsentVaultError, NormalizationError
 from .gate import NOTICE, REASON_DB_DOWN, contact_facts, unavailable
-from .ledger import record_event
 from .proof import lookup
 
 REPLAY_WINDOW_SECONDS = 300
@@ -54,13 +52,6 @@ ENV_TOKEN = "CONSENTVAULT_API_TOKEN"
 ENV_HOSTS = "CONSENTVAULT_API_HOSTS"
 
 DEFAULT_HOSTS = ("localhost", "127.0.0.1", "[::1]")
-
-_EVENT_FIELDS = (
-    "contact", "event_type", "channels", "purposes", "method", "origin", "disclosure_sha256",
-    "subject_key", "captured_at", "page_url", "client_ip", "user_agent", "session_ref",
-    "bot_check", "source", "recorded_by", "edge_received_at", "payload_sha256", "contact_verification",
-)
-_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -326,9 +317,10 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
                 if raw.kind == "post":
                     view = door.PostView(stored.org_id, stored.post_id, stored.seq, raw.intake, bytes(raw.body),
                                          {**{(f.source, f.name): f.value for f in raw.facts},
-                                          ("__can_read__", "catch_up"): True, ("__key__", "data_key"): stored.data_key},
+                                          ("__key__", "data_key"): stored.data_key},
                                          raw.method, raw.path)
-                    door.project_post(self.writer, conn, None, door.SingleBackend(self.settings.default_region, self.settings.purposes), view)
+                    door.project_post(self.writer, conn, None, door.SingleBackend(self.settings.default_region, self.settings.purposes),
+                                      view, catch_up=True)
         except Exception as exc:  # loud-failure-exempt: logged critical below; the answer is given and the post is stored
             _log.critical("the work after an answer failed; the post is stored", error=type(exc).__name__)
 
@@ -638,12 +630,6 @@ def _api_error(name: str, detail: str, fields: dict | None = None):
     return ApiError(name, detail, fields)
 
 
-_CAPTURE_KEYS = frozenset({
-    "contact", "event_type", "channels", "purposes", "method", "origin", "disclosure_sha256", "subject_key", "captured_at",
-    "page_url", "client_ip", "user_agent", "session_ref", "bot_check", "source", "edge_received_at", "contact_verification",
-    "checked", "inbound_message", "source_id", "brand_ids", "attribution", "display"})
-
-
 @dataclass(frozen=True)
 class _EdgeClaims:
     """Stands where verified access-token claims stand, for a capture the edge forwarded: capture scope only, one minute."""
@@ -950,6 +936,17 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
         facts += list(self._extra_facts)
         identity = self._capture_identity(body, headers, url, facts)
         inner = identity["inner"]
+        facts.append(Fact("vault", "tenant", True))
+        if identity["owner"] is not None:
+            facts.append(Fact("vault", "site_owner", {"source_id": str(identity["owner"].source_id) if identity["owner"].source_id else None,
+                                                      "brand_ids": [str(b) for b in (identity["owner"].brand_ids or ())]}))
+        if identity["claims"] is not None and inner is not None:
+            facts.append(Fact("vault", "credential", {"state": "verified", "credential_id": str(identity["claims"].credential_id),
+                                                      "scopes": list(identity["claims"].scopes), "via": "edge"}))
+        key = request_key(inner.headers if inner else headers, identity.get("signature"),
+                          identity["edge_facts"].get("request_id"), bytes(inner.body if inner is not None else body))
+        if key:
+            facts.append(Fact("vault", "request_key", key))
         if inner is not None:  # the edge answers the browser's permission check itself; to the edge the vault answers with a receipt
             preflight_inner = inner.method.upper() == "OPTIONS" and any(
                 n.lower() == "access-control-request-method" for n, _ in inner.headers)
@@ -1005,7 +1002,8 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
         if auth:
             try:
                 out["claims"] = self._claims("capture", "capture_verified")
-                facts.append(Fact("vault", "credential", {"state": "verified", "credential_id": str(out["claims"].credential_id)}))
+                facts.append(Fact("vault", "credential", {"state": "verified", "credential_id": str(out["claims"].credential_id),
+                                                          "scopes": list(out["claims"].scopes)}))
             except Exception as exc:  # loud-failure-exempt: the failure is the stored fact credential, the post goes to the platform intake
                 facts.append(Fact("vault", "credential", {"state": "refused", "reason": type(exc).__name__}))
         elif signed and self.command == "POST":
@@ -1072,81 +1070,29 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
             facts.append(Fact("vault", "origin_on_list", origin in owner.allowed_origins))
 
     def _after_answer(self, stored, raw, enter, identity: dict) -> None:
-        """Read the stored post and, for an identified post, derive the transitional event. Never raises: the answer is
-        given and the post is stored; a failure is logged loudly and left as a fact."""
-        from . import intake
-        from .rawpost import Fact
+        """Read the stored post, then hand it to the one door's projection. Never raises: the answer is given and the post is
+        stored; a failure is logged loudly and the projection is run again for it."""
+        from . import door, intake
 
         owner = identity["owner"]
         try:
             with connect(self.settings.dsn) as conn:
                 intake.read_after_commit(self.writer, conn, enter, stored, raw,
                                          source_id=owner.source_id if owner else None, request_id=self.request_id)
-                inner = identity["inner"]
-                if raw.kind == "post" and (inner.method if inner else raw.method) == "POST" and identity["claims"] is not None \
-                        and (inner is not None or raw.path == "/v1/events"):
-                    if identity["stale"] or identity.get("replayed"):
-                        outcome, event_id = ("stale_timestamp" if identity["stale"] else "replay"), None
-                    elif (key := request_key(inner.headers if inner else raw.headers, identity.get("signature"),
-                                             identity["edge_facts"].get("request_id"),
-                                             bytes(raw.read_body if raw.read_body is not None else raw.body))) \
-                            and self.writer.request_seen(conn, enter, stored, key):  # the cheap first check: writes nothing
-                        outcome, event_id = "request_seen_before", None
-                    else:
-                        # the claim is made inside the event's own tenant transaction, so the claim and the event stand or
-                        # fall together: a crash leaves neither, and two copies of one request record one event
-                        outcome, event_id = self._derive_event(conn, identity, raw, claim=(
-                            (lambda c: self.writer.claim_request(c, lambda cc: cc.transaction(), stored, key)) if key else None))
-                    self.writer.add_facts(conn, enter, stored, [Fact("vault", "event_derived", event_id) if event_id else
-                                                                Fact("vault", "event_not_derived", outcome)])
-                    if event_id:
-                        self.writer.link_event(conn, enter, stored, event_id)
+                if raw.kind == "post":
+                    claims = identity["claims"]
+                    view = door.PostView(stored.org_id, stored.post_id, stored.seq, raw.intake, bytes(raw.body),
+                                         {**{(f.source, f.name): f.value for f in raw.facts},
+                                          ("__key__", "data_key"): stored.data_key}, raw.method, raw.path)
+                    backend = door.TenantBackend(self.pipeline, _credential_enter(self.settings))
+                    from .tenancy.tokens import mint_org_token, org_transaction
+
+                    read = mint_org_token(self.settings.token_key, stored.org_id, ("gate_read",), credential_id=None, ttl_seconds=60)
+                    door.project_post(self.writer, conn, enter, backend, view,
+                                      catch_up=lambda c: org_transaction(c, read), intakes=("api", "edge_site_key"))
         except Exception as exc:  # loud-failure-exempt: logged critical below; the answer is given and the post is stored
             _log.critical("the work after an answer failed; the post is stored", request_id=self.request_id,
                           error=type(exc).__name__)
-
-    def _derive_event(self, conn, identity: dict, raw, claim=None) -> tuple[str, str | None]:
-        """The transitional step: an identified post that carries the event's own fields (or the widget's) is also written as
-        a ledger event, so the contact check keeps answering until it reads the posts. Whatever it cannot do is returned as
-        the reason (stored as a fact); the post is never touched."""
-        from .errors import (ConsentRefusedError, InvalidEventError, LedgerError, NormalizationError, UnknownDisclosureError,
-                             UnknownPurposeError)
-        from .tenancy.admin_base import ApiError
-        from .tenancy.pipeline import EvidenceStoreUnavailable, RequestSeenBefore, parse_capture
-
-        claims, body = identity["claims"], bytes(raw.read_body if raw.read_body is not None else raw.body)
-        try:
-            payload = json.loads(body.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):  # loud-failure-exempt: returned as the stored reason not_json
-            return "not_json", None
-        if not isinstance(payload, dict):
-            return "not_a_json_object", None
-        if identity["envelope"]:
-            owner = identity["owner"]
-            payload = edge_envelope.widget_event(payload, raw.read_headers, identity["edge_facts"],
-                                                 source_id=owner.source_id if owner else None,
-                                                 brand_ids=owner.brand_ids if owner else None, source="site_key")
-        else:
-            payload = {k: v for k, v in payload.items() if k in _CAPTURE_KEYS}
-        if payload.get("event_type") == "grant" and (
-                payload.get("contact_verification") == "inbound_keyword" or "inbound_message" in payload):
-            return "a_text_is_not_consent", None  # a START (or any text) restores nothing; the way back is a form
-        try:
-            req = parse_capture(payload, body, claims.scopes)
-            token = self._tenant_token(claims)
-            result = self.pipeline.capture(conn, self._enter(token), req, credential_id=claims.credential_id, claim=claim)
-        except RequestSeenBefore:
-            return "request_seen_before", None
-        except ApiError as exc:
-            return exc.name, None
-        except (UnknownDisclosureError, UnknownPurposeError, NormalizationError, InvalidEventError, ConsentRefusedError,
-                EvidenceStoreUnavailable) as exc:
-            return type(exc).__name__, None
-        except LedgerError as exc:
-            return ("LedgerError:" + type(exc.__cause__).__name__ if exc.__cause__ else "LedgerError"), None
-        except (ConsentVaultError, psycopg.Error) as exc:
-            return "unavailable:" + type(exc).__name__, None
-        return "derived", result.event_id
 
     def _gate_items(self, payload, many: bool):
         from .gate import MAX_BATCH, GateItem
@@ -1346,6 +1292,48 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
         self._client_evidence(body, "dnc")
 
 
+def _cloud_parts(settings: CloudApiSettings):
+    from .rawpost import RawPostWriter
+    from .tenancy.pipeline import CapturePipeline
+
+    pipeline = CapturePipeline(store=settings.evidence_store, crypto=settings.crypto, receipts=settings.receipts,
+                               default_retain_years=settings.default_retain_years, region=settings.region)
+    writer = RawPostWriter(crypto=settings.crypto, store=settings.evidence_store, receipts=settings.receipts,
+                           retain_years=settings.default_retain_years, inline_limit=settings.raw_post_inline_limit_bytes,
+                           unusual_size=settings.raw_post_unusual_size_bytes)
+    return pipeline, writer
+
+
+def _credential_enter(settings: CloudApiSettings):
+    """Enter an organisation under the credential a post was stored with (its id and scopes are facts beside the post)."""
+    from .tenancy.tokens import mint_org_token, org_transaction
+
+    def factory(org_id, cred):
+        token = mint_org_token(settings.token_key, org_id, tuple(cred.get("scopes") or ("capture",)),
+                               credential_id=str(cred.get("credential_id")), ttl_seconds=60)
+        return lambda conn: org_transaction(conn, token)
+    return factory
+
+
+def rebuild_cloud(settings: CloudApiSettings, org_ids) -> int:
+    """The rebuild job for the multi-tenant vault: for each organisation, find every stored post that has no outcome and project
+    it, in arrival order, with the credential the post was stored under. Safe to run twice and to run beside the live server.
+    Returns the number of posts it projected (events appended or reasons recorded)."""
+    from . import door
+    from .tenancy.tokens import mint_org_token, org_transaction
+
+    pipeline, writer = _cloud_parts(settings)
+    done = 0
+    for org in org_ids:
+        read = mint_org_token(settings.token_key, org, ("gate_read",), credential_id=None, ttl_seconds=300)
+
+        with connect(settings.dsn) as conn:
+            done += len(door.project_pending(writer, conn, lambda c: org_transaction(c, read),
+                                             door.TenantBackend(pipeline, _credential_enter(settings)),
+                                             intakes=("api", "edge_site_key")))
+    return done
+
+
 def make_cloud_server(settings: CloudApiSettings, host: str = "127.0.0.1", port: int = 8080) -> ThreadingHTTPServer:
     """Build (not start) the multi-tenant server. Refuses (``StartupRefusedError``) unless ``startup_check`` passes."""
     from .tenancy.pipeline import CapturePipeline
@@ -1358,12 +1346,6 @@ def make_cloud_server(settings: CloudApiSettings, host: str = "127.0.0.1", port:
     startup_check(settings.dsn)
     route_modules()  # an existing lane module that fails to import refuses the start, loudly
     _logscrub.install(_log.logger)  # the backstop sits on the standard logger the safe logger writes through
-    pipeline = CapturePipeline(store=settings.evidence_store, crypto=settings.crypto, receipts=settings.receipts,
-                               default_retain_years=settings.default_retain_years, region=settings.region)
-    from .rawpost import RawPostWriter
-
-    writer = RawPostWriter(crypto=settings.crypto, store=settings.evidence_store, receipts=settings.receipts,
-                           retain_years=settings.default_retain_years, inline_limit=settings.raw_post_inline_limit_bytes,
-                           unusual_size=settings.raw_post_unusual_size_bytes)
+    pipeline, writer = _cloud_parts(settings)
     handler = type("ConsentVaultCloudHandler", (_CloudHandler,), {"settings": settings, "pipeline": pipeline, "writer": writer})
     return SafeHTTPServer((host, port), handler)

@@ -231,7 +231,7 @@ def test_no_release_event_can_be_written_in_an_organisations_ledger(tenancy):
 
 def test_an_inbound_text_in_the_confirmation_service_creates_no_consent_and_lifts_no_stop():
     src = (SRC / "confirm" / "inbound.py").read_text()
-    assert "tenant_capture" in src  # the stop path still records
+    assert "project_text_reply" in src  # the stop path still records, through the one door
     assert not re.search(r"event_type\s*=\s*[\"']grant[\"']", src.split("elif action == \"start\"")[1].split("\n\n")[0])
 
 

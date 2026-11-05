@@ -316,7 +316,7 @@ def record_erasure_stop(conn, crypto, *, fp: str, erasure_id, ledger: Optional[L
     ``erasure-unconfirmed:<id>:<seq>``). A restore passes ``stop_seq`` (the entry's sequence number): the stop is written
     only when the database holds none for that exact entry. If the ledger refuses, no stop is written and nothing is erased.
     """
-    from ..ledger import record_tenant_event
+    from .. import door
     from . import crypto as tc
     from .keys_protocol import WrappedKey
     from .pipeline import org_channels
@@ -356,9 +356,9 @@ def record_erasure_stop(conn, crypto, *, fp: str, erasure_id, ledger: Optional[L
     marker = erasure_stop_marker(erasure_id, stop_seq or 0, unconfirmed=unconfirmed)
     data_key = crypto.open_contact_key(org, WrappedKey(bytes(held["wrapped_key"]), held["key_version"]))
     norm = tc.decrypt_text(data_key, org, str(last["event_id"]), "contact_norm", bytes(last["contact_ct"]))
-    ev = record_tenant_event(conn, crypto, contact=norm, contact_kind=last["contact_kind"], event_type="suppress",
-                             channels=channels, purposes=["*"], method="written", origin="consumer",
-                             source=ERASURE_SOURCE, recorded_by=marker)
+    ev = door.write_system_event(conn, crypto, contact=norm, contact_kind=last["contact_kind"], event_type="suppress",
+                                 channels=channels, purposes=["*"], method="written", origin="consumer",
+                                 source=ERASURE_SOURCE, recorded_by=marker)
     return str(ev.event_id)
 
 

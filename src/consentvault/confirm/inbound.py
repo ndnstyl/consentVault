@@ -26,10 +26,8 @@ from typing import Optional
 import psycopg
 
 from .. import stopwords
-from ..capture import tenant_capture
 from ..errors import (ConsentVaultError, EmptyConsentError, InvalidEventError, LedgerError, NormalizationError,
                       UncheckedConsentError, UnknownDisclosureError)
-from ..ledger import record_tenant_event
 from ..normalize import normalize_phone
 from ..tenancy import crypto as tc
 from ..tenancy.errors import TenancyError
@@ -52,22 +50,7 @@ def twilio_signature(auth_token: str, url: str, pairs: list[tuple[str, str]]) ->
     return base64.b64encode(mac.digest()).decode("ascii")
 
 
-whole_start_word = stopwords.is_whole_start_word
-
-
-def read_text(text: str) -> tuple[str, str, str, list[str]]:
-    """(verdict, reason, action, matched words). The action is stop, start, help or read (a person reads it)."""
-    c = stopwords.classify(text)
-    matched = [c.matched] if c.matched else []
-    if c.verdict == stopwords.STOP or (c.verdict == stopwords.NEEDS_REVIEW and c.reason == "stop_word_in_longer_message"):
-        return c.verdict, c.reason, "stop", matched
-    if c.verdict == stopwords.START:
-        if whole_start_word(text):
-            return c.verdict, c.reason, "start", matched
-        return stopwords.NEEDS_REVIEW, "start_word_in_longer_message", "read", matched
-    if c.verdict == stopwords.NOT_STOP and stopwords.fold(text) in ("help", "info"):
-        return "help", "help_keyword", "help", matched
-    return c.verdict, c.reason, "read", matched
+read_text = stopwords.read_text
 
 
 class _NotLifted(Exception):
@@ -93,9 +76,9 @@ class InboundMixin:
         pending: list[uuid.UUID] = []
         try:
             with self.tx(org) as raw_conn:  # the text, as received, is committed on its own first: a later failure never takes it back
-                self._store_raw(raw_conn, org, account_id, headers, body or b"")
+                stored = self._store_raw(raw_conn, org, account_id, headers, body or b"")
             with self.tx(org) as conn:
-                answer = self._inbound(conn, org, account_id, headers, body or b"", self._when(conn), pending)
+                answer = self._inbound(conn, org, account_id, headers, body or b"", self._when(conn), pending, stored)
         except RECORD_ERRORS as exc:
             log.error("an inbound text could not be recorded; answering 503 so the provider retries", error=type(exc).__name__)
             return Reply(503, {"error": "service_unavailable"})
@@ -106,6 +89,18 @@ class InboundMixin:
                 log.error("our answer to an inbound text could not be sent now; it stays queued", error=type(exc).__name__)
         return answer
 
+    def rebuild_replies(self, org) -> int:
+        """The rebuild for texts: project every stored reply of ``org`` that has no outcome, in arrival order. Safe to run twice."""
+        from .. import door
+        from ..rawpost import RawPostWriter
+
+        with self.tx(org) as conn:
+            backend = door.TenantLedgerBackend(self.crypto, region="US", defaults={
+                "channels": self._stop_channels(conn), "source_id": self._system_source(conn, SYSTEM_REPLIES),
+                "recorded_by": RECORDED_BY})
+            return len(door.project_pending(RawPostWriter(crypto=self.crypto), conn, lambda c: c.transaction(), backend,
+                                             intakes=("sms_reply",)))
+
     # ---- checks ------------------------------------------------------------------------------------------------------------
     def _failure(self, conn, org, account_id, cause: str, now: datetime) -> None:
         conn.execute("INSERT INTO consentvault.confirmation_inbound_failure (org_id, account_id, cause, at) VALUES (%s, %s, %s, %s)",
@@ -115,16 +110,16 @@ class InboundMixin:
         if n >= FAILURES_TO_ALARM:
             self._alarm_raise(conn, "inbound_signature_failures", {"account_id": str(account_id), "count": n}, now)
 
-    def _store_raw(self, conn, org, account_id, headers: dict, body: bytes) -> None:
+    def _store_raw(self, conn, org, account_id, headers: dict, body: bytes):
         """The request, exactly as received, is the first thing written (before any check). Raises StoreUnavailable."""
         from ..rawpost import Fact, RawPostWriter, RawRequest
 
         req = RawRequest(intake="sms_reply", method="POST", path=f"/v1/connectors/sms/{account_id}", query="",
                          headers=tuple((str(k), str(v)) for k, v in (headers or {}).items()), body=bytes(body),
                          facts=(Fact("vault", "account_id", str(account_id)),))
-        RawPostWriter(crypto=self.crypto).write(conn, lambda c: c.transaction(), req)
+        return RawPostWriter(crypto=self.crypto).write(conn, lambda c: c.transaction(), req)
 
-    def _inbound(self, conn, org, account_id, headers: dict, body: bytes, now: datetime, pending: list) -> Reply:
+    def _inbound(self, conn, org, account_id, headers: dict, body: bytes, now: datetime, pending: list, stored=None) -> Reply:
         acct = conn.execute("SELECT org_id, account_id, status, provider, sender_ct, inbound_url, provider_replies, inbound_verified_at,"
                             " disconnected_at FROM consentvault.sending_account WHERE org_id = %s AND account_id = %s",
                             (org, account_id)).fetchone()
@@ -159,7 +154,7 @@ class InboundMixin:
             return Reply(403, {"error": "inbound_number_mismatch"})
         if is_report:
             return self._delivery_report(conn, org, params, now)
-        return self._inbound_text(conn, org, acct, params, now, pending)
+        return self._inbound_text(conn, org, acct, params, now, pending, stored, body)
 
     # ---- a delivery report -------------------------------------------------------------------------------------------------
     def _delivery_report(self, conn, org, params: dict, now: datetime) -> Reply:
@@ -186,7 +181,7 @@ class InboundMixin:
         return Reply(200, {"status": "recorded"})
 
     # ---- a reply -----------------------------------------------------------------------------------------------------------
-    def _inbound_text(self, conn, org, acct: dict, params: dict, now: datetime, pending: list) -> Reply:
+    def _inbound_text(self, conn, org, acct: dict, params: dict, now: datetime, pending: list, stored=None, body: bytes = b"") -> Reply:
         sid, frm, text = params.get("MessageSid", ""), params.get("From", ""), params.get("Body", "")
         if not sid or not frm:
             return Reply(400, {"error": "invalid_request"})
@@ -225,11 +220,18 @@ class InboundMixin:
         state, event_id, queued = "to_read", None, []
         settings = self._settings_row(conn)
         if action == "stop":
-            ev = record_tenant_event(conn, self.crypto, contact=norm, event_type="revoke", channels=self._stop_channels(conn),
-                                     purposes=["*"], method="keyword", origin="consumer",
-                                     source_id=self._system_source(conn, SYSTEM_REPLIES), session_ref=f"twilio:{sid}",
-                                     recorded_by=RECORDED_BY)
-            state, event_id = "stop", uuid.UUID(ev.event_id)
+            from .. import door
+            from ..rawpost import RawPostWriter
+
+            writer = RawPostWriter(crypto=self.crypto)
+            with self.tx(org) as auth_conn:  # committed on its own first: a later failure never takes the check back
+                door.authenticate_text(writer, auth_conn, lambda c: c.transaction(), stored, f"twilio:{sid}")
+            outcome = door.project_text_reply(
+                writer, conn, lambda c: c.transaction(), self.crypto, stored, bytes(body),
+                request_key=f"twilio:{sid}", region="US",
+                defaults={"channels": self._stop_channels(conn), "source_id": self._system_source(conn, SYSTEM_REPLIES),
+                          "recorded_by": RECORDED_BY})
+            state, event_id = "stop", uuid.UUID(outcome.event_id)
             if settings:
                 queued.append(("optout_reply", texts.optout_reply(settings["organization_name"])))
         elif action == "help":

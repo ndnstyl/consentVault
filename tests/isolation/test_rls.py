@@ -69,7 +69,9 @@ def test_every_tenant_table_forces_row_level_security_bound_to_the_verified_tena
                                 "record_export_key", "record_export_record"}
         assert "may_read_records" in names["record"] and "may_read_records" in names["record_index"]
         assert "may_read_names" in names["record_display"] and "may_read_display_key" in names["org_display_key"]
-        assert len(policies) == len(tenant) + len(scoped) + len(audit) + len(disclosed) + len(names)
+        counted = {(p["tablename"], p["policyname"]) for p in tenant} | {(p["tablename"], p["policyname"]) for p in policies if p["policyname"].endswith(("_read_scope", "_disclosed")) and p["tablename"] in scoped | audit | disclosed | set(names)}
+        left = sorted((p["tablename"], p["policyname"]) for p in policies if (p["tablename"], p["policyname"]) not in counted)
+        assert left == [("single_fingerprint_secret", "single_fingerprint_secret_owner")], left
         opts = {r["relname"]: r["reloptions"] for r in owner.execute(
             "SELECT relname, reloptions FROM pg_class WHERE relname = ANY(%s)", (list(views),))}
         assert set(opts) == set(views)

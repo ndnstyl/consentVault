@@ -361,14 +361,14 @@ def _fields(evidence: dict) -> dict:
 
 def _reingest(conn, crypto, *, key: str, object_id: str, fp: str, evidence: dict, sha256: str, retain_until, region,
               restore_point, request_id: str, row: Optional[dict]) -> str:
-    from ..capture import tenant_capture
+    from .. import door
 
     if row is None:
         conn.execute("INSERT INTO consentvault.evidence_object (org_id, object_id, object_key, contact_fp, retain_until)"
                      " VALUES ((SELECT consentvault.current_org()), %s, %s, %s, %s)",
                      (object_id, key, fp, retain_until))
     body = base64.urlsafe_b64decode(evidence["body_b64"] + "=" * (-len(evidence["body_b64"]) % 4))
-    ev = tenant_capture(conn, crypto, payload=body, region=region, allowed_purposes=None, **_fields(evidence))
+    ev = door.write_tenant_event(conn, crypto, payload=body, region=region, allowed_purposes=None, **_fields(evidence))
     conn.execute("UPDATE consentvault.evidence_object SET status = 'committed', event_id = %s, sha256 = %s,"
                  " settled_at = clock_timestamp() WHERE org_id = (SELECT consentvault.current_org()) AND object_id = %s",
                  (ev.event_id, sha256, object_id))

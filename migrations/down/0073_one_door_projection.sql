@@ -15,6 +15,7 @@ BEGIN
 END
 $$;
 
+DROP FUNCTION consentvault.request_counted(text);
 GRANT INSERT (org_id, request_key, post_id) ON consentvault.seen_request TO consentvault_app;
 DROP INDEX consentvault.event_source_post_one_request;
 DROP INDEX consentvault.event_source_post_one_trigger;

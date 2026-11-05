@@ -1,9 +1,10 @@
-"""The multi-tenant path claims a request in the same transaction as the event it derives."""
+"""The multi-tenant path through the one door: a crash after the answer leaves a stored post and no event, the resend of the
+request then counts once, and a duplicate is a fold rule that spends no evidence."""
 import json, os, threading, time, urllib.request, uuid
 
 import pytest
 
-from consentvault.rawpost import RawPostWriter
+from consentvault import door
 from .cloud_harness import Cloud, facts_of, raw_posts
 
 X = "+15555550177"
@@ -44,27 +45,24 @@ def _grant_body(cloud, nonce):
             "page_url": "https://example.test/signup", "client_nonce": nonce}
 
 
-def test_crash_at_the_claim_leaves_no_event_and_a_stop_is_not_lifted_by_a_resend_of_a_recorded_grant(cloud, monkeypatch):
+def test_a_crash_after_the_answer_leaves_no_event_and_a_stop_is_not_lifted_by_a_resend_of_a_recorded_grant(cloud, monkeypatch):
     nonce = str(uuid.uuid4())
     tok = cloud.token(cloud.a, "capture")
     h = {"X-ConsentVault-Request-Id": "form-1"}
-    real = RawPostWriter.claim_request
+    real = door.TenantBackend.apply
     n = {"c": 0}
 
     def dies(self, *a, **k):
         n["c"] += 1
         if n["c"] == 1:
-            raise RuntimeError("process died at the claim")  # stands in for a crash, before the event is written
+            raise RuntimeError("process died before the event")  # stands in for a crash between the answer and the event
         return real(self, *a, **k)
     base = _events(cloud, "grant")
-    monkeypatch.setattr(RawPostWriter, "claim_request", dies)
-    try:
-        cloud.call("/v1/events", _grant_body(cloud, nonce), token=tok, headers=h)
-    except Exception:
-        pass
+    monkeypatch.setattr(door.TenantBackend, "apply", dies)
+    cloud.call("/v1/events", _grant_body(cloud, nonce), token=tok, headers=h)
     cloud.server.drain(30)
-    assert _events(cloud, "grant") == base  # the claim and the event stand or fall together: the crash left neither
-    monkeypatch.setattr(RawPostWriter, "claim_request", real)
+    assert _events(cloud, "grant") == base  # the post is stored, the crash left no event
+    monkeypatch.setattr(door.TenantBackend, "apply", real)
     cloud.call("/v1/events", _grant_body(cloud, nonce), token=tok, headers=h)  # the resend records the grant, once
     cloud.server.drain(30)
     assert _events(cloud, "grant") == base + 1
@@ -128,11 +126,11 @@ def test_a_cloud_stop_carrying_the_text_is_recorded(cloud):
         assert _stop(cloud, **extra)[0] == 201
         cloud.server.drain(30)
     assert _events(cloud, "revoke") == base + 2
-    assert _allowed(cloud)["allowed"] is False
+    assert len(_open_stops(cloud)) >= 1  # a text lifts nothing
 
 
 def test_a_start_text_through_tenant_capture_writes_no_grant_and_leaves_the_check_stopped(cloud):
-    from consentvault.capture import tenant_capture
+    from consentvault.door import write_tenant_event as tenant_capture
     from consentvault.errors import InvalidEventError
     from consentvault.tenancy.tokens import org_transaction
 
@@ -145,7 +143,7 @@ def test_a_start_text_through_tenant_capture_writes_no_grant_and_leaves_the_chec
                            checked=True, disclosure_sha256=cloud.a.wording, contact_verification="inbound_keyword",
                            inbound_message="START", method="keyword")
     assert _events(cloud, "grant") == base
-    assert _allowed(cloud)["allowed"] is False
+    assert len(_open_stops(cloud)) >= 1  # a text lifts nothing
 
 
 def test_a_stop_through_parse_capture_and_tenant_capture_ignores_the_text():

@@ -17,7 +17,7 @@ import re
 import urllib.parse
 from datetime import datetime
 
-from ..ledger import record_tenant_event
+from .. import door
 from ..tenancy import crypto as tc
 from . import zones
 from .core import ALL_CHANNELS, KEY_ERRORS, STOP_CHANNELS, RECORDED_BY, Reply, SYSTEM_STOP_PAGE, log
@@ -143,8 +143,9 @@ class PublicMixin:
                 _page("Already stopped", f"<h1>{html.escape(brand)}</h1><p>Already stopped.</p>")
         source = self._system_source(conn, SYSTEM_STOP_PAGE)
         for contact, chans, _ in todo:
-            record_tenant_event(conn, self.crypto, contact=contact, event_type="revoke", channels=chans, purposes=["*"],
-                                method="checkbox", origin="consumer", source_id=source, recorded_by=RECORDED_BY)
+            door.record_observed(conn, self.crypto, intake="stop_page", fields=dict(
+                contact=contact, event_type="revoke", channels=chans, purposes=["*"], method="checkbox", origin="consumer",
+                source_id=source, recorded_by=RECORDED_BY))
         if one_click:
             return Reply(200, raw=b"Stopped.", headers=dict(HEADERS))
         what = "email" if scope == "email" else "email, texts and calls"

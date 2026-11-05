@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from ..ledger import record_tenant_event
+from .. import door
 from ..records import mask_contact
 from ..tenancy import crypto as tc
 from ..tenancy.admin_base import (ROLE_ADMIN, ROLE_DEVELOPER, ApiError, Ctx, iso, need_iso_time, need_text, paginate, parse_limit,
@@ -214,10 +214,10 @@ class ReadsMixin:
                     if held is None:
                         raise ApiError("contact_already_erased", "that contact was erased")
                     _, number, _ = self._contact_of_event(conn, org, held["event_id"])
-                ev = record_tenant_event(conn, self.crypto, contact=number, event_type="revoke", channels=self._stop_channels(conn),
-                                         purposes=["*"], method="written", origin="consumer",
-                                         source_id=self._system_source(conn, SYSTEM_REPLIES),
-                                         session_ref=f"twilio:{rep['provider_message_id']}"[:200], recorded_by=f"member:{ctx.actor.id}")
+                ev = door.record_observed(conn, self.crypto, intake="staff_marked", fields=dict(
+                    contact=number, event_type="revoke", channels=self._stop_channels(conn), purposes=["*"], method="written",
+                    origin="consumer", source_id=self._system_source(conn, SYSTEM_REPLIES),
+                    session_ref=f"twilio:{rep['provider_message_id']}"[:200], recorded_by=f"member:{ctx.actor.id}"))
             except KEY_ERRORS as exc:
                 raise ApiError("key_unavailable", "the contact key could not be used; nothing was recorded") from exc
             state, event_id = "stop", ev.event_id

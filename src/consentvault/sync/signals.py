@@ -29,7 +29,8 @@ import psycopg
 
 from ..safelog import caller_detail
 from ..errors import ConsentVaultError, NormalizationError
-from ..ledger import CHANNELS, record_tenant_event
+from .. import door
+from ..ledger import CHANNELS
 from ..normalize import normalize_contact
 from ..tenancy import crypto as tc
 from ..tenancy.keys_protocol import WrappedKey
@@ -160,10 +161,11 @@ def _resolve(conn, crypto, org_id, system_id, signal, norm, fp, data_key, mac, r
     resolution, event_id = "no_change", None
     # the ledger writer queues the event's pushes in this transaction, skipping the system that sent the signal
     common = dict(contact=norm, channels=[signal.channel], purposes=[signal.purpose], method="import", origin="import",
-                  source="signal", recorded_by=f"system:{system_id}", region=region, source_system_id=system_id)
+                  source="signal", recorded_by=f"system:{system_id}", source_system_id=system_id)
     if signal.claimed_state == "denied":
         if ledger != "denied":
-            event_id = record_tenant_event(conn, crypto, event_type="suppress", **common).event_id
+            event_id = door.record_observed(conn, crypto, intake="signal", fields=dict(event_type="suppress", **common),
+                                            region=region).event_id
             resolution = "applied_as_event"
     elif ledger == "denied":
         resolution = "conflict_stop_wins"
@@ -171,8 +173,9 @@ def _resolve(conn, crypto, org_id, system_id, signal, norm, fp, data_key, mac, r
         resolution = "ignored_stale"
         if signal.disclosure_sha256:
             try:
-                event_id = record_tenant_event(conn, crypto, event_type="grant", disclosure_sha256=signal.disclosure_sha256,
-                                               allowed_purposes=allowed_purposes, **common).event_id
+                event_id = door.record_observed(
+                    conn, crypto, intake="signal", fields=dict(event_type="grant", disclosure_sha256=signal.disclosure_sha256, **common),
+                    region=region, allowed_purposes=allowed_purposes).event_id
                 resolution = "applied_as_event"
             except ConsentVaultError:  # unregistered wording, scope beyond it, a refused purpose: not a grant
                 event_id = None

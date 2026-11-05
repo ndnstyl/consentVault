@@ -12,3 +12,14 @@ CREATE UNIQUE INDEX event_source_post_one_request ON consentvault.event_source_p
     WHERE role = 'trigger' AND request_key IS NOT NULL;
 GRANT INSERT (request_key) ON consentvault.event_source_post TO consentvault_app;
 REVOKE INSERT ON consentvault.seen_request FROM consentvault_app;
+
+-- Whether the entered organisation's projection already counted a request, for any scope of the tenant (a boolean, no personal
+-- data): the projection asks it before it spends an evidence object on a copy of a request it has already counted.
+CREATE FUNCTION consentvault.request_counted(p_key text) RETURNS boolean
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+    SELECT EXISTS (SELECT 1 FROM consentvault.event_source_post s
+                    WHERE s.org_id OPERATOR(pg_catalog.=) consentvault.current_org()
+                      AND s.role OPERATOR(pg_catalog.=) 'trigger' AND s.request_key OPERATOR(pg_catalog.=) p_key);
+$$;
+REVOKE ALL ON FUNCTION consentvault.request_counted(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION consentvault.request_counted(text) TO consentvault_app;

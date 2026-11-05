@@ -356,10 +356,6 @@ def normalize(contact: Any, region: str | None) -> tuple[str, str]:
 
 # The pipeline -----------------------------------------------------------------------------------------------------------
 
-class RequestSeenBefore(TenancyError):
-    """The request was already claimed by an earlier post; no event is written."""
-
-
 class CapturePipeline:
     def __init__(self, *, store: EvidenceStore, crypto: TenantCrypto, receipts: ReceiptSigner,
                  default_retain_years: int, region: str | None = None,
@@ -376,12 +372,12 @@ class CapturePipeline:
         self.clock = clock
 
     def capture(self, conn: psycopg.Connection, enter: Callable, req: CaptureRequest, *,
-                credential_id: uuid.UUID, claim: Callable | None = None) -> CaptureResult:
+                credential_id: uuid.UUID, link: Callable | None = None) -> CaptureResult:
         """``enter(conn)`` is a context manager that opens a transaction inside the caller's tenant and yields its
-        org id (``tenancy.tokens.org_transaction`` bound to the caller's token). ``claim(conn)``, when given, claims the
-        request inside the transaction that writes the event (True when not seen before), so the claim and the event
-        stand or fall together; a request seen before raises ``RequestSeenBefore`` and writes no event."""
-        from ..capture import tenant_capture
+        org id (``tenancy.tokens.org_transaction`` bound to the caller's token). ``link(conn, event_id)``, when given, writes the
+        link from the event to the post it came from inside the transaction that writes the event, so the two stand or fall
+        together; the database refuses a second event for the same post or the same signed request."""
+        from .. import door
 
         f = dict(req.fields)
         object_id = uuid.uuid4()
@@ -415,10 +411,10 @@ class CapturePipeline:
 
         try:
             with enter(conn):
-                if claim is not None and not claim(conn):
-                    raise RequestSeenBefore("an earlier post already claimed this request")
-                ev = tenant_capture(conn, self.crypto, payload=req.body, region=region,
+                ev = door.write_tenant_event(conn, self.crypto, payload=req.body, region=region,
                                     allowed_purposes=None, display=req.display, **f)
+                if link is not None:
+                    link(conn, ev.event_id)
                 conn.execute("UPDATE consentvault.evidence_object SET status = 'committed', event_id = %s,"
                              " sha256 = %s, settled_at = clock_timestamp()"
                              " WHERE org_id = consentvault.current_org() AND object_id = %s",

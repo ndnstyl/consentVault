@@ -74,11 +74,6 @@ def _link(writer, conn, enter, stored: StoredPost, req: RawRequest, out: AfterCo
     if req.kind != "post":
         return
     try:
-        if writer.crypto is None:
-            # the single-company vault keeps no organisation fingerprint secret, so there is nothing to link by: said as a fact
-            # beside the post, never a silent skip
-            writer.add_facts(conn, enter, stored, [Fact("vault", "link_skipped", "single_company_no_fingerprint_key")])
-            return
         if source_id:
             writer.add_facts(conn, enter, stored, [Fact("vault", "capture_source_id", str(source_id))])
         post = match.PostInfo(stored.post_id, stored.seq, req.edge_received_at or stored.received_at, stored.body_sha256)

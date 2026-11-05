@@ -15,7 +15,11 @@ never read for meaning; whether a person consented is the value they sent, shown
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import os
+import secrets
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -49,6 +53,44 @@ _NO_READING = (extract.UNMAPPED, extract.UNREADABLE)
 
 class LinkError(ConsentVaultError):
     """The link could not be written. The post stays stored and the repair run appends the missing rows."""
+
+
+ENV_FINGERPRINT_SECRET = "CONSENTVAULT_FINGERPRINT_SECRET"
+_FP_DOMAIN = b"consentvault/contact-fp/v1"
+_single_cache: dict[str, bytes] = {}
+
+
+def single_secret(conn: psycopg.Connection) -> bytes:
+    """A single-company vault's own contact fingerprint secret: the setting ``CONSENTVAULT_FINGERPRINT_SECRET`` (64 hex
+    characters) when one is set, else the one made on first use and kept in the vault's database. Raises ``LinkError`` when it
+    cannot be had; the caller raises the link-failed alarm."""
+    given = os.environ.get(ENV_FINGERPRINT_SECRET)
+    if given:
+        try:
+            raw = bytes.fromhex(given)
+        except ValueError as exc:
+            raise LinkError(f"{ENV_FINGERPRINT_SECRET} is not hexadecimal") from exc
+        if len(raw) < 32:
+            raise LinkError(f"{ENV_FINGERPRINT_SECRET} must be at least 32 bytes (64 hex characters)")
+        return raw
+    if "db" not in _single_cache:
+        try:
+            row = conn.execute("SELECT consentvault.single_fingerprint_secret(%s) AS s", (secrets.token_bytes(32),)).fetchone()
+        except psycopg.Error as exc:
+            raise LinkError(f"the vault's fingerprint secret could not be read or made: {type(exc).__name__}") from exc
+        if row is None or row["s"] is None:
+            raise LinkError("the vault's fingerprint secret is missing")
+        _single_cache["db"] = bytes(row["s"])
+    return _single_cache["db"]
+
+
+def contact_fp(writer, conn: psycopg.Connection, org, kind: str, norm: str) -> str:
+    """The contact's fingerprint: the tenant key provider's when the vault has one, else the single-company secret, by the
+    same formula (so a fingerprint means the same thing on either path)."""
+    if writer.crypto is not None:
+        return writer.crypto.contact_fingerprint(org, kind, norm)
+    msg = b"\x00".join((_FP_DOMAIN, kind.encode("utf-8"), norm.encode("utf-8")))
+    return hmac.new(single_secret(conn), msg, hashlib.sha256).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -229,7 +271,7 @@ def link_post(writer, conn: psycopg.Connection, enter: Callable | None, *, org: 
                 return result
             _lock(conn, org)
             for kind, norm in contacts.contacts:
-                fp = writer.crypto.contact_fingerprint(org, kind, norm)
+                fp = contact_fp(writer, conn, org, kind, norm)
                 rows = conn.execute("SELECT * FROM consentvault.match_lookup(%s)", (fp,)).fetchall()
                 record_id = rows[0]["record_id"] if rows else None
                 priors = [p for p in _priors(writer, conn, org, rows) if p.post_id != post.post_id]

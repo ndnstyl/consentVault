@@ -1856,6 +1856,15 @@
    "defined_in": "0002_tenancy.sql"
   },
   {
+   "code": "db_single_fingerprint_secret_xspgmp",
+   "function": "consentvault.single_fingerprint_secret",
+   "signature": "bytea",
+   "line": 6,
+   "template": "consentvault single_fingerprint_secret: this vault is multi-tenant; each organisation has its own secret",
+   "meaning": "consentvault single_fingerprint_secret: this vault is multi-tenant; each organisation has its own secret",
+   "defined_in": "0070_single_fingerprint_secret.sql"
+  },
+  {
    "code": "db_sso_binding_check_jmxpjp",
    "function": "consentvault.sso_binding_check",
    "signature": "text",

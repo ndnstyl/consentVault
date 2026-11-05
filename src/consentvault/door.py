@@ -306,6 +306,23 @@ class TenantBackend:
             return exc.name
         return {"req": req, "credential_id": uuid.UUID(str(cred.get("credential_id"))), "credential": dict(cred), "org_id": auth.org_id}
 
+    def reroute(self, writer, conn, view: "PostView", owner, found: Mapping[tuple[str, str], Any]):
+        """Store the post again in the organisation the site key belongs to, with everything known about it (the original facts,
+        the repeated lookup's answer, and where it was first stored); returns the new post's view and the entry to use for it."""
+        cred = {"credential_id": str(owner.credential_id), "scopes": ["capture"]}
+        enter = self.enter_for_credential(str(owner.org_id), cred)
+        facts = {k: v for k, v in view.facts.items() if k[0] != "__key__"}
+        facts.update(found)
+        facts[("vault", "stored_again_from")] = {"org_id": view.org_id, "post_id": view.post_id}
+        req = RawRequest(intake=view.intake, method=view.method, path=view.path, query="",
+                         headers=(("content-type", "application/json"),), body=view.body, headers_presented_by="rebuild",
+                         facts=tuple(Fact(s, n, v) for (s, n), v in facts.items()))
+        stored = writer.write(conn, enter, req)
+        newview = PostView(stored.org_id, stored.post_id, stored.seq, view.intake, view.body,
+                           {**facts, ("__key__", "data_key"): stored.data_key}, view.method, view.path,
+                           stored.received_at.timestamp())
+        return newview, enter
+
     def apply(self, conn, enter, fields: dict, link: Callable) -> str:
         result = self.pipeline.capture(conn, self.enter_for_credential(fields["org_id"], fields["credential"]), fields["req"], credential_id=fields["credential_id"],
                                        link=link)
@@ -326,6 +343,7 @@ class PostView:
     facts: Mapping[tuple[str, str], Any]
     method: str = "POST"
     path: str = "/v1/events"
+    arrived_epoch: float | None = None   # when the post arrived (the database's clock at intake), as seconds since the epoch
 
 
 @dataclass(frozen=True)
@@ -405,8 +423,16 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
         reading = read_post(view.body, field_map, CODE_VERSION, intake=view.intake, context=_view_context(view))
         auth = replace(auth_from_facts(view.facts), org_id=view.org_id)
         if auth.pending:
-            _log.error("a stored post waits for its intake's lookup to be repeated; it is not refused", reason=auth.reason)
-            return Outcome(view.post_id, reason=auth.reason, retry=True)
+            try:
+                moved = _resolve_site_key(writer, conn, enter, backend, view, field_map=field_map, raise_errors=raise_errors)
+            except _SiteKeyStillDown as down:
+                _log.error("a stored post waits for its site-key lookup to be repeated; it is not refused", error=down.name)
+                return Outcome(view.post_id, reason=auth.reason, retry=True)
+            if isinstance(moved, Outcome):
+                return moved
+            view = moved
+            reading = read_post(view.body, field_map, CODE_VERSION, intake=view.intake, context=_view_context(view))
+            auth = replace(auth_from_facts(view.facts), org_id=view.org_id)
 
         def link(c, event_id):
             c.execute("INSERT INTO consentvault.event_source_post (org_id, event_id, post_id, role, request_key)"
@@ -447,6 +473,66 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
 
 class _AlreadyProjected(Exception):
     pass
+
+
+class _SiteKeyStillDown(Exception):
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.name = name
+
+
+EDGE_TIMESTAMP_WINDOW_S = 300
+
+
+def _resolve_site_key(writer, conn, enter, backend, view: PostView, *, field_map: Any, raise_errors: bool) -> "PostView | Outcome":
+    """The intake's site-key lookup failed when the post arrived, so the post waits. Repeat the lookup now. The age of the signed
+    timestamp is read from the signed time and the post's stored arrival, never from a clock at projection time. The answer is
+    stored beside the post as facts; a post that belongs to another organisation than the one it was stored under is stored again
+    in its owner's organisation and projected there (an event cites a post of its own organisation). A lookup that is still
+    failing leaves the post pending: it is neither refused nor counted, and it never holds any other post."""
+    from .tenancy.site_keys import SiteKeyLookupError, resolve_site_key
+
+    env = edge_envelope.unpack(view.body)
+    site_key = next((v for n, v in env.headers if n.lower() == "x-consentvault-site-key"), None)
+    try:
+        owner = resolve_site_key(conn, site_key) if site_key else None
+    except SiteKeyLookupError as exc:
+        if retryable(exc):
+            raise _SiteKeyStillDown(type(exc).__name__) from exc
+        raise
+    found: dict[tuple[str, str], Any] = {("vault", "site_key_state"): owner.state if owner else "unknown",
+                                         ("vault", "site_key_lookup"): "resolved"}
+    signed = view.facts.get(("vault", "edge_signed_timestamp"))
+    window = view.facts.get(("vault", "edge_timestamp_window_s"))
+    try:
+        fresh = abs(float(view.arrived_epoch) - float(signed)) <= float(window if window is not None else EDGE_TIMESTAMP_WINDOW_S)
+        found[("vault", "edge_timestamp")] = "fresh" if fresh else "stale"
+    except (TypeError, ValueError):  # loud-failure-exempt: stored as the fact edge_timestamp unreadable, the same as the intake stores it
+        found[("vault", "edge_timestamp")] = "unreadable"
+    if owner is not None:
+        found[("vault", "site_owner")] = {"source_id": str(owner.source_id) if owner.source_id else None,
+                                          "brand_ids": [str(b) for b in (owner.brand_ids or ())]}
+        if owner.state == "active":
+            found[("vault", "credential")] = {"state": "verified", "credential_id": str(owner.credential_id),
+                                              "scopes": ["capture"], "via": "edge"}
+        origin = next((v for n, v in env.headers if n.lower() == "origin"), "")
+        found[("vault", "origin_on_list")] = origin in owner.allowed_origins
+    moved_org = owner is not None and str(owner.org_id) != view.org_id
+    if not moved_org:
+        try:
+            writer.append_facts(conn, enter, view.org_id, view.post_id, view.facts.get(("__key__", "data_key")),
+                                [Fact(s, n, v) for (s, n), v in found.items()])
+        except (ConsentVaultError, psycopg.Error) as exc:
+            _log.error("the answer of a repeated site-key lookup could not be stored beside the post", error=type(exc).__name__)
+        return replace(view, facts={**view.facts, **found})
+    backend_for = _backend_for(backend, view.intake)
+    if not hasattr(backend_for, "reroute"):
+        return replace(view, facts={**view.facts, **found})
+    newview, new_enter = backend_for.reroute(writer, conn, view, owner, found)
+    inner = project_view(writer, conn, new_enter, backend, newview, field_map=field_map, raise_errors=raise_errors)
+    _record(writer, conn, enter, view, Outcome(view.post_id, reason="stored_again_in_owner_organisation"))
+    return Outcome(view.post_id, event_id=inner.event_id, reason=inner.reason or "stored_again_in_owner_organisation",
+                   retry=inner.retry, halts=inner.halts)
 
 
 def _already(conn, enter, view: PostView) -> Outcome:
@@ -518,10 +604,10 @@ def project_post(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
 
 
 def read_view(writer: RawPostWriter, conn: psycopg.Connection, org: str, post_id: str, seq: int, intake: str,
-              method: str = "POST", path: str = "/v1/events") -> PostView:
+              method: str = "POST", path: str = "/v1/events", arrived_epoch: float | None = None) -> PostView:
     data_key = writer.open_key(conn, uuid.UUID(org), post_id)
     return PostView(org, post_id, seq, intake, writer.read_body(conn, uuid.UUID(org), post_id),
-                    {**writer.read_facts(conn, uuid.UUID(org), post_id), ("__key__", "data_key"): data_key}, method, path)
+                    {**writer.read_facts(conn, uuid.UUID(org), post_id), ("__key__", "data_key"): data_key}, method, path, arrived_epoch)
 
 
 HALT_CAP_SECONDS = 900
@@ -535,7 +621,7 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
     with _ctx(conn, enter):
         rows = conn.execute(
             "SELECT p.org_id::text AS org, p.post_id::text AS post_id, p.seq, p.intake, p.method, p.path,"
-            " EXTRACT(EPOCH FROM (clock_timestamp() - p.received_at))::float8 AS age_s FROM consentvault.raw_post p"
+            " EXTRACT(EPOCH FROM p.received_at)::float8 AS arrived, EXTRACT(EPOCH FROM (clock_timestamp() - p.received_at))::float8 AS age_s FROM consentvault.raw_post p"
             " WHERE p.org_id = (SELECT consentvault.current_org()) AND p.kind = 'post'"
             "   AND (%s::bigint IS NULL OR p.seq <= %s) AND (%s::text[] IS NULL OR p.intake = ANY(%s))"
             "   AND NOT EXISTS (SELECT 1 FROM consentvault.event_source_post s WHERE s.org_id = p.org_id"
@@ -549,7 +635,7 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
             continue
         try:
             with _ctx(conn, enter):
-                view = read_view(writer, conn, r["org"], r["post_id"], r["seq"], r["intake"], r["method"], r["path"])
+                view = read_view(writer, conn, r["org"], r["post_id"], r["seq"], r["intake"], r["method"], r["path"], r["arrived"])
         except Exception as exc:  # loud-failure-exempt: classified; a passing fault is retried, any other error is that post's stored reason
             outcome = _unreadable_post(writer, conn, enter, r, exc)
         else:

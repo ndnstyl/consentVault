@@ -1020,6 +1020,8 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
             facts.append(Fact("edge", str(name), value))
         site_key = next((v for n, v in env.headers if n.lower() == "x-consentvault-site-key"), None)
         window = self.settings.edge_timestamp_window_s
+        facts.append(Fact("vault", "edge_signed_timestamp", ts))
+        facts.append(Fact("vault", "edge_timestamp_window_s", window))
         try:
             with connect(self.settings.dsn) as conn:
                 owner = resolve_site_key(conn, site_key) if site_key else None
@@ -1054,7 +1056,8 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                     claims = identity["claims"]
                     view = door.PostView(stored.org_id, stored.post_id, stored.seq, raw.intake, bytes(raw.body),
                                          {**{(f.source, f.name): f.value for f in raw.facts},
-                                          ("__key__", "data_key"): stored.data_key}, raw.method, raw.path)
+                                          ("__key__", "data_key"): stored.data_key}, raw.method, raw.path,
+                                         stored.received_at.timestamp())
                     backend = cloud_backends(self.settings, self.pipeline)
                     from .tenancy.tokens import mint_org_token, org_transaction
 

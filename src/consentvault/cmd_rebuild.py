@@ -18,8 +18,10 @@ from .cli import EXIT_ERROR, EXIT_OK, _connect, register
 
 
 def _summary(mode: str, outcomes, failed) -> dict:
+    waiting = ("awaiting_authentication", "no_writer_for_intake")
     return {"mode": mode, "projected": len(outcomes), "events": sum(1 for o in outcomes if o.event_id is not None),
-            "reasons_stored": sum(1 for o in outcomes if o.event_id is None and not o.retry), "unfinished": len(failed)}
+            "reasons_stored": sum(1 for o in outcomes if o.event_id is None and not o.retry and o.reason not in waiting),
+            "awaiting": sum(1 for o in outcomes if o.reason in waiting), "unfinished": len(failed)}
 
 
 def _run(args, cfg) -> int:

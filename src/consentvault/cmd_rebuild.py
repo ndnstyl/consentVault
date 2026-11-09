@@ -23,11 +23,13 @@ UNFINISHED_LISTED = 100
 
 def _summary(mode: str, outcomes, failed) -> dict:
     waiting = ("awaiting_authentication", "no_writer_for_intake")
+    held = [o for o in outcomes if o.event_id is None and not o.retry and o.reason in waiting]   # stored, waiting for their intake
+    listed = [*failed, *held]
     return {"mode": mode, "projected": len(outcomes), "events": sum(1 for o in outcomes if o.event_id is not None),
             "reasons_stored": sum(1 for o in outcomes if o.event_id is None and not o.retry and o.reason not in waiting),
-            "awaiting": sum(1 for o in outcomes if o.reason in waiting), "unfinished": len(failed),
-            "unfinished_posts": [{"post": o.post_id, "error": o.reason} for o in failed[:UNFINISHED_LISTED]],
-            "unfinished_not_listed": max(0, len(failed) - UNFINISHED_LISTED)}
+            "awaiting": sum(1 for o in outcomes if o.reason in waiting), "unfinished": len(listed), "failed": len(failed),
+            "unfinished_posts": [{"post": o.post_id, "error": o.reason} for o in listed[:UNFINISHED_LISTED]],
+            "unfinished_not_listed": max(0, len(listed) - UNFINISHED_LISTED)}
 
 
 def _run(args, cfg) -> int:

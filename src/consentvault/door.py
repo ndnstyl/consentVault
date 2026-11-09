@@ -40,7 +40,7 @@ from .rawpost import Fact, RawPostWriter, RawRequest, StoredPost, request_key_di
 
 _log = safelog.get("consentvault.door")
 
-CODE_VERSION = "door-1"
+CODE_VERSION = "door-2"
 REASON_TEXT = "a_text_is_not_consent"
 EDGE_INTAKES = ("edge_single", "edge_site_key")
 TENANT_SETTINGS_FACT = "tenant_projection_settings"

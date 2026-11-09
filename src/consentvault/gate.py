@@ -244,7 +244,8 @@ def tenant_facts(conn: psycopg.Connection, kind: str, fp: str) -> ContactFacts:
         " coalesce(h.contact_verification_sent, 'none') AS contact_verification, NULL::text AS release_of_event_id,"
         " NULL::text AS release_outcome, NULL::text AS release_cause FROM consentvault.post_history h"
         " WHERE h.org_id = consentvault.current_org() AND h.contact_fp = %s AND h.label = 'projected' AND h.standing = 'counts'"
-        " AND h.earliest_copy AND h.event_type_sent IS NOT NULL AND NOT EXISTS (SELECT 1 FROM consentvault.event_source_post s"
+        " AND h.earliest_copy AND h.event_type_sent IS NOT NULL AND EXISTS (SELECT 1 FROM consentvault.effect_watermark w WHERE w.org_id = h.org_id)"
+        " AND NOT EXISTS (SELECT 1 FROM consentvault.event_source_post s"
         " WHERE s.org_id = h.org_id AND s.post_id = h.post_id AND s.role = 'trigger') ORDER BY h.placed_at, h.post_seq", (fp,)).fetchall()
     if hist:
         merged = [(r["received_at"], r["seq"], dict(r)) for r in rows]

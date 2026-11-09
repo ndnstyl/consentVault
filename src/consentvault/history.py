@@ -137,13 +137,26 @@ def write_row(conn, ctx: Callable, *, org_id: str, post_id: str, fields: Mapping
              _text(fields.get("source_id")), _as_list(fields.get("brand_ids")), standing_of(reason), earliest_copy,
              Jsonb(completeness(fields)), Jsonb(facts_read), RULE_SET_VERSION, intake_code_version, FOLD_CODE_VERSION,
              contact[1], contact[1], contact_ct))
-        if advance_state and contact[1]:   # the sync state of the person moves with the row, in the row's own transaction (item 20)
-            conn.execute("SELECT * FROM consentvault.sync_advance_state(%s, %s)", (uuid.UUID(event_id_of(post_id)), contact[1])).fetchall()
-        if records_crypto is not None and contact[1] and contact[2]:   # the contact's record and its index, in the row's transaction (items 13, 17)
+        # what a row sets moving is applied only when the values are ones the sync state and the record index can hold; a value as sent that
+        # they cannot (a channel we do not have, an event type of another kind) is recorded and moves nothing, and a refusal by the database of
+        # a step is logged by name inside its own savepoint: the row, which is the record, is never lost to a step derived from it
+        applicable = (fields.get("event_type") in ("grant", "revoke", "suppress")
+                      and all(c in ("voice", "artificial_voice", "sms", "email") for c in (_as_list(fields.get("channels")) or ["-"])))
+        if advance_state and contact[1] and applicable:   # the sync state of the person moves with the row (item 20)
+            try:
+                with conn.transaction():
+                    conn.execute("SELECT * FROM consentvault.sync_advance_state(%s, %s)", (uuid.UUID(event_id_of(post_id)), contact[1])).fetchall()
+            except Exception as exc:  # loud-failure-exempt: logged by name; the history row stands and the sync state is recomputed from history at the next row
+                _log.error("the sync state could not move with a history row", error=type(exc).__name__)
+        if records_crypto is not None and contact[1] and contact[2] and applicable:   # the contact's record and its index (items 13, 17)
             from .records import write_event_records
 
-            write_event_records(conn, records_crypto, org=uuid.UUID(org_id), event_id=event_id_of(post_id), contact_fp=contact[1],
-                                contact_kind=contact[0], contact_norm=contact[2])
+            try:
+                with conn.transaction():
+                    write_event_records(conn, records_crypto, org=uuid.UUID(org_id), event_id=event_id_of(post_id), contact_fp=contact[1],
+                                        contact_kind=contact[0], contact_norm=contact[2])
+            except Exception as exc:  # loud-failure-exempt: logged by name; the history row stands and the record backfill repairs the record
+                _log.error("the contact record could not be written with a history row", error=type(exc).__name__)
         for effect, target, channel, extra in intents or []:   # in the history row's own transaction; the unique key makes a second projection add none
             conn.execute("INSERT INTO consentvault.effect_intent (org_id, intent_id, post_id, effect, target, contact_fp, channel)"
                          " VALUES (%s, consentvault.effect_intent_id(%s, %s), %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
@@ -163,3 +176,32 @@ def raw_fields(body: bytes) -> Mapping[str, Any]:
     except (ValueError, UnicodeDecodeError):  # loud-failure-exempt: an unreadable body has no fields; its row records every element absent
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def write_backfill_row(conn, ctx: Callable, *, org_id: str, post_id: str, legacy: Mapping[str, Any], facts_read: list) -> bool:
+    """The history row of a post whose facts carry a legacy event: a copy of the event, label ``backfill``, standing counts, the versions of
+    the backfill. A pure function of the post's facts, so a replay of the store writes the same row. Returns True when written."""
+    with ctx():
+        if conn.execute("SELECT 1 FROM consentvault.post_history WHERE org_id = %s AND post_id = %s",
+                        (uuid.UUID(org_id), uuid.UUID(post_id))).fetchone():
+            return False
+        post = conn.execute("SELECT post_seq AS seq FROM consentvault.fold_post_place(%s)", (uuid.UUID(post_id),)).fetchone()
+        if post is None:
+            raise LookupError("the post is not stored in the entered organisation")
+        from datetime import datetime
+
+        received = datetime.fromisoformat(legacy["received_at"])
+        rule_set = "as-written-hash-v1" if legacy.get("hash_version") == 1 else "as-written-hash-v2"
+        ct = bytes.fromhex(legacy["contact_ct"]) if legacy.get("contact_ct") else None
+        conn.execute(
+            "INSERT INTO consentvault.post_history (org_id, post_id, post_seq, placed_at, received_at, event_id, label, event_type_sent,"
+            " channels_sent, purposes_sent, method_sent, origin_sent, contact_kind_sent, captured_at_sent, wording_sha256_sent,"
+            " contact_verification_sent, source_id_sent, brand_ids_sent, standing, earliest_copy, contact_fp, contact_key_ref, contact_ct,"
+            " completeness, facts_read, rule_set_version, fold_code_version, backfill_of_event_id, hash_version)"
+            " VALUES (%s, %s, %s, %s, %s, %s, 'backfill', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'counts', true, %s, %s, %s,"
+            " '{}'::jsonb, %s, %s, 'backfill-1', %s, 3)",
+            (uuid.UUID(org_id), uuid.UUID(post_id), post["seq"], received, received, uuid.UUID(legacy["event_id"]), legacy["event_type"],
+             legacy["channels"], legacy["purposes"], legacy["method"], legacy["origin"], legacy["contact_kind"], legacy["captured_at"],
+             legacy["disclosure_sha256"], legacy["contact_verification"], legacy["source_id"], legacy["brand_ids"],
+             legacy["contact_fp"], legacy["contact_fp"], ct, Jsonb(facts_read), rule_set, uuid.UUID(legacy["event_id"])))
+    return True

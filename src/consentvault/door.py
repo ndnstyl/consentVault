@@ -494,6 +494,10 @@ def _shadow_history(writer, conn, enter, view: PostView, field_map: Any) -> bool
             facts = writer.read_fold_facts(conn, uuid.UUID(view.org_id), view.post_id, view.facts.get(("__key__", "data_key")))
         if not facts:   # no status-bearing fact at all: a post stored before 0082 whose backfill has not run; it waits, it is never judged unsigned
             return False
+        legacy = facts.get(("vault", "legacy_event"))
+        if isinstance(legacy, dict):   # a post of the store from before the history: its row is a copy of its legacy event
+            return history.write_backfill_row(conn, lambda: _ctx(conn, enter), org_id=view.org_id, post_id=view.post_id, legacy=legacy,
+                                              facts_read=sorted([s, n] for (s, n) in facts))
         if view.intake in PROVIDER_INTAKES and ("vault", "request_signature") not in facts:   # awaiting its provider signature: not judged yet
             return False
         pure = replace(view, facts=facts)

@@ -28,7 +28,8 @@ FOLD_NAMES = ("request_signature", "authenticated_by", "tenant", "credential", "
               door.TENANT_SETTINGS_FACT, "projection_settings")
 
 
-def backfill_post(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, org_id: str, post_id: str) -> int:
+def backfill_post(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, org_id: str, post_id: str,
+                  event: dict | None = None) -> int:
     """Write the backfill fact set of one post; returns the facts written (0 when the post already has status-bearing facts)."""
     org = uuid.UUID(org_id)
     ctx = enter(conn) if enter is not None else conn.transaction()
@@ -40,13 +41,27 @@ def backfill_post(writer: RawPostWriter, conn: psycopg.Connection, enter: Callab
         key = writer.open_key(conn, org, post_id)
     facts = [Fact(s, n, v, status="value", label="backfill") for (s, n), v in sorted(old.items())]
     facts += [Fact("vault", n, None, status="not_found", label="backfill") for n in FOLD_NAMES if ("vault", n) not in old and n not in LATE_NAMES]
+    if event is not None:   # the legacy event rides as a fact, so the row it becomes is the fold's of the facts and replays the same
+        facts.append(Fact("vault", LEGACY_EVENT_FACT, legacy_event_value(event), status="value", label="backfill"))
     writer.append_facts(conn, enter, org_id, post_id, key, facts)
     return len(facts)
 
 
+LEGACY_EVENT_FACT = "legacy_event"
 BACKFILL_FOLD_VERSION = "backfill-1"
 _EVENT_COLUMNS = ("event_id", "event_type", "channels", "purposes", "method", "origin", "contact_kind", "captured_at", "received_at",
                   "disclosure_sha256", "contact_verification", "source_id", "brand_ids", "contact_fp", "contact_ct", "hash_version")
+
+
+def legacy_event_value(e: dict) -> dict:
+    """The legacy event as plain values (no personal field: the contact is its fingerprint and its sealed bytes)."""
+    iso = lambda t: None if t is None else t.isoformat()  # noqa: E731
+    return {"event_id": str(e["event_id"]), "event_type": e["event_type"], "channels": list(e["channels"]), "purposes": list(e["purposes"]),
+            "method": e["method"], "origin": e["origin"], "contact_kind": e["contact_kind"], "captured_at": iso(e["captured_at"]),
+            "received_at": iso(e["received_at"]), "disclosure_sha256": e["disclosure_sha256"],
+            "contact_verification": e["contact_verification"], "source_id": None if e["source_id"] is None else str(e["source_id"]),
+            "brand_ids": None if e["brand_ids"] is None else [str(b) for b in e["brand_ids"]], "contact_fp": e["contact_fp"],
+            "contact_ct": None if e["contact_ct"] is None else bytes(e["contact_ct"]).hex(), "hash_version": e["hash_version"]}
 
 
 def _legacy_events_without_a_post(conn: psycopg.Connection) -> list[dict]:
@@ -65,7 +80,8 @@ def store_legacy_event_post(writer: RawPostWriter, conn: psycopg.Connection, ent
                       sort_keys=True).encode("utf-8")
     req = RawRequest(intake="legacy_event", method="POST", path="/legacy-event", query="", headers=(("content-type", "application/json"),),
                      body=body, headers_presented_by="backfill",
-                     facts=(Fact("vault", "legacy_event_id", str(event["event_id"])),))
+                     facts=(Fact("vault", "legacy_event_id", str(event["event_id"])),
+                            Fact("vault", LEGACY_EVENT_FACT, legacy_event_value(event))))
     stored = writer.write(conn, enter, req)
     ctx = enter(conn) if enter is not None else conn.transaction()
     with ctx:
@@ -74,41 +90,13 @@ def store_legacy_event_post(writer: RawPostWriter, conn: psycopg.Connection, ent
     return stored.post_id
 
 
-def write_backfill_row(conn: psycopg.Connection, enter: Callable | None, post_id: str, event: dict) -> bool:
-    """The history row of a post that already has a legacy event: a copy of the event, label ``backfill`` (the database refuses a
-    backfill row that does not match an event of the organisation). Returns True when written."""
-    ctx = enter(conn) if enter is not None else conn.transaction()
-    with ctx:
-        if conn.execute("SELECT 1 FROM consentvault.post_history WHERE org_id = (SELECT consentvault.current_org()) AND post_id = %s",
-                        (uuid.UUID(post_id),)).fetchone():
-            return False
-        seq = conn.execute("SELECT seq FROM consentvault.raw_post WHERE org_id = (SELECT consentvault.current_org()) AND post_id = %s",
-                           (uuid.UUID(post_id),)).fetchone()["seq"]
-        rule_set = "as-written-hash-v1" if event["hash_version"] == 1 else "as-written-hash-v2"
-        conn.execute(
-            "INSERT INTO consentvault.post_history (org_id, post_id, post_seq, placed_at, received_at, event_id, label, event_type_sent,"
-            " channels_sent, purposes_sent, method_sent, origin_sent, contact_kind_sent, captured_at_sent, wording_sha256_sent,"
-            " contact_verification_sent, source_id_sent, brand_ids_sent, standing, earliest_copy, contact_fp, contact_key_ref, contact_ct,"
-            " completeness, facts_read, rule_set_version, fold_code_version, backfill_of_event_id, hash_version)"
-            " VALUES (consentvault.current_org(), %s, %s, %s, %s, %s, 'backfill', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'counts', true,"
-            " %s, %s, %s, '{}'::jsonb, '[]'::jsonb, %s, %s, %s, 3)",
-            (uuid.UUID(post_id), seq, event["received_at"], event["received_at"], event["event_id"], event["event_type"],
-             event["channels"], event["purposes"], event["method"], event["origin"], event["contact_kind"],
-             None if event["captured_at"] is None else event["captured_at"].isoformat(), event["disclosure_sha256"],
-             event["contact_verification"], None if event["source_id"] is None else str(event["source_id"]),
-             None if event["brand_ids"] is None else [str(b) for b in event["brand_ids"]], event["contact_fp"], event["contact_fp"],
-             event["contact_ct"], rule_set, BACKFILL_FOLD_VERSION, event["event_id"]))
-    return True
-
-
 def shadow_start(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None) -> dict:
     """For the entered organisation: backfill every post that predates migration 0082, then write every missing history row."""
     ctx = enter(conn) if enter is not None else conn.transaction()
     with ctx:
         orphans = _legacy_events_without_a_post(conn)
     for ev in orphans:
-        post_id = store_legacy_event_post(writer, conn, enter, ev)
-        write_backfill_row(conn, enter, post_id, ev)
+        store_legacy_event_post(writer, conn, enter, ev)
     ctx = enter(conn) if enter is not None else conn.transaction()
     with ctx:
         posts = conn.execute(
@@ -117,17 +105,13 @@ def shadow_start(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
             "   AND NOT EXISTS (SELECT 1 FROM consentvault.raw_post_fact f WHERE f.org_id = p.org_id AND f.post_id = p.post_id AND f.status IS NOT NULL)"
             " ORDER BY p.seq").fetchall()
     facts = 0
-    legacy_rows = 0
     for r in posts:
-        facts += backfill_post(writer, conn, enter, r["org"], r["post_id"])
         with (enter(conn) if enter is not None else conn.transaction()):
             ev = conn.execute(
                 f"SELECT {', '.join('e.' + c for c in _EVENT_COLUMNS)} FROM consentvault.event_source_post s JOIN consentvault.event e"
                 " ON e.org_id = s.org_id AND e.event_id = s.event_id WHERE s.org_id = (SELECT consentvault.current_org())"
                 " AND s.post_id = %s AND s.role = 'trigger'", (uuid.UUID(r["post_id"]),)).fetchone()
-        if ev is not None:
-            legacy_rows += 1 if write_backfill_row(conn, enter, r["post_id"], ev) else 0
+        facts += backfill_post(writer, conn, enter, r["org"], r["post_id"], ev)
     rows = door.history_catch_up(writer, conn, enter, every_post=True)
     _log.info("shadow start finished")
-    return {"posts": len(posts), "legacy_event_posts": len(orphans), "facts": facts, "history_rows": rows + legacy_rows}
-
+    return {"posts": len(posts), "legacy_event_posts": len(orphans), "facts": facts, "history_rows": rows}

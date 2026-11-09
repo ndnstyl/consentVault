@@ -57,7 +57,7 @@ def standing_of(reason: str | None) -> str:
     return "counts" if reason is None else reason
 
 
-def contact_of(fields: Mapping[str, Any], region: str | None, org_id: str, crypto: Any) -> tuple[str | None, str | None]:
+def contact_of(fields: Mapping[str, Any], region: str | None, org_id: str, crypto: Any) -> tuple[str | None, str | None, str | None]:
     """The contact kind and its fingerprint, from the contact as sent. One of the fold's four allowed outside calls: the organisation's
     fingerprint secret, through the key provider. A contact that does not normalise has none, and the row records that; a key provider
     that fails raises, so the post waits alone and the next run tries again."""
@@ -66,17 +66,54 @@ def contact_of(fields: Mapping[str, Any], region: str | None, org_id: str, crypt
 
     contact = fields.get("contact")
     if crypto is None or not isinstance(contact, str) or not contact.strip():
-        return None, None
+        return None, None, None
     try:
         kind, norm = normalize_contact(contact, None, region)
     except NormalizationError:   # loud-failure-exempt: a contact point that is not a phone number or email has no fingerprint; the row records every value as sent
-        return None, None
-    return kind, crypto.contact_fingerprint(org_id, kind, norm)
+        return None, None, None
+    return kind, crypto.contact_fingerprint(org_id, kind, norm), norm
+
+
+def seal_contact(conn, ctx: Callable, crypto: Any, org_id: str, event_id: str, fp: str, norm: str) -> bytes:
+    """The contact point sealed under the contact's own key, for the readers that need it back (a confirmation, a page, a restore).
+    The key is made if the contact has none (the same step the ledger's append took); an erased contact is given a new one."""
+    import os
+
+    from .tenancy import crypto as tc
+    from .tenancy.keys_protocol import WrappedKey
+
+    org = uuid.UUID(org_id)
+    with ctx():
+        held = conn.execute("SELECT * FROM consentvault.contact_key_of(%s)", (fp,)).fetchone()
+        if held is None:
+            ck = crypto.new_contact_key(org)
+            data_key = ck.data_key
+            conn.execute("INSERT INTO consentvault.contact_key (org_id, contact_fp, wrapped_key, key_version, salt_ct) VALUES (%s, %s, %s, %s, %s)",
+                         (org, fp, ck.wrapped.ciphertext, ck.wrapped.key_version,
+                          tc.encrypt_field(data_key, org, fp, "contact_salt", os.urandom(32).hex())))
+        else:
+            data_key = crypto.open_contact_key(org, WrappedKey(bytes(held["wrapped_key"]), held["key_version"]))
+    return tc.encrypt_field(data_key, org, event_id, "contact_norm", norm)
+
+
+def intents_of(*, org_id: str, post_id: str, fields: Mapping[str, Any], reason: str | None, earliest_copy: bool,
+               facts: Mapping[tuple[str, str], Any]) -> list[tuple]:
+    """The effects a history row derives (effect, target, channel), from the row's own values and the post's facts alone. None unless the
+    sender counts, the post is the first copy of its request, and the post is above the organisation's watermark. Pure."""
+    if reason is not None or not earliest_copy or facts.get(("vault", "effect_watermark")) != "above" or not fields.get("event_type"):
+        return []
+    targets = facts.get(("vault", "delivery_targets")) or {}
+    out: list[tuple] = [("push", str(t), None, None) for t in targets.get("push", [])]
+    if fields.get("event_type") == "grant" and fields.get("source_id"):
+        out += [("confirmation", r["channel"], r["channel"], {"source_id": str(r["source_id"]), "brand_id": r.get("brand_id")})
+                for r in targets.get("confirmation", [])
+                if str(r.get("source_id")) == str(fields.get("source_id"))]
+    return out
 
 
 def write_row(conn, ctx: Callable, *, org_id: str, post_id: str, fields: Mapping[str, Any], reason: str | None,
               earliest_copy: bool, facts_read: list, intake_code_version: str | None,
-              contact: tuple[str | None, str | None] = (None, None)) -> bool:
+              contact: tuple = (None, None, None), contact_ct: bytes | None = None, intents: list | None = None) -> bool:
     """Write the history row of one stored post unless it has one. Returns True when a row was written."""
     with ctx():
         if conn.execute("SELECT 1 FROM consentvault.post_history WHERE org_id = %s AND post_id = %s",
@@ -90,15 +127,24 @@ def write_row(conn, ctx: Callable, *, org_id: str, post_id: str, fields: Mapping
             "INSERT INTO consentvault.post_history (org_id, post_id, post_seq, placed_at, received_at, event_id, label,"
             " event_type_sent, channels_sent, purposes_sent, method_sent, origin_sent, contact_kind_sent, captured_at_sent,"
             " wording_sha256_sent, contact_verification_sent, source_id_sent, brand_ids_sent, standing, earliest_copy,"
-            " completeness, facts_read, rule_set_version, intake_code_version, fold_code_version, contact_fp, contact_key_ref, hash_version)"
-            " VALUES (%s, %s, %s, %s, %s, %s, 'projected', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 3)",
+            " completeness, facts_read, rule_set_version, intake_code_version, fold_code_version, contact_fp, contact_key_ref, contact_ct, hash_version)"
+            " VALUES (%s, %s, %s, %s, %s, %s, 'projected', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 3)",
             (uuid.UUID(org_id), uuid.UUID(post_id), post["seq"], post["placed"], post["received_at"], uuid.UUID(event_id_of(post_id)),
              _text(fields.get("event_type")), _as_list(fields.get("channels")), _as_list(fields.get("purposes")),
              _text(fields.get("method")), _text(fields.get("origin")), _text(fields.get("contact_kind")) or contact[0],
              _text(fields.get("captured_at")), _text(fields.get("disclosure_sha256")), _text(fields.get("contact_verification")),
              _text(fields.get("source_id")), _as_list(fields.get("brand_ids")), standing_of(reason), earliest_copy,
              Jsonb(completeness(fields)), Jsonb(facts_read), RULE_SET_VERSION, intake_code_version, FOLD_CODE_VERSION,
-             contact[1], contact[1]))
+             contact[1], contact[1], contact_ct))
+        for effect, target, channel, extra in intents or []:   # in the history row's own transaction; the unique key makes a second projection add none
+            conn.execute("INSERT INTO consentvault.effect_intent (org_id, intent_id, post_id, effect, target, contact_fp, channel)"
+                         " VALUES (%s, consentvault.effect_intent_id(%s, %s), %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                         (uuid.UUID(org_id), uuid.UUID(org_id), f"{post_id}|{effect}|{target}", uuid.UUID(post_id), effect, target,
+                          contact[1], channel))
+            if effect == "confirmation":   # the existing sender works on this row; it cites the history row and shares the intent's id
+                conn.execute("SELECT consentvault.confirmation_send_from_history(consentvault.effect_intent_id(%s, %s), %s, %s, %s, %s, %s)",
+                             (uuid.UUID(org_id), f"{post_id}|{effect}|{target}", uuid.UUID(event_id_of(post_id)), uuid.UUID(extra["source_id"]),
+                              uuid.UUID(extra["brand_id"]) if extra.get("brand_id") not in (None, "None") else None, contact[1], channel))
     return True
 
 

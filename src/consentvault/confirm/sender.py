@@ -30,7 +30,7 @@ import psycopg
 
 from .. import door
 from ..tenancy import crypto as tc
-from . import texts, zones
+from . import basis, texts, zones
 from .core import (KEY_ERRORS, RECORDED_BY, SYSTEM_REPLIES, ProviderError, log)
 
 RETRY_OFFSETS_MINUTES = (1, 2, 4, 8, 16, 32, 57)
@@ -164,12 +164,14 @@ class SenderMixin:
         return conn.execute("SELECT 1 FROM consentvault.contact_key_of(%s)", (fp,)).fetchone() is not None
 
     def _stop_on_record(self, conn, org, fp: str, channel: str) -> bool:
+        if conn.execute("SELECT 1 FROM consentvault.history_stop_on_record(%s, %s, %s)", (org, fp, channel)).fetchone() is not None:
+            return True
         return conn.execute("SELECT 1 FROM consentvault.current_permission WHERE org_id = %s AND contact_fp = %s AND channel = %s"
                             " AND NOT allowed AND reason LIKE 'stopped:%%' LIMIT 1", (org, fp, channel)).fetchone() is not None
 
     def _plan_confirmation(self, conn, org, it: dict, when: datetime) -> Plan:
         fp, ch, send_id = it["contact_fp"], it["channel"], it["send_id"]
-        ev = conn.execute("SELECT * FROM consentvault.event WHERE org_id = %s AND event_id = %s", (org, it["basis_event_id"])).fetchone()
+        ev = basis.event_like(conn, org, it["basis_event_id"] or it["basis_history_event_id"])
         rule = conn.execute("SELECT * FROM consentvault.confirmation_rule WHERE org_id = %s AND source_id = %s AND channel = %s",
                             (org, ev["source_id"], ch)).fetchone()
         if rule is None:

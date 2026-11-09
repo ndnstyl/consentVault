@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
+from . import basis
 from .. import door
 from ..records import mask_contact
 from ..tenancy import crypto as tc
@@ -209,11 +210,10 @@ class ReadsMixin:
                 if rep["key_kind"] == "org":
                     number = self._unseal(org, str(rid), "from_ct", rep["from_ct"])
                 else:
-                    held = conn.execute("SELECT event_id FROM consentvault.event WHERE org_id = %s AND contact_fp = %s"
-                                        " ORDER BY seq DESC LIMIT 1", (org, rep["from_fp"])).fetchone()
-                    if held is None:
+                    held_id = basis.latest_event_id_for_contact(conn, org, rep["from_fp"])
+                    if held_id is None:
                         raise ApiError("contact_already_erased", "that contact was erased")
-                    _, number, _ = self._contact_of_event(conn, org, held["event_id"])
+                    _, number, _ = self._contact_of_event(conn, org, held_id)
                 ev = door.record_observed(conn, self.crypto, intake="staff_marked", fields=dict(
                     contact=number, event_type="revoke", channels=self._stop_channels(conn), purposes=["*"], method="written",
                     origin="consumer", source_id=self._system_source(conn, SYSTEM_REPLIES),

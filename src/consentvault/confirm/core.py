@@ -30,7 +30,7 @@ from ..tenancy.errors import KeyProviderError as TenantKeyError
 from ..tenancy.keys_adapter import CustodyKeyAdapter
 from ..tenancy.keys_protocol import WrappedKey
 from ..tenancy.tokens import TokenKey, mint_org_token, org_transaction
-from . import texts
+from . import basis, texts
 from .providers import DohResolver, ProviderError, default_providers
 
 log = safelog.get("consentvault.confirm")
@@ -168,8 +168,7 @@ class Core:
 
     def _contact_of_event(self, conn, org, event_id) -> tuple[str, str, bytes]:
         """(kind, normalised contact point, data key) of the contact an event is about; raises when erased."""
-        row = conn.execute("SELECT contact_fp, contact_kind, contact_ct FROM consentvault.event"
-                           " WHERE org_id = %s AND event_id = %s", (org, event_id)).fetchone()
+        row = basis.event_like(conn, org, event_id)
         if row is None:
             raise ApiError("not_found", "no such event")
         key = self._contact_key(conn, org, row["contact_fp"])

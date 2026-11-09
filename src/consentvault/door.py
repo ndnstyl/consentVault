@@ -447,6 +447,30 @@ def _is_uuid(value: Any) -> bool:
     return True
 
 
+def _is_cut(conn, enter) -> bool:
+    """True once this organisation's cutover is recorded (its effect_watermark row exists): the old fold writes it no event."""
+    with _ctx(conn, enter):
+        return conn.execute("SELECT EXISTS (SELECT 1 FROM consentvault.effect_watermark"
+                            " WHERE org_id = (SELECT consentvault.current_org())) AS c").fetchone()["c"]
+
+
+class _CutBackend:
+    """After an organisation's cutover the post's event is its history row: the backend reads and prepares as before and writes no event.
+    ``apply`` answers the history event id the fold derives from the post (``link`` is never called, so no event is linked)."""
+
+    def __init__(self, inner: Any, post_id: str) -> None:
+        self._inner, self._post_id = inner, post_id
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def prepare(self, *a, **k):
+        return self._inner.prepare(*a, **k)
+
+    def apply(self, conn, enter, fields, link) -> str:
+        return history.event_id_of(self._post_id)
+
+
 def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, backend: Any, view: PostView, *,
                  field_map: Any = None, raise_errors: bool = False) -> Outcome:
     """The old fold, then the new one beside it (shadow: the history is written, nothing is read from it)."""
@@ -481,13 +505,18 @@ def _shadow_history(writer, conn, enter, view: PostView, field_map: Any) -> bool
                                     (uuid.UUID(view.post_id), auth.key)).fetchone()["first"]
         reason = decide(reading, replace(auth, org_id=view.org_id), lambda _k: not earliest)
         facts_read = sorted([s, n] for (s, n) in facts)
+        cut = _is_cut(conn, enter)
+        contact = (history.contact_of(fields, (_stored_settings(facts) or {}).get("region"), view.org_id, getattr(writer, "crypto", None))
+                   if reason is None else (None, None, None))   # only a post that counts is fingerprinted: no reader acts on a refused post's contact
+        event_id = history.event_id_of(view.post_id)
+        sealed = (history.seal_contact(conn, lambda: _ctx(conn, enter), writer.crypto, view.org_id, event_id, contact[1], contact[2])
+                  if cut and contact[1] else None)
         return history.write_row(conn, lambda: _ctx(conn, enter), org_id=view.org_id, post_id=view.post_id, fields=fields,
                                  reason=reason, earliest_copy=earliest, facts_read=facts_read,
                                  intake_code_version=facts.get(("vault", "code_version")) or CODE_VERSION,
-                                 # only a post that counts has its contact fingerprinted: a refused post (forged, unsigned, a second copy) is
-                                 # recorded as sent, no reader acts on its contact, and its organisation may hold no fingerprint secret to ask
-                                 contact=history.contact_of(fields, (_stored_settings(facts) or {}).get("region"), view.org_id,
-                                                            getattr(writer, "crypto", None)) if reason is None else (None, None))
+                                 intents=history.intents_of(org_id=view.org_id, post_id=view.post_id, fields=fields, reason=reason,
+                                                            earliest_copy=earliest, facts=facts),
+                                 contact=contact, contact_ct=sealed)
     except Exception as exc:  # loud-failure-exempt: logged by name; the old fold's outcome stands and the missing row is reported by the completeness check
         _log.error("the history row of a stored post could not be written; the next rebuild writes it", error=type(exc).__name__)
     return False
@@ -509,6 +538,8 @@ def _project_view_old(writer: RawPostWriter, conn: psycopg.Connection, enter: Ca
         try:
             if hasattr(backend, "for_post"):
                 backend = backend.for_post(view.facts)
+            if _is_cut(conn, enter):
+                backend = _CutBackend(backend, view.post_id)
             reading = read_post(view.body, field_map, CODE_VERSION, intake=view.intake, context=_view_context(view))
             auth = replace(auth_from_facts(view.facts), org_id=view.org_id)
             if auth.pending:

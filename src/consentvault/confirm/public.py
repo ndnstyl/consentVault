@@ -19,7 +19,7 @@ from datetime import datetime
 
 from .. import door
 from ..tenancy import crypto as tc
-from . import zones
+from . import basis, zones
 from .core import ALL_CHANNELS, KEY_ERRORS, STOP_CHANNELS, RECORDED_BY, Reply, SYSTEM_STOP_PAGE, log
 from .inbound import RECORD_ERRORS
 
@@ -81,10 +81,9 @@ class PublicMixin:
         if tok["is_test"]:
             return _page(f"{brand}: test message", f"<h1>{html.escape(brand)}</h1><p>This page was linked from a test message. In a real "
                          f"message it shows the exact wording the person agreed to.</p>{how_to_stop}")
-        it = conn.execute("SELECT basis_event_id, contact_fp FROM consentvault.confirmation_send_intent WHERE org_id = %s AND send_id = %s",
-                          (org, tok["send_id"])).fetchone()
-        ev = conn.execute("SELECT event_id, channels, purposes, received_at, disclosure_sha256, contact_fp, contact_ct FROM consentvault.event"
-                          " WHERE org_id = %s AND event_id = %s", (org, it["basis_event_id"])).fetchone()
+        it = conn.execute("SELECT basis_event_id, basis_history_event_id, contact_fp FROM consentvault.confirmation_send_intent"
+                          " WHERE org_id = %s AND send_id = %s", (org, tok["send_id"])).fetchone()
+        ev = basis.event_like(conn, org, it["basis_event_id"] or it["basis_history_event_id"])
         wording = conn.execute("SELECT body FROM consentvault.disclosure WHERE org_id = %s AND sha256 = %s",
                                (org, ev["disclosure_sha256"])).fetchone()["body"]
         zone = None
@@ -118,9 +117,9 @@ class PublicMixin:
         scope = "email" if one_click else params.get("scope")
         if scope not in ("email", "everything"):
             return _page("Not understood", "<p>That request was not understood.</p>", 400)
-        it = conn.execute("SELECT basis_event_id, contact_fp FROM consentvault.confirmation_send_intent WHERE org_id = %s AND send_id = %s",
-                          (org, tok["send_id"])).fetchone()
-        kind, norm, _ = self._contact_of_event(conn, org, it["basis_event_id"])
+        it = conn.execute("SELECT basis_event_id, basis_history_event_id, contact_fp FROM consentvault.confirmation_send_intent"
+                          " WHERE org_id = %s AND send_id = %s", (org, tok["send_id"])).fetchone()
+        kind, norm, _ = self._contact_of_event(conn, org, it["basis_event_id"] or it["basis_history_event_id"])
         have = self._org_channels(conn)
         channels = ["email"] if scope == "email" else [c for c in ALL_CHANNELS if c in have]
         # "Stop everything" means the person, not the one address. Who the person is comes from the records layer's link

@@ -275,6 +275,9 @@ class RawPostWriter:
                 who = conn.execute("SELECT consentvault.current_org() AS org, consentvault.home_org() AS home,"
                                    " clock_timestamp() AS now").fetchone()
             org, home = who["org"], who["home"]
+            extra: list[Fact] = []
+            if org is not None:
+                extra = self._cutover_facts(conn, enter, req)
             if org is None:
                 raise StoreUnavailable("no organisation is entered for the write (the home organisation was not reachable)")
             key, wrapped = None, None
@@ -299,9 +302,10 @@ class RawPostWriter:
                 body_ct, object_sha = None, record.sha256
             path_raw = req.path_bytes if req.path_bytes is not None else _as_bytes(req.path)
             path_ct = self._seal(key, org, post_id, COL_PATH, path_raw)
+            all_facts = list(req.facts) + extra
             fact_rows = [(i, _db_text(f.source), _db_text(f.name),
                           self._seal(key, org, post_id, COL_FACT, canonical_dumps(f.value).encode("utf-8")))
-                         for i, f in enumerate(req.facts)]
+                         for i, f in enumerate(all_facts)]
             query_ct = self._seal(key, org, post_id, COL_QUERY, _as_bytes(req.query))
             headers_ct = self._seal(key, org, post_id, COL_HEADERS, headers_json(req.headers))
             ctx = enter(conn) if enter is not None else conn.transaction()
@@ -382,6 +386,24 @@ class RawPostWriter:
                              (org, post_id, request_key_digest(request_key)))
         except psycopg.errors.UniqueViolation:  # loud-failure-exempt: the post already carries a request key; the first one recorded stays
             return
+
+    @staticmethod
+    def _cutover_facts(conn: psycopg.Connection, enter: Callable | None, req: "RawRequest") -> list[Fact]:
+        """After an organisation's cutover (its effect_watermark row exists) the intake captures, as facts, what the fold needs to derive
+        effects without looking anything up: ``effect_watermark`` = above, and ``delivery_targets`` (the connected systems and the enabled
+        confirmation rules as they stand now). A post stored by the backfill or the loader carries its own and gets none here."""
+        if req.intake == "legacy_event" or any(f.name in ("effect_watermark", "delivery_targets") for f in req.facts):
+            return []
+        ctx = enter(conn) if enter is not None else conn.transaction()
+        with ctx:
+            cut = conn.execute("SELECT EXISTS (SELECT 1 FROM consentvault.effect_watermark"
+                               " WHERE org_id = consentvault.current_org()) AS c").fetchone()["c"]
+            if not cut:
+                return []
+            systems = [str(r["system_id"]) for r in conn.execute("SELECT system_id FROM consentvault.sync_targets()").fetchall()]
+            rules = [{"source_id": str(r["source_id"]), "channel": r["channel"], "brand_id": str(r["sending_brand_id"])} for r in conn.execute(
+                "SELECT source_id, channel, sending_brand_id FROM consentvault.confirmation_rules_enabled()").fetchall()]
+        return [Fact("vault", "effect_watermark", "above"), Fact("vault", "delivery_targets", {"push": systems, "confirmation": rules})]
 
     def add_facts(self, conn: psycopg.Connection, enter: Callable, stored: StoredPost, facts: Iterable[Fact]) -> None:
         """Facts learned after the post committed (appended; never changes the post)."""

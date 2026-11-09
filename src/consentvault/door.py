@@ -328,7 +328,8 @@ class TenantBackend:
         facts[("vault", "stored_again_from")] = {"org_id": view.org_id, "post_id": view.post_id}
         req = RawRequest(intake=view.intake, method=view.method, path=view.path, query="",
                          headers=(("content-type", "application/json"),), body=view.body, headers_presented_by="rebuild",
-                         facts=tuple(Fact(s, n, v) for (s, n), v in facts.items()))
+                         facts=tuple(Fact(s, n, v) for (s, n), v in facts.items()),
+                         original_arrival=datetime.fromtimestamp(view.arrived_epoch, tz=timezone.utc) if view.arrived_epoch is not None else None)
         stored = writer.write(conn, enter, req)
         newview = PostView(stored.org_id, stored.post_id, stored.seq, view.intake, view.body,
                            {**facts, ("__key__", "data_key"): stored.data_key}, view.method, view.path,

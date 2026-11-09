@@ -69,3 +69,26 @@ def test_the_same_history_whatever_the_key_state_at_projection(hw, monkeypatch):
         su.execute("UPDATE consentvault.credential SET revoked_at = now() WHERE site_key_id = %s", (key,))
     api.rebuild_cloud(hw.cloud.settings, _orgs(hw))
     assert len(_events_of(hw, a.org)) == before + 1
+
+
+def test_a_post_stored_again_in_its_owners_organisation_is_placed_at_its_original_arrival(hw, monkeypatch):
+    import time
+
+    a = hw.cloud.a
+    key = _site_key(hw, a)
+    before = {e["event_id"] for e in _events_of(hw, a.org)}
+    with monkeypatch.context() as m:
+        _down(m)
+        _edge_post(hw, _envelope(key, _edge_body(a, key)))
+    with hw.t.superuser() as su:
+        home = su.execute("SELECT consentvault.home_org() AS h").fetchone()["h"]
+        original = su.execute("SELECT received_at FROM consentvault.raw_post WHERE org_id = %s AND kind = 'post'"
+                              " ORDER BY seq DESC LIMIT 1", (home,)).fetchone()["received_at"]
+    time.sleep(1.2)
+    api.rebuild_cloud(hw.cloud.settings, _orgs(hw))
+    made = [e for e in _events_of(hw, a.org) if e["event_id"] not in before]
+    assert len(made) == 1
+    from consentvault.tenancy.tokens import org_transaction
+    with hw.t.operator() as o, org_transaction(o, hw.t.admin_token(a.org.org_id)):
+        placed = o.execute("SELECT consentvault.arrival_at(%s, %s, now()) AS t", (a.org.org_id, made[0]["event_id"])).fetchone()["t"]
+    assert placed == original   # not the time the copy was stored again

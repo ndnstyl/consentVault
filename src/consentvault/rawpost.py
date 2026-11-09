@@ -92,6 +92,9 @@ class RawRequest:
     # what the field map reads when the stored body is a signed envelope: the browser's own body and headers inside it
     read_body: bytes | None = None
     read_headers: tuple[tuple[str, str], ...] | None = None
+    # when the request first arrived, for a post stored again in another organisation than the one that first took it in: the
+    # copy is placed in a person's history at this time, not at the time it was stored again
+    original_arrival: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -336,6 +339,9 @@ class RawPostWriter:
                 for fact in req.facts:
                     if is_request_key(fact):
                         self.record_request_key(conn, org, post_id, fact.value)
+                if req.original_arrival is not None:
+                    conn.execute("INSERT INTO consentvault.raw_post_original_arrival (org_id, post_id, arrived_at) VALUES (%s, %s, %s)",
+                                 (org, post_id, req.original_arrival))
         except StoreUnavailable:
             raise
         except ConsentVaultError as exc:  # provider, key and store failures all mean the same: nothing was stored

@@ -812,15 +812,6 @@
    "defined_in": "0059_self_checks.sql"
   },
   {
-   "code": "db_inline_code_block_qgyyyr",
-   "function": "inline_code_block",
-   "signature": "",
-   "line": 14,
-   "template": "consentvault migration 0093 refused: consentvault_app is not a member of consentvault_projection. As a ",
-   "meaning": "consentvault migration 0093 refused: consentvault_app is not a member of consentvault_projection. As a",
-   "defined_in": "0093_projection_login.sql"
-  },
-  {
    "code": "db_inline_code_block_rjvzrw",
    "function": "inline_code_block",
    "signature": "",
@@ -893,10 +884,10 @@
    "defined_in": "0050_records_jobs.sql"
   },
   {
-   "code": "db_inline_code_block_zpyvpq",
+   "code": "db_inline_code_block_xznvsz",
    "function": "inline_code_block",
    "signature": "",
-   "line": 10,
+   "line": 9,
    "template": "consentvault migration 0093 refused: consentvault_projection must be a NOLOGIN group, neither a superuser nor BYPASSRLS",
    "meaning": "consentvault migration 0093 refused: consentvault_projection must be a NOLOGIN group, neither a superuser nor BYPASSRLS",
    "defined_in": "0093_projection_login.sql"

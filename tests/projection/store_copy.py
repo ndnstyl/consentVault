@@ -83,3 +83,59 @@ def finish_migrations(request):
     with db.connect(raw_dsn) as c:
         db.migrate(c)
     pin_as_superuser(raw_dsn)
+
+
+def iso_grant_fields(org, contact_value: str) -> dict:
+    return dict(contact=contact_value, event_type="grant", channels=["sms"], purposes=["marketing"], method="checkbox", origin="consumer",
+                source_id=org.source_id, disclosure_sha256=org.disclosure, brand_ids=[org.brand_id], session_ref="s-q", contact_verification="none")
+
+
+def store_unprojected(env, org, contact_value: str) -> str:
+    """A post stored by the intake and never projected: the old fold had not reached it when it stopped."""
+    import json as _json
+
+    from consentvault import door
+    from consentvault.rawpost import RawPostWriter, RawRequest
+    from consentvault.tenancy.tokens import org_transaction
+    body = _json.dumps(iso_grant_fields(org, contact_value), sort_keys=True, default=door._json_default).encode()
+    req = RawRequest(intake="staff_marked", method="POST", path="/v1/events", query="", headers=(("content-type", "application/json"),),
+                     body=body, headers_presented_by="local-process", facts=tuple(door_good_facts()))
+    with env.t.app() as c, org_transaction(c, env.t.token(org)):
+        return str(door.store_raw(RawPostWriter(crypto=env.t.crypto), c, lambda cc: cc.transaction(), req).post_id)
+
+
+def door_good_facts():
+    from .support import good_facts
+    return good_facts() + [__import__("consentvault.door", fromlist=["x"]).settings_fact(region="US")]
+
+
+def project_org(env, org) -> None:
+    """The new fold over every post of one organisation that has no outcome yet."""
+    from consentvault import door
+    from consentvault.rawpost import RawPostWriter
+    from consentvault.tenancy.tokens import org_transaction
+    with env.t.app() as c, org_transaction(c, env.t.token(org)):
+        door.project_pending(RawPostWriter(crypto=env.t.crypto), c, lambda cc: cc.transaction(), door.TenantLedgerBackend(env.t.crypto, region="US"))
+
+
+def queue_quiet(env, org, n: int = 500) -> dict:
+    """A grant the old fold finished whose queued push was already delivered and removed: a post with an event and no queued row."""
+    from consentvault import door
+    from consentvault.tenancy.tokens import org_transaction
+    with env.t.app() as c, org_transaction(c, env.t.token(org)):
+        out = door.record_observed(c, env.t.crypto, intake="staff_marked", enter=lambda cc: cc.transaction(), region="US",
+                                   fields=iso_grant_fields(org, contact(n)))
+    ev = type("E", (), {"event_id": out.event_id})
+    with env.t.superuser() as su, su.transaction():
+        su.execute("SET LOCAL session_replication_role = replica")
+        su.execute("DELETE FROM consentvault.outbox WHERE org_id = %s AND outbox_id IN (SELECT outbox_id FROM consentvault.outbox WHERE org_id = %s"
+                   " AND contact_fp = %s)", (org.org_id, org.org_id, env.fp(org, contact(n))))
+        post = su.execute("SELECT post_id FROM consentvault.event_source_post WHERE org_id = %s AND event_id = %s", (org.org_id, ev.event_id)).fetchone()["post_id"]
+    return {"post_id": str(post), "fp": env.fp(org, contact(n))}
+
+
+def watermark_fact(env, org, post_id: str):
+    from isolation.cloud_harness import facts_of
+    with env.t.superuser() as su:
+        row = su.execute("SELECT * FROM consentvault.raw_post WHERE org_id = %s AND post_id = %s", (org.org_id, post_id)).fetchone()
+    return facts_of(env.t, row).get("effect_watermark")

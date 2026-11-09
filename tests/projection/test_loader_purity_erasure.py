@@ -17,9 +17,10 @@ def test_a_fresh_database_loaded_from_the_store_holds_every_post_at_its_stored_a
     store = cloud
     door_post_all = [cloud.grant(cloud.a, PHONE), cloud.grant(cloud.b, PHONE)]
     assert all(s == 201 for s, _ in door_post_all)
+    from .support import store_snapshot
     loaded = load_into_fresh(store)
-    assert loaded.loaded["seq"] and loaded.loaded["received_at"] and loaded.loaded["prev_hash"] and loaded.loaded["row_hash"]
-    assert loaded.loaded["original_arrival_rows"] is True
+    assert loaded.loaded["posts"] == store_snapshot(store).loaded["posts"] and loaded.loaded["posts"], "seq, received_at, prev_hash, row_hash equal"
+    assert loaded.loaded["arrivals"] == store_snapshot(store).loaded["arrivals"]
 
 
 @spec("0084.multi_mode_mark_refused")
@@ -136,7 +137,7 @@ def test_the_intent_key_fingerprints_match(cloud):
 def test_the_key_provider_stand_in_saw_only_the_four_allowed_calls(cloud):
     _, first, second = _purity(cloud)
     for r in (first, second):
-        assert r.key_calls and {c for c in r.key_calls} <= ALLOWED_KEY_CALLS
+        assert r.key_calls and set(r.key_calls) <= ALLOWED_KEY_CALLS
 
 
 @spec("purity.evidence_reads_only")
@@ -176,5 +177,13 @@ def test_an_erasure_stores_its_stop_as_a_post_through_the_ordinary_writer_and_th
 def test_replay_from_empty_of_a_database_holding_one_erased_contact_holds_its_erasure_stop(cloud):
     need_function("load_stored_post")
     need_cutover()
-    store, first, _ = _purity(cloud)
-    assert first.fingerprints == store.fingerprints
+    from consentvault.tenancy.tokens import org_transaction
+    co = cloud.a
+    assert cloud.grant(co, PHONE)[0] == 201
+    fp = cloud.t.crypto.contact_fingerprint(co.org.org_id, "phone", PHONE)
+    with cloud.t.operator() as op, org_transaction(op, cloud.t.admin_token(co.org.org_id)):
+        op.execute("SELECT consentvault.erase_contact(%s)", (fp,))
+    store, first, second = purity_run(cloud)
+    assert first.fingerprints == second.fingerprints == store.fingerprints
+    stops = [r for r in sql(cloud, "SELECT event_type_sent FROM consentvault.post_history WHERE org_id = %s", (co.org.org_id,)) if r["event_type_sent"] in ("revoke", "suppress")]
+    assert stops, "the replayed history holds the erasure stop"

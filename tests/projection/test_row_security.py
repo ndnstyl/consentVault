@@ -44,8 +44,20 @@ def test_the_effect_tables_carry_the_tenant_policy_only(world):
         assert sql(world, "SELECT 1 FROM pg_policies WHERE schemaname = 'consentvault' AND tablename = %s AND permissive = 'RESTRICTIVE'", (table,)) == []
 
 
-@pytest.mark.parametrize("table", [pytest.param(t, id=t, marks=spec("M6.behaviour." + t)) for t in FOLD_FILLED])
-def test_a_session_entered_as_one_organisation_reads_none_of_the_others_rows_and_cannot_insert_one(world, table):
+@pytest.mark.parametrize("table", [pytest.param(t, id=t, marks=spec("M6.insert." + t)) for t in TENANT_TABLES])
+def test_a_session_entered_as_one_organisation_is_refused_an_insert_for_another_with_sqlstate_42501(world, table):
+    need_table(table)
+    a, b = world.a, world.b
+    org_col = "from_org" if table == "raw_post_reroute" else "org_id"
+    with world.vault.appconn() as c, org_transaction(c, world.capture_token(a.org_id)):
+        with pytest.raises(psycopg.Error) as exc:
+            c.execute(f"INSERT INTO consentvault.{table} SELECT * FROM jsonb_populate_record(NULL::consentvault.{table},"
+                      f" jsonb_build_object('{org_col}', %s::text))", (b.org_id,))
+    assert exc.value.sqlstate == "42501", f"refused by row security or by the grant (42501), not by a column rule: {exc.value.sqlstate} {exc.value}"
+
+
+@pytest.mark.parametrize("table", [pytest.param(t, id=t, marks=spec("M6.read." + t)) for t in FOLD_FILLED])
+def test_a_session_entered_as_one_organisation_reads_none_of_the_others_rows(world, table):
     need_cutover()
     a, b = world.a, world.b
     door_post(world, a, grant_fields(a, PHONE))
@@ -54,7 +66,3 @@ def test_a_session_entered_as_one_organisation_reads_none_of_the_others_rows_and
     with world.vault.appconn() as c, org_transaction(c, world.capture_token(a.org_id)):
         assert c.execute(f"SELECT count(*) AS n FROM consentvault.{table} WHERE org_id = %s", (b.org_id,)).fetchone()["n"] == 0
         assert c.execute(f"SELECT count(*) AS n FROM consentvault.{table} WHERE org_id = %s", (a.org_id,)).fetchone()["n"] >= 1
-        with pytest.raises(psycopg.Error):
-            c.execute(f"INSERT INTO consentvault.{table} SELECT * FROM jsonb_populate_record(NULL::consentvault.{table},"
-                      f" (SELECT to_jsonb(t) || jsonb_build_object('org_id', %s::text) FROM consentvault.{table} t WHERE org_id = %s LIMIT 1))",
-                      (b.org_id, a.org_id))

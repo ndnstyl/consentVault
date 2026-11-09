@@ -202,19 +202,6 @@ def history_fingerprint(rows: list[dict], *, label: str | None = None) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
-# ---- loading a store onto a fresh database (migration 0084) --------------------------------------------------------------
-
-def load_into_fresh(source_env, *, empty_lookups: bool = True):
-    """Load the source database's stored posts onto a fresh database through ``load_stored_post`` and ``load_lookup_rows`` and
-    return a handle on it. The call shapes of those two functions are not fixed by the design (it gives their guard and their
-    effect, not their argument lists), so the adapter is written in the same change that creates them: until then every test that
-    needs it fails here, at the precondition."""
-    need_function("load_stored_post")
-    need_function("load_lookup_rows")
-    need_table("replay_target")
-    pytest.fail("ADAPTER TO COMPLETE: map the stored rows of the source onto load_stored_post and load_lookup_rows", pytrace=False)
-
-
 def two_stage_migrate(raw_dsn: str) -> list[str]:
     """Bring an empty database to today's store of record (every migration through 0079) and return the pending names, so a test
     can fill it as the old system fills it and then apply this spec's migrations on top (the 'copy of today's store')."""
@@ -264,6 +251,15 @@ def at(stack, y, m, d, h, mi=0):
 
 # ---- roles, facts and concurrency ----------------------------------------------------------------------------------------
 
+def super_dsn_of(env) -> str:
+    """The superuser DSN of a contract world (.vault), a cloud (.t) or a tenancy / sync environment (.super_dsn)."""
+    if hasattr(env, "vault"):
+        return env.vault.super_dsn
+    if hasattr(env, "t"):
+        return env.t.super_dsn
+    return env.super_dsn
+
+
 def login_in_group(world, group: str):
     """A fresh login that is a member of ``group`` on the world's database; returns a connected, autocommit connection."""
     from urllib.parse import urlparse
@@ -271,7 +267,7 @@ def login_in_group(world, group: str):
     from consentvault import db
     from isolation.harness import make_login_role
 
-    u = urlparse(world.vault.super_dsn)
+    u = urlparse(super_dsn_of(world))
     return db.connect(make_login_role(u.port, u.path.lstrip("/"), group))
 
 
@@ -320,38 +316,6 @@ def in_threads(*fns):
     return out
 
 
-# ---- the proof of purity: what a fresh replay hands back --------------------------------------------------------------------
-
-from dataclasses import dataclass, field  # noqa: E402
-
-
-@dataclass
-class Replayed:
-    """What ``load_into_fresh`` and the replay return for one fresh database, so the proof reads it the same way for both.
-
-    ``fingerprints`` maps a history label (projected, backfill) to the content fingerprint of that label's rows in place order;
-    ``intent_keys`` is the sorted list of (post, effect, target, intent id); ``key_calls`` / ``evidence_calls`` / ``sender_calls`` are
-    what the recording stand-ins saw (the four allowed key-provider calls are 'post_key', 'contact_key', 'fingerprint_secret',
-    'display_key'); ``loaded`` is the stored-versus-loaded comparison of every post table."""
-    fingerprints: dict = field(default_factory=dict)
-    intent_keys: list = field(default_factory=list)
-    key_calls: list = field(default_factory=list)
-    evidence_calls: list = field(default_factory=list)
-    sender_calls: list = field(default_factory=list)
-    loaded: dict = field(default_factory=dict)
-    posts: int = 0
-
-
-ALLOWED_KEY_CALLS = {"post_key", "contact_key", "fingerprint_secret", "display_key"}
-
-
-def purity_run(source) -> tuple[Replayed, Replayed, Replayed]:
-    """Load the same store onto two fresh databases with the loader; refill the second's lookup tables with different rows and move
-    its database and Python clocks together by one year; project both; return (store, first, second)."""
-    load_into_fresh(source)
-    pytest.fail("ADAPTER TO COMPLETE: purity_run needs the loader's call shape", pytrace=False)
-
-
 def call_with_nulls(conn, fn: str):
     """Call a function with every argument NULL, to reach its guard before it reads any argument (the guard refuses first)."""
     row = conn.execute("SELECT pronargs FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'consentvault'"
@@ -370,3 +334,223 @@ def history_head(env) -> dict:
 
 def integrity_conn(world):
     return login_in_group(world, "consentvault_integrity")
+
+
+# ---- CALL SHAPES FIXED BY THESE TESTS ----------------------------------------------------------------------------------------
+# The design names behaviour, not signatures. These tests fix the shapes below; the build provides them.
+#   consentvault.effects.run_once(conn, *, crypto, custody, transport, senders, clock)
+#       the effects layer: claims pending intents, sends pushes through transport.send(PushRequest) with the header
+#       "Idempotency-Key" equal to the intent id, sends every other effect through senders.send(effect=, intent_id=,
+#       idempotency_key=), moves the state, refuses by name (error text contains "replay") on a replay database.
+#   consentvault.cutover.write_watermark_facts(owner_connect, token_key, custody, crypto)
+#       the per-organisation job that writes the effect_watermark fact on every stored post (below or above).
+#   consentvault.replay_load.load_store(source_dsn, target_dsn, *, token_key)
+#       loads a store onto a fresh, marked database through load_stored_post and load_lookup_rows.
+#   consentvault.replay_load.project_all(target_dsn, *, crypto, evidence, senders)
+#       the new fold over every loaded post; the effects layer is not started.
+
+from dataclasses import dataclass, field  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+ALLOWED_KEY_CALLS = {"unwrap_data_key", "fingerprint_secret", "display_key"}   # post key and contact key are both unwrap_data_key
+
+
+class RecordingKeyProvider:
+    """Wraps a key provider and records every call by name."""
+
+    def __init__(self, inner):
+        self.inner, self.log = inner, []
+
+    def __getattr__(self, name):
+        target = getattr(self.inner, name)
+        if not callable(target):
+            return target
+
+        def call(*a, **k):
+            self.log.append(name)
+            return target(*a, **k)
+        return call
+
+
+class RecordingEvidence:
+    def __init__(self, inner):
+        self.inner, self.log = inner, []
+
+    def __getattr__(self, name):
+        target = getattr(self.inner, name)
+
+        def call(*a, **k):
+            self.log.append((name, str(a[0]) if a else ""))
+            return target(*a, **k)
+        return call if callable(target) else target
+
+
+class RecordingSenders:
+    def __init__(self):
+        self.calls = []
+
+    def send(self, **kw):
+        self.calls.append(kw)
+        return {"provider_message_id": "stub-" + str(len(self.calls))}
+
+
+class Transport:
+    """Push transport stand-in (sync.support.FakeTransport): every request kept; the idempotency key is a header."""
+
+    def __init__(self):
+        from sync.support import FakeTransport
+        self.t = FakeTransport()
+
+    def send(self, request):
+        return self.t.send(request)
+
+    @property
+    def sent(self):
+        return self.t.sent
+
+    def keys(self):
+        return [r.headers.get("Idempotency-Key") for r in self.t.sent]
+
+
+def run_effects(env, *, transport, senders, crypto, custody, clock=None):
+    """Run the effects layer once as the worker role."""
+    run_once = need_py("consentvault.effects", "run_once")
+    conn = login_in_group(env, "consentvault_worker")
+    return run_once(conn, crypto=crypto, custody=custody, transport=transport, senders=senders,
+                    clock=clock or (lambda: datetime.now(timezone.utc)))
+
+
+def reproject(world, org):
+    """Run the fold again over every post that has no outcome yet (idempotent for the rest)."""
+    from consentvault.tenancy.tokens import org_transaction
+    with world.vault.appconn() as c, org_transaction(c, world.capture_token(org.org_id)):
+        door.project_pending(RawPostWriter(crypto=world.crypto), c, lambda cc: cc.transaction(), door.TenantLedgerBackend(world.crypto, region="US"))
+
+
+@dataclass
+class Replayed:
+    fingerprints: dict = field(default_factory=dict)
+    intent_keys: list = field(default_factory=list)
+    key_calls: list = field(default_factory=list)
+    evidence_calls: list = field(default_factory=list)
+    sender_calls: list = field(default_factory=list)
+    loaded: dict = field(default_factory=dict)
+
+
+def _port_and_db(env):
+    from urllib.parse import urlparse
+    u = urlparse(super_dsn_of(env))
+    return u.port, u.path.lstrip("/")
+
+
+def _snapshot(dsn: str) -> tuple[dict, list]:
+    """The stored-versus-loaded comparison set and the history fingerprints of one database."""
+    import psycopg
+    with psycopg.connect(dsn, row_factory=psycopg.rows.dict_row) as c:
+        posts = c.execute("SELECT org_id, post_id, seq, received_at, prev_hash, row_hash, body_sha256 FROM consentvault.raw_post ORDER BY org_id, seq").fetchall()
+        arrivals = c.execute("SELECT org_id, post_id, arrived_at FROM consentvault.raw_post_original_arrival ORDER BY org_id, post_id").fetchall()
+        hist = c.execute("SELECT * FROM consentvault.post_history ORDER BY org_id, history_seq").fetchall() if c.execute(
+            "SELECT to_regclass('consentvault.post_history') IS NOT NULL AS t").fetchone()["t"] else []
+        keys = c.execute("SELECT post_id, effect, target, intent_id FROM consentvault.effect_intent ORDER BY post_id, effect, target").fetchall() if c.execute(
+            "SELECT to_regclass('consentvault.effect_intent') IS NOT NULL AS t").fetchone()["t"] else []
+    loaded = {"posts": [tuple(p.values()) for p in posts], "arrivals": [tuple(a.values()) for a in arrivals]}
+    fps = {lab: history_fingerprint(hist, label=lab) for lab in sorted({h["label"] for h in hist})}
+    return loaded, fps, [tuple(str(v) for v in k.values()) for k in keys]
+
+
+def store_snapshot(env) -> Replayed:
+    loaded, fps, keys = _snapshot(super_dsn_of(env))
+    return Replayed(fingerprints=fps, intent_keys=keys, loaded=loaded)
+
+
+def load_into_fresh(env, *, refill: bool = False, shift_years: int = 0) -> Replayed:
+    """Load the environment's store onto a new database with the loader, project it with stand-ins for the key provider, the evidence
+    store and every sender, and return what that database holds. ``refill`` fills the lookup tables with different rows and
+    ``shift_years`` moves the Python clocks (and the database clock seam) by that many years while the fold runs."""
+    import unittest.mock as mock
+    import uuid as _uuid
+
+    import psycopg
+
+    from conftest import MIGRATOR_ROLE, _dsn, create_vault_database, ensure_roles, pin_as_superuser
+    from consentvault import db, dbclock
+    from consentvault.tenancy.crypto import TenantCrypto
+
+    need_function("load_stored_post")
+    need_function("load_lookup_rows")
+    need_table("replay_target")
+    load_store = need_py("consentvault.replay_load", "load_store")
+    project_all = need_py("consentvault.replay_load", "project_all")
+    port, _ = _port_and_db(env)
+    name = new_database(port)
+    source = super_dsn_of(env)
+    target = _dsn(port, name, "postgres")
+    key = env.vault.key if hasattr(env, "vault") else env.t.key
+    load_store(source, target, token_key=key)
+    if refill:
+        _refill_lookups(source, target)
+    provider = env.vault.custody if hasattr(env, "vault") else env.t.provider
+    keys = RecordingKeyProvider(provider)
+    evidence = RecordingEvidence(getattr(env, "store", None) or getattr(getattr(env, "world", None), "store", None))
+    senders = RecordingSenders()
+    real_time = __import__("time").time
+    shift = timedelta(days=365 * shift_years)
+    with mock.patch("time.time", lambda: real_time() + shift.total_seconds()), \
+            mock.patch.object(dbclock, "now", lambda conn: datetime.now(timezone.utc) + shift):
+        project_all(target, crypto=TenantCrypto(keys), evidence=evidence, senders=senders)
+    loaded, fps, intent_keys = _snapshot(target)
+    return Replayed(fingerprints=fps, intent_keys=intent_keys, key_calls=keys.log, evidence_calls=evidence.log,
+                    sender_calls=senders.calls, loaded=loaded)
+
+
+def new_database(port: int) -> str:
+    """A fresh, fully migrated, empty database on the test cluster; returns its name."""
+    import uuid as _uuid
+
+    from conftest import MIGRATOR_ROLE, _dsn, create_vault_database, ensure_roles, pin_as_superuser
+    from consentvault import db
+
+    name = "r_" + _uuid.uuid4().hex[:12]
+    ensure_roles(port)
+    create_vault_database(port, name)
+    with db.connect(_dsn(port, name, MIGRATOR_ROLE)) as c:
+        db.migrate(c)
+    pin_as_superuser(_dsn(port, name, MIGRATOR_ROLE))
+    return name
+
+
+def _refill_lookups(source: str, target: str) -> None:
+    import psycopg
+    with psycopg.connect(source) as s, psycopg.connect(target, autocommit=True) as t:
+        for table in ("brand", "capture_source"):
+            cols = [r[0] for r in s.execute("SELECT column_name FROM information_schema.columns WHERE table_schema = 'consentvault' AND table_name = %s ORDER BY ordinal_position", (table,))]
+            for row in s.execute(f"SELECT {', '.join(cols)} FROM consentvault.{table}").fetchall():
+                vals = ["z-" + str(v) if c == "name" else v for c, v in zip(cols, row)]
+                t.execute(f"INSERT INTO consentvault.{table} ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})", vals)
+
+
+def purity_run(env) -> tuple[Replayed, Replayed, Replayed]:
+    """The same store loaded onto two fresh databases; the second with refilled lookup tables and every clock moved a year."""
+    return store_snapshot(env), load_into_fresh(env), load_into_fresh(env, refill=True, shift_years=1)
+
+
+def call_fn(world, org, name: str, **values):
+    """Call consentvault.<name> with arguments matched BY NAME (a leading p_ is ignored) to ``values``, entered as the organisation.
+    An argument with no value is a defect in the test and fails loudly, naming it."""
+    import json as _json
+    from consentvault.tenancy.tokens import org_transaction
+
+    with world.vault.appconn() as c:
+        row = c.execute("SELECT proargnames AS n, pronargs FROM pg_proc WHERE pronamespace = 'consentvault'::regnamespace AND proname = %s"
+                        " ORDER BY pronargs DESC LIMIT 1", (name,)).fetchone()
+        assert row is not None, f"function consentvault.{name} does not exist"
+        names = [n.removeprefix("p_") for n in (row["n"] or [])][: row["pronargs"]]
+        absent = [n for n in names if n not in values]
+        assert not absent, f"TEST ADAPTER: consentvault.{name} takes {absent} and the test supplies no value for it"
+        with org_transaction(c, world.capture_token(org.org_id)):
+            return c.execute(f"SELECT * FROM consentvault.{name}({', '.join(['%s'] * len(names))})", [values[n] for n in names]).fetchall()
+
+
+def as_text(rows) -> str:
+    import json as _json
+    return _json.dumps(rows, default=str).lower()

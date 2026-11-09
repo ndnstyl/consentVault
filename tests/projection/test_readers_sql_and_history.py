@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from .support import (PHONE, PHONE2, cut_grant, cut_stop, door_post, grant_fields, history_event_id, history_head, history_row, integrity_conn,
+from .support import (as_text, call_fn, PHONE, PHONE2, cut_grant, cut_stop, door_post, grant_fields, history_event_id, history_head, history_row, integrity_conn,
                       need_cutover, need_function, need_table, sql)
 
 spec = pytest.mark.spec_item
@@ -38,7 +38,7 @@ def test_19_the_permission_view_is_rebuilt_over_history_and_the_contact_check_do
 
 
 @spec("item20")
-def test_20_a_post_cutover_stop_advances_its_sync_state(world):
+def test_20_a_post_cutover_stop_advances_its_sync_state_and_the_person_state_reads_stopped(world):
     need_cutover()
     o = world.a
     cut_grant(world, o, PHONE)
@@ -46,6 +46,8 @@ def test_20_a_post_cutover_stop_advances_its_sync_state(world):
     cut_stop(world, o, PHONE)
     v2 = sql(world, "SELECT coalesce(max(version), 0) AS v FROM consentvault.state_version WHERE org_id = %s", (o.org_id,))[0]["v"]
     assert v2 > v1
+    state = as_text(call_fn(world, o, "sync_person_state", contact_fp=o.fp(PHONE), fp=o.fp(PHONE)))
+    assert ("stop" in state or "revok" in state or "denied" in state) and "permitted" not in state, state
     for name in ("sync_advance_state", "sync_contact_sealed", "sync_person_state"):
         _reads_history_only(world, name)
 
@@ -70,28 +72,47 @@ def test_23_receipt_of_returns_the_receipt_of_a_post_cutover_post(world):
     assert got
 
 
+def _vals(world, o, post=None, fp_phone=PHONE):
+    from datetime import date
+    v = {"org_id": o.org_id, "contact_fp": o.fp(fp_phone), "fp": o.fp(fp_phone), "day": date.today(), "source_id": o.web_id}
+    if post:
+        v["event_id"] = history_event_id(world, o, post)
+        v["post_id"] = post
+    return v
+
+
 @spec("item24")
-def test_24_the_record_doc_check_reads_the_completeness_of_the_post(world):
+def test_24_the_record_doc_check_of_a_history_only_post_reads_its_completeness(world):
     need_cutover()
+    o = world.a
+    post = cut_grant(world, o, PHONE)
     text = _def(world, "record_doc_check")
-    assert "completeness" in text and "consentvault.event" not in text
+    assert "completeness" in text and "consentvault.event " not in text
+    got = as_text(call_fn(world, o, "record_doc_check", **_vals(world, o, post)))
+    assert got and "ip" in got, "the check answers for a post that exists only in history, naming the elements"
 
 
 @spec("item25")
 def test_25_the_health_and_usage_counts_count_a_post_cutover_post(world):
     need_cutover()
-    for name in ("health_counts", "source_last_events", "usage_events_for_day", "customer_alarm_rows"):
-        _reads_history_only(world, name)
+    o = world.a
+    before = as_text(call_fn(world, o, "health_counts", **_vals(world, o)))
+    post = cut_grant(world, o, PHONE)
+    assert as_text(call_fn(world, o, "health_counts", **_vals(world, o))) != before, "a history-only post is counted"
+    assert str(o.web_id).lower() in as_text(call_fn(world, o, "source_last_events", **_vals(world, o, post)))
+    assert call_fn(world, o, "usage_events_for_day", **_vals(world, o, post))
+    call_fn(world, o, "customer_alarm_rows", **_vals(world, o, post))   # runs against history without error
 
 
 @spec("item26")
 def test_26_an_erasure_after_cutover_covers_the_contacts_history_rows(world):
     need_cutover()
     o = world.a
-    cut_grant(world, o, PHONE)
+    post = cut_grant(world, o, PHONE)
     world.erase(o, PHONE)
-    for name in ("erasure_coverage_backfill", "erasure_request_cover"):
-        _reads_history_only(world, name)
+    cover = as_text(call_fn(world, o, "erasure_request_cover", **_vals(world, o, post)))
+    assert cover and "[]" != cover, "the cover names the history rows of the erased contact"
+    call_fn(world, o, "erasure_coverage_backfill", **_vals(world, o, post))
 
 
 @spec("item27")
@@ -265,3 +286,45 @@ def test_42_a_new_history_row_is_listed_as_unsealed_until_it_is_sealed(world, re
     tsa = request.getfixturevalue("tsa")
     integrity.seal_every_org(integrity_conn(world), tsa.url, 100, backoff=0)
     assert eid not in {str(r["event_id"]) for r in sql(world, "SELECT * FROM consentvault.unsealed_history()")}
+
+
+@spec("item39.forged_after_stop")
+def test_a_valid_grant_a_counted_stop_then_a_forged_grant_the_sender_skips_and_the_forged_row_does_not_count(world, stack, armed):
+    need_cutover()
+    need_function("history_stop_on_record")
+    from consentvault import gate
+    from consentvault.rawpost import Fact
+    from consentvault.tenancy.tokens import org_transaction
+    from contract_world.confirm import sends
+    o = world.a
+    cut_grant(world, o, "+13055550142")
+    cut_stop(world, o, "+13055550142")
+    forged = door_post(world, o, grant_fields(o, "+13055550142"), facts=[Fact("vault", "request_signature", "invalid")])
+    assert history_row(world, o, forged)["standing"] == "not_authenticated:invalid"
+    stack.run()
+    assert stack.twilio.sent == [] and "stop_on_record" in {s["skip_reason"] for s in sends(o.boss, channel="sms")}
+    assert sql(world, "SELECT consentvault.history_stop_on_record(%s, %s, 'sms') AS s", (o.org_id, o.fp("+13055550142")))[0]["s"] is True
+    with world.vault.appconn() as c, org_transaction(c, world.capture_token(o.org_id)):
+        facts = gate.tenant_facts(c, "phone", o.fp("+13055550142"))
+    forged_id = history_event_id(world, o, forged)
+    assert forged_id not in facts.event_ids or "not_authenticated" in json.dumps(facts.as_dict(), default=str), \
+        "the contact check ignores or labels a row that did not count"
+    state = as_text(call_fn(world, o, "sync_person_state", **_vals(world, o, fp_phone="+13055550142")))
+    assert "permitted" not in state, "sync person state ignores the forged grant: the person is still stopped"
+
+
+@spec("item19.sender_with_view_off")
+def test_19_with_the_derived_view_switched_off_the_sender_still_skips_on_the_stop_and_the_contact_check_answers(world, stack, armed):
+    need_cutover()
+    from consentvault import gate
+    from consentvault.tenancy.tokens import org_transaction
+    from contract_world.confirm import sends
+    o = world.a
+    cut_grant(world, o, "+13055550142")
+    cut_stop(world, o, "+13055550142")
+    with world.vault.superuser() as su:
+        su.execute("REVOKE ALL ON consentvault.current_permission FROM PUBLIC, consentvault_app, consentvault_worker, consentvault_console")
+    stack.run()
+    assert stack.twilio.sent == [] and "stop_on_record" in {s["skip_reason"] for s in sends(o.boss, channel="sms")}
+    with world.vault.appconn() as c, org_transaction(c, world.capture_token(o.org_id)):
+        assert gate.tenant_facts(c, "phone", o.fp("+13055550142")).event_ids, "the contact check answers with the view off"

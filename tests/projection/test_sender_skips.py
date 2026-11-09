@@ -11,10 +11,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from contract_world.confirm import sends, set_sender
+from contract_world.confirm import mark_registered, sends, set_sender
 from contract_world.world import EMAIL
 
-from .support import PHONE, add_push_target, at, confirmation_intents, cut_grant, cut_stop, force, intents, need_cutover  # noqa: F401
+from .support import PHONE, at, confirmation_intents, cut_grant, cut_stop, force, intents, need_cutover  # noqa: F401
 
 PHONE_NY = "+13055550142"
 PHONE_SPLIT = "+19065550142"
@@ -66,41 +66,50 @@ def _after_stop(world, stack):
     cut_stop(world, world.a, PHONE_NY)
 
 
+def _status(w, table, status, extra=""):
+    return lambda w_, s_: _sql_org(w_, table, f"status = '{status}'", extra)
+
+
+def _clock_back(w, s):
+    at(s, 2026, 11, 3, 15, 0)
+
+
 CASES = [
-    # name, reason, grant-time arrangement, change made after the grant arrived
+    # name, reason, grant-time arrangement, change made after the grant arrived, how the condition is cleared (None: it lives in the grant)
     ("rule_off_no_row", "rule_off", None,
-     lambda w, s: force(w, "DELETE FROM consentvault.confirmation_rule WHERE org_id = %s AND channel = 'sms'", (w.a.org_id,))),
-    ("contact_erased", "contact_erased", None, lambda w, s: w.erase(w.a, PHONE_NY)),
-    ("channel_not_in_grant", "channel_not_in_grant", _before_email_only, None),
-    ("contact_kind", "contact_kind", _before_email_kind, None),
-    ("brand_not_in_grant", "brand_not_in_grant", _before_rule_brand, None),
-    ("late", "late", _before_late, None),
+     lambda w, s: force(w, "DELETE FROM consentvault.confirmation_rule WHERE org_id = %s AND channel = 'sms'", (w.a.org_id,)),
+     lambda w, s: _put_rule(w.a)),
+    ("contact_erased", "contact_erased", None, lambda w, s: w.erase(w.a, PHONE_NY), None),
+    ("channel_not_in_grant", "channel_not_in_grant", _before_email_only, None, None),
+    ("contact_kind", "contact_kind", _before_email_kind, None, None),
+    ("brand_not_in_grant", "brand_not_in_grant", _before_rule_brand, None, None),
+    ("late", "late", _before_late, None, None),
     ("texting_not_registered", "texting_not_registered", None,
-     lambda w, s: _sql_org(w, "confirmation_registration", "status = 'not_marked'")),
-    ("no_sending_account", "no_sending_account", None,
-     lambda w, s: _sql_org(w, "sending_account", "status = 'disconnected'", "AND channel = 'sms'")),
-    ("inbound_not_verified", "inbound_not_verified", None,
-     lambda w, s: _sql_org(w, "sending_account", "status = 'awaiting_test_reply'", "AND channel = 'sms'")),
-    ("link_host_not_verified", "link_host_not_verified", None,
-     lambda w, s: _sql_org(w, "confirmation_link_host", "status = 'pending_dns'")),
-    ("link_host_failing", "link_host_failing", None, lambda w, s: _sql_org(w, "confirmation_link_host", "status = 'failing'")),
-    ("sending_account_failing", "sending_account_failing", None,
-     lambda w, s: _sql_org(w, "sending_account", "status = 'failing'", "AND channel = 'sms'")),
-    ("org_not_active", "org_not_active", None, lambda w, s: w.set_status(w.a, "suspended")),
-    ("time_zone_unknown", "time_zone_unknown", _before_split_zone, None),
-    ("quiet_hours", "quiet_hours", _before_quiet, None),
-    ("stop_on_record", "stop_on_record", None, _after_stop),
-    ("rule_off_disabled", "rule_off", None, lambda w, s: _put_rule(w.a, enabled=False)),
-    ("test_event", "test_event", _before_test_event, None),
+     lambda w, s: _sql_org(w, "confirmation_registration", "status = 'not_marked'"), lambda w, s: mark_registered(w.a.boss)),
+    ("no_sending_account", "no_sending_account", None, _status(None, "sending_account", "disconnected", "AND channel = 'sms'"),
+     _status(None, "sending_account", "connected", "AND channel = 'sms'")),
+    ("inbound_not_verified", "inbound_not_verified", None, _status(None, "sending_account", "awaiting_test_reply", "AND channel = 'sms'"),
+     _status(None, "sending_account", "connected", "AND channel = 'sms'")),
+    ("link_host_not_verified", "link_host_not_verified", None, _status(None, "confirmation_link_host", "pending_dns"),
+     _status(None, "confirmation_link_host", "verified")),
+    ("link_host_failing", "link_host_failing", None, _status(None, "confirmation_link_host", "failing"), _status(None, "confirmation_link_host", "verified")),
+    ("sending_account_failing", "sending_account_failing", None, _status(None, "sending_account", "failing", "AND channel = 'sms'"),
+     _status(None, "sending_account", "connected", "AND channel = 'sms'")),
+    ("org_not_active", "org_not_active", None, lambda w, s: w.set_status(w.a, "suspended"), lambda w, s: w.set_status(w.a, "trial")),
+    ("time_zone_unknown", "time_zone_unknown", _before_split_zone, None, None),
+    ("quiet_hours", "quiet_hours", _before_quiet, None, _clock_back),
+    ("stop_on_record", "stop_on_record", None, _after_stop, None),
+    ("rule_off_disabled", "rule_off", None, lambda w, s: _put_rule(w.a, enabled=False), lambda w, s: _put_rule(w.a)),
+    ("test_event", "test_event", _before_test_event, None, lambda w, s: _put_rule(w.a, send_for_test_events=True)),
     ("sender_details_missing", "sender_details_missing", None,
-     lambda w, s: force(w, "DELETE FROM consentvault.confirmation_settings WHERE org_id = %s", (w.a.org_id,))),
+     lambda w, s: force(w, "DELETE FROM consentvault.confirmation_settings WHERE org_id = %s", (w.a.org_id,)), lambda w, s: set_sender(w.a.boss)),
 ]
 
 
-@pytest.mark.parametrize("name,reason,before,after", [
-    pytest.param(n, r, b, a, id=n, marks=pytest.mark.spec_item(*(("5." + n, "item39") if n == "stop_on_record" else ("5." + n,))))
-    for n, r, b, a in CASES])
-def test_a_pending_intent_skips_with_the_old_reason_and_sends_nothing(world, stack, armed, name, reason, before, after):
+@pytest.mark.parametrize("name,reason,before,after,clear", [
+    pytest.param(n, r, b, a, c, id=n, marks=pytest.mark.spec_item(*(("5." + n, "item39") if n == "stop_on_record" else ("5." + n,))))
+    for n, r, b, a, c in CASES])
+def test_a_pending_intent_skips_with_the_old_reason_ends_terminal_and_a_rerun_after_clearing_sends_nothing(world, stack, armed, name, reason, before, after, clear):
     need_cutover()
     o = world.a
     kw = dict(before(world, stack)) if before else {}
@@ -114,36 +123,92 @@ def test_a_pending_intent_skips_with_the_old_reason_and_sends_nothing(world, sta
     (row,) = [s for s in sends(o.boss, channel="sms") if s["status"] == "skipped"]
     assert row["skip_reason"] == reason, row
     assert stack.twilio.sent == []
-    assert all(i["state"] != "sent" for i in confirmation_intents(world, o, post) if i["channel"] == "sms")
-    if name not in ("channel_not_in_grant", "contact_kind"):
-        assert stack.email.sent == [] or name in ("rule_off_no_row", "rule_off_disabled", "test_event", "brand_not_in_grant")
+    sms = [i for i in confirmation_intents(world, o, post) if i["channel"] == "sms"]
+    assert sms and all(i["state"].startswith("failed:") for i in sms), "the skipped intent is terminal"
+    if clear:
+        clear(world, stack)
+    stack.run()
+    stack.run(minutes=5)
+    assert stack.twilio.sent == [], "a second run after the condition is cleared sends nothing for a terminal intent"
+    assert [i["state"] for i in confirmation_intents(world, o, post) if i["channel"] == "sms"] == [i["state"] for i in sms]
 
 
-@pytest.mark.spec_item("5.recent_confirmation")
-def test_a_second_intent_inside_the_dedupe_window_skips_as_recent_confirmation(world, stack, armed):
+@pytest.mark.spec_item("5.order_stop_then_quiet_hours")
+def test_with_a_stop_on_record_and_quiet_hours_both_true_today_s_order_names_quiet_hours(world, stack, armed):
     need_cutover()
     o = world.a
+    at(stack, 2026, 11, 4, 7, 0)   # 2 AM Eastern
+    cut_grant(world, o, PHONE_NY)
+    cut_stop(world, o, PHONE_NY)
+    stack.run()
+    (row,) = [s for s in sends(o.boss, channel="sms") if s["status"] == "skipped"]
+    assert row["skip_reason"] == "quiet_hours", "quiet hours is checked before the stop on record (sender.py), and the order is kept"
+    assert stack.twilio.sent == []
+
+
+def _hold_first(world, stack, state):
+    """Put the first intent in ``state`` without sending it: 'claimed' is a provider stub that blocks after the claim and, while it
+    blocks, lets a second worker run; 'unknown' and 'sent' are set below the triggers on a first intent that never ran."""
+    o = world.a
     first = cut_grant(world, o, PHONE_NY)
-    stack.run()
-    assert [i["state"] for i in confirmation_intents(world, o, first) if i["channel"] == "sms"] == ["sent"]
-    second = cut_grant(world, o, PHONE_NY)
-    stack.run()
-    assert len(stack.twilio.sent) == 1
+    if state in ("unknown", "sent"):
+        force(world, "UPDATE consentvault.effect_intent SET state = %s, state_at = now() WHERE org_id = %s AND post_id = %s AND channel = 'sms'",
+              (state, o.org_id, first))
+    return first
+
+
+def _second_run(world, stack, state, contact):
+    """Returns the second intent's post. For 'claimed' the second run happens while the first send is blocked inside the provider."""
+    o = world.a
+    if state != "claimed":
+        second = cut_grant(world, o, contact)
+        stack.run()
+        return second
+    box = {}
+    real = type(stack.twilio).send
+
+    def blocking(self, creds, **kw):
+        if "second" not in box:
+            box["second"] = cut_grant(world, o, contact)
+            stack.run()   # a second worker runs while the first intent is claimed and the provider call has not returned
+        return real(self, creds, **{k: v for k, v in kw.items() if k != "idempotency_key"})
+
+    type(stack.twilio).send = blocking
+    try:
+        stack.run()
+    finally:
+        type(stack.twilio).send = real
+    return box["second"]
+
+
+@pytest.mark.parametrize("state", [pytest.param(s, id=s, marks=pytest.mark.spec_item("5.recent_confirmation")) for s in ("claimed", "unknown", "sent")])
+def test_a_second_pending_intent_for_the_same_contact_skips_while_the_first_is_claimed_unknown_or_sent(world, stack, armed, state):
+    need_cutover()
+    o = world.a
+    first = cut_grant(world, o, PHONE_NY) if state == "claimed" else _hold_first(world, stack, state)
+    second = _second_run(world, stack, state, PHONE_NY)
     assert "recent_confirmation" in {s["skip_reason"] for s in sends(o.boss, channel="sms")}
+    assert all(i["state"] != "sent" for i in confirmation_intents(world, o, second) if i["channel"] == "sms")
+    assert len(stack.twilio.sent) == (1 if state == "claimed" else 0), "at most the one claimed send went out"
+
+
+@pytest.mark.parametrize("state", [pytest.param(s, id=s, marks=pytest.mark.spec_item("5.org_hourly_cap")) for s in ("claimed", "unknown", "sent")])
+def test_the_hourly_cap_counts_claimed_unknown_and_sent_intents(world, stack, armed, state):
+    need_cutover()
+    o = world.a
+    set_sender(o.boss, send_cap_per_hour=1)
+    first = cut_grant(world, o, "+13055550150") if state == "claimed" else _hold_first_cap(world, state)
+    second = _second_run(world, stack, state, "+13055550151")
+    assert "org_hourly_cap" in {s["skip_reason"] for s in sends(o.boss, channel="sms")}
     assert all(i["state"] != "sent" for i in confirmation_intents(world, o, second) if i["channel"] == "sms")
 
 
-@pytest.mark.spec_item("5.org_hourly_cap")
-def test_the_hourly_cap_counts_sent_intents_and_skips_the_excess(world, stack, armed):
-    need_cutover()
+def _hold_first_cap(world, state):
     o = world.a
-    set_sender(o.boss, send_cap_per_hour=2)
-    posts = [cut_grant(world, o, f"+1305555015{n}") for n in range(3)]
-    stack.run()
-    got = sorted(s["skip_reason"] or s["status"] for s in sends(o.boss, channel="sms"))
-    assert got == ["org_hourly_cap", "sent", "sent"] and len(stack.twilio.sent) == 2
-    states = sorted(i["state"] for p in posts for i in confirmation_intents(world, o, p) if i["channel"] == "sms")
-    assert states.count("sent") == 2
+    first = cut_grant(world, o, "+13055550150")
+    force(world, "UPDATE consentvault.effect_intent SET state = %s, state_at = now() WHERE org_id = %s AND post_id = %s AND channel = 'sms'",
+          (state, o.org_id, first))
+    return first
 
 
 @pytest.mark.spec_item("5.sends_once_with_intent_id")

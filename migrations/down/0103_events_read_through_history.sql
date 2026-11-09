@@ -319,23 +319,6 @@ BEGIN
     RETURN NEW;
 END;
 $$;
-CREATE OR REPLACE FUNCTION consentvault.erasure_coverage_backfill()
-    RETURNS TABLE (org_id uuid, erasure_id uuid, stop_seq bigint, covers bigint)
-    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
-    WITH stops AS (
-        SELECT r.org_id, r.erasure_id, r.contact_fp, r.completed_at,
-               (SELECT max(e.seq) FROM consentvault.event e
-                 WHERE e.org_id = r.org_id AND e.source = 'erasure'
-                   AND (e.recorded_by LIKE 'erasure:' || r.erasure_id::text || ':%'
-                        OR e.recorded_by LIKE 'erasure-unconfirmed:' || r.erasure_id::text || ':%')) AS stop_seq
-          FROM consentvault.erasure_request r WHERE r.status = 'completed')
-    SELECT s.org_id, s.erasure_id, s.stop_seq,
-           (SELECT max(e.seq) FROM consentvault.event e
-             WHERE e.org_id = s.org_id AND e.contact_fp = s.contact_fp
-               AND e.contact_commit = (SELECT st.contact_commit FROM consentvault.event st
-                                        WHERE st.org_id = s.org_id AND st.seq = s.stop_seq))
-      FROM stops s ORDER BY s.completed_at, s.erasure_id;
-$$;
 CREATE OR REPLACE FUNCTION consentvault.customer_alarm_rows(p_admin boolean)
     RETURNS TABLE (name text, since timestamptz, count integer)
     LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$

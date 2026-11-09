@@ -207,11 +207,11 @@ def verify_chain_every_org(conn: psycopg.Connection, *, sink_file: str | None = 
         count = c.execute("SELECT count(*) AS n FROM consentvault.event WHERE org_id = consentvault.current_org()"
                           ).fetchone()["n"] + c.execute("SELECT count(*) AS n FROM consentvault.raw_post WHERE org_id = "
                                                         "consentvault.current_org()").fetchone()["n"]
-        missing = posts_without_history(c)
+        cut = c.execute("SELECT EXISTS (SELECT 1 FROM consentvault.effect_watermark WHERE org_id = consentvault.current_org()) AS c").fetchone()["c"]
+        missing = posts_without_history(c) if cut else []   # after cutover every stored post has a history row or a recorded reason
         if missing:   # gate 2: a stored post with no history row and no recorded reason is named, never counted past
             _log.error("stored posts have no history row and no recorded reason")
             return {"records": count, "posts_without_history": missing}
-        cut = c.execute("SELECT EXISTS (SELECT 1 FROM consentvault.effect_watermark WHERE org_id = consentvault.current_org()) AS c").fetchone()["c"]
         if cut:   # after cutover the history head is part of the answer (item 35)
             head = c.execute("SELECT seq, row_hash FROM consentvault.history_head()").fetchone()
             return {"records": count, "history_head": head and head["row_hash"], "history_head_seq": head and head["seq"]}
@@ -237,7 +237,8 @@ def anchor_every_org(conn: psycopg.Connection, sink: str) -> dict:
     def one(c, org):
         head = c.execute("SELECT seq FROM consentvault.ledger_head()").fetchone()
         raw_head = c.execute("SELECT seq FROM consentvault.raw_post_head()").fetchone()
-        hist_head = c.execute("SELECT seq FROM consentvault.history_head()").fetchone()
+        hist_head = c.execute("SELECT seq FROM consentvault.history_head() WHERE EXISTS (SELECT 1 FROM consentvault.effect_watermark"
+                              " WHERE org_id = consentvault.current_org())").fetchone()
         if (head is None or head["seq"] is None) and raw_head is None and hist_head is None:
             skipped.append(str(org))
             return None

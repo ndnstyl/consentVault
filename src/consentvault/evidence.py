@@ -300,6 +300,7 @@ def main():
         raw = read(ev_path)
     except OSError as exc:
         report(False, "evidence.json present", str(exc))
+        print("RESULT FAIL (%d check(s) failed)" % FAILURES)
         return 1
     report(sha256_bytes(raw) == EVIDENCE_SHA256, "evidence.json unchanged since export")
     try:
@@ -308,6 +309,7 @@ def main():
         chain = data["chain"]
     except (ValueError, KeyError) as exc:
         report(False, "evidence.json parses", str(exc))
+        print("RESULT FAIL (%d check(s) failed)" % FAILURES)   # a changed file always ends in a result line
         return 1
 
     if not timeline:

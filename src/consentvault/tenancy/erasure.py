@@ -307,6 +307,7 @@ def erasure_stop_present(conn, fp: str, erasure_id, stop_seq: int) -> Optional[s
     held = conn.execute(
         "SELECT h.event_id FROM consentvault.post_history h JOIN consentvault.raw_post p ON p.org_id = h.org_id AND p.post_id = h.post_id"
         " WHERE h.org_id = (SELECT consentvault.current_org()) AND h.contact_fp = %s AND p.intake = 'erasure'"
+        " AND EXISTS (SELECT 1 FROM consentvault.effect_watermark w WHERE w.org_id = h.org_id)"
         " AND NOT EXISTS (SELECT 1 FROM consentvault.post_history g WHERE g.org_id = h.org_id AND g.contact_fp = h.contact_fp"
         "                  AND g.event_type_sent = 'grant' AND g.standing = 'counts' AND g.placed_at > h.placed_at)"
         " ORDER BY h.history_seq DESC LIMIT 1", (fp,)).fetchone()

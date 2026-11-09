@@ -91,7 +91,9 @@ def anchor_tenants(worker_conn: psycopg.Connection, app_conn: psycopg.Connection
         try:
             with org_transaction(app_conn, row["token"]):
                 head = app_conn.execute("SELECT seq, row_hash FROM consentvault.ledger_head()").fetchone()
-                hist = app_conn.execute("SELECT seq, row_hash FROM consentvault.history_head_entered()").fetchone()
+                hist = app_conn.execute(   # the history chain is anchored from an organisation's cutover
+                    "SELECT h.seq, h.row_hash FROM consentvault.history_head_entered() h WHERE EXISTS (SELECT 1 FROM consentvault.effect_watermark"
+                    " WHERE org_id = consentvault.current_org())").fetchone()
                 if head is None and hist is None:  # nothing to anchor yet (a new organization, or the home organization of a cloud vault)
                     results.append({"org_id": str(org), "status": "empty"})
                     continue

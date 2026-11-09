@@ -170,6 +170,8 @@ def _anchor_raw_posts(conn: psycopg.Connection, sink: str, when: datetime, org: 
 def _anchor_history(conn: psycopg.Connection, sink: str, when: datetime, org: str, tenant: bool) -> dict | None:
     """Anchor the head of the organisation's history chain (item 1): verified first, written to the sink, then recorded in
     post_history_chain_head. None when the organisation has no history row yet."""
+    if not conn.execute("SELECT EXISTS (SELECT 1 FROM consentvault.effect_watermark WHERE org_id = consentvault.current_org()) AS c").fetchone()["c"]:
+        return None   # the history chain is anchored from an organisation's cutover; before it the frozen chain is the record
     breaks = conn.execute("SELECT history_seq, reason FROM consentvault.history_chain_breaks()").fetchall()
     if breaks:
         raise ChainError(f"refusing to anchor a broken history chain: {len(breaks)} break(s), first at seq {breaks[0]['history_seq']}")

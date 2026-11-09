@@ -641,6 +641,7 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
             " EXTRACT(EPOCH FROM p.received_at)::float8 AS arrived,"
             " (SELECT EXTRACT(EPOCH FROM (clock_timestamp() - min(a.attempted_at)))::float8 FROM consentvault.projection_attempt a"
             "   WHERE a.org_id = p.org_id AND a.post_id = p.post_id) AS attempt_age_s,"
+            " EXTRACT(EPOCH FROM (clock_timestamp() - p.received_at))::float8 AS arrival_age_s,"
             " (SELECT EXTRACT(EPOCH FROM (clock_timestamp() - max(a.attempted_at)))::float8 FROM consentvault.projection_attempt a"
             "   WHERE a.org_id = p.org_id AND a.post_id = p.post_id) AS last_attempt_age_s FROM consentvault.raw_post p"
             " WHERE p.org_id = (SELECT consentvault.current_org()) AND p.kind = 'post'"
@@ -663,7 +664,10 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
                 outcome = _unreadable_post(conn, enter, r, exc)
             else:
                 outcome = project_view(writer, conn, enter, backend, view)
-        elapsed = r["attempt_age_s"] if r["attempt_age_s"] is not None else 0.0   # this run's attempt is the first one recorded
+        elapsed = r["attempt_age_s"]
+        if elapsed is None:   # this run's attempt is the first one recorded; when none could be recorded, count from the post's arrival
+            first = _first_attempt_age(conn, enter, r) if outcome.halts else 0.0
+            elapsed = first if first is not None else r["arrival_age_s"]
         if outcome.halts and elapsed >= HALT_CAP_SECONDS:
             _log.error("a stored post has not been projectable for a long time; the posts behind it go ahead", elapsed_s=int(elapsed))
             outcome = replace(outcome, halts=False)
@@ -672,6 +676,15 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
             out.extend(Outcome(w["post_id"], reason=WAITING, retry=True) for w in rows[n + 1:])
             break
     return out
+
+
+def _first_attempt_age(conn, enter, row) -> float | None:
+    """Seconds since the post's first recorded attempt by the database's clock, or None when no attempt row exists."""
+    with _ctx(conn, enter):
+        found = conn.execute("SELECT EXTRACT(EPOCH FROM (clock_timestamp() - min(attempted_at)))::float8 AS age"
+                             " FROM consentvault.projection_attempt WHERE org_id = %s AND post_id = %s",
+                             (uuid.UUID(row["org"]), uuid.UUID(row["post_id"]))).fetchone()
+    return found["age"]
 
 
 def _unreadable_post(conn, enter, row, exc: BaseException) -> Outcome:

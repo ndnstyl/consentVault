@@ -52,7 +52,14 @@ def db_now(conn) -> datetime:
 
 CLAIM_SQL = ("SELECT * FROM consentvault.confirmation_send_intent WHERE org_id = %s AND status = 'intent'"
              " AND (next_attempt_at IS NULL OR next_attempt_at <= %s) AND send_id <> ALL(%s) {only}"
+             # a send row that belongs to a derived intent is sent only while the intent is pending: an unknown one is a person's to resolve
+             " AND NOT EXISTS (SELECT 1 FROM consentvault.effect_intent i WHERE i.org_id = consentvault.confirmation_send_intent.org_id"
+             " AND i.intent_id = consentvault.confirmation_send_intent.send_id AND i.state NOT IN ('pending', 'claimed'))"
              " ORDER BY created_at, send_id LIMIT 1 FOR UPDATE SKIP LOCKED")
+
+
+def _key(plan: "Plan") -> dict:
+    return {"idempotency_key": plan.idempotency_key} if plan.idempotency_key else {}
 
 
 class _Skip(Exception):
@@ -83,6 +90,7 @@ class Plan:
     first_attempt_at: datetime
     tokens: list = field(default_factory=list)
     zone: Optional[str] = None
+    idempotency_key: Optional[str] = None   # a send derived from a history row carries its intent's id to the provider
 
 
 class SenderMixin:
@@ -158,6 +166,8 @@ class SenderMixin:
             conn.execute("INSERT INTO consentvault.confirmation_page_token (org_id, token_hash, kind, send_id, created_at)"
                          " VALUES (%s, %s, %s, %s, %s)", (org, hashlib.sha256(token.encode()).hexdigest(), kind_, plan.send_id, when))
         plan.attempts, plan.first_attempt_at = attempts + 1, first or when
+        if it["basis_history_event_id"] is not None:
+            plan.idempotency_key = str(it["send_id"])
         return plan
 
     def _contact_exists(self, conn, fp: str) -> bool:
@@ -222,9 +232,13 @@ class SenderMixin:
                 raise _Skip("quiet_hours")
         if self._stop_on_record(conn, org, fp, ch):
             raise _Skip("stop_on_record")
+        since = when - timedelta(hours=rule["dedupe_hours"])
         if conn.execute("SELECT 1 FROM consentvault.confirmation_send_intent WHERE org_id = %s AND contact_fp = %s AND channel = %s"
                         " AND kind = 'confirmation' AND send_id <> %s AND status IN ('sending', 'sent', 'delivered')"
-                        " AND at > %s LIMIT 1", (org, fp, ch, send_id, when - timedelta(hours=rule["dedupe_hours"]))).fetchone():
+                        " AND at > %s LIMIT 1", (org, fp, ch, send_id, since)).fetchone() or conn.execute(
+                "SELECT 1 FROM consentvault.effect_intent WHERE org_id = %s AND effect = 'confirmation' AND contact_fp = %s AND channel = %s"
+                " AND intent_id <> %s AND state IN ('claimed', 'unknown', 'sent') AND state_at > %s LIMIT 1",
+                (org, fp, ch, send_id, since)).fetchone():   # an intent in flight, unresolved or sent counts, as the send row does
             raise _Skip("recent_confirmation")
         if not rule["enabled"]:
             raise _Skip("rule_off")
@@ -234,9 +248,12 @@ class SenderMixin:
         if settings is None:
             raise _Skip("sender_details_missing")
         cap = settings["send_cap_per_hour"]
-        used = conn.execute("SELECT count(*) AS n FROM consentvault.confirmation_send_intent WHERE org_id = %s AND channel = %s"
-                            " AND kind = 'confirmation' AND send_id <> %s AND status IN ('sending', 'sent', 'delivered')"
-                            " AND at > %s", (org, ch, send_id, when - timedelta(hours=1))).fetchone()["n"]
+        used = conn.execute(
+            "SELECT count(DISTINCT x.id) AS n FROM (SELECT send_id AS id FROM consentvault.confirmation_send_intent WHERE org_id = %s"
+            " AND channel = %s AND kind = 'confirmation' AND send_id <> %s AND status IN ('sending', 'sent', 'delivered') AND at > %s"
+            " UNION ALL SELECT intent_id FROM consentvault.effect_intent WHERE org_id = %s AND effect = 'confirmation' AND channel = %s"
+            " AND intent_id <> %s AND state IN ('claimed', 'unknown', 'sent') AND state_at > %s) x",
+            (org, ch, send_id, when - timedelta(hours=1), org, ch, send_id, when - timedelta(hours=1))).fetchone()["n"]
         if used >= cap:
             self._alarm_raise(conn, "send_cap_reached", {"channel": ch, "cap": cap}, when)
             raise _Skip("org_hourly_cap")
@@ -351,10 +368,10 @@ class SenderMixin:
                 outcome = ("check_stale", None)  # the hours were judged too long before this call: nothing is sent on them
             elif plan.channel == "sms":
                 outcome = ("accepted", adapter.send(plan.creds, to=plan.to, body=plan.body, sender=plan.sender,
-                                                    status_callback=plan.status_callback))
+                                                    status_callback=plan.status_callback, **_key(plan)))
             else:
                 outcome = ("accepted", adapter.send(plan.creds, to=plan.to, subject=plan.subject, body=plan.body,
-                                                    headers=plan.headers, sender=plan.sender))
+                                                    headers=plan.headers, sender=plan.sender, **_key(plan)))
         except ProviderError as exc:
             outcome = (exc.kind, exc.code)
         except (TimeoutError, OSError):

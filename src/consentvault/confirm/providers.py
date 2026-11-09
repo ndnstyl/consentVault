@@ -124,13 +124,13 @@ class TwilioProvider:
             raise _fail(status, body.get("code"))
         return str(body.get("direction", "")).startswith("inbound") and body.get("from") == from_number
 
-    def send(self, creds: dict, *, to: str, body: str, sender: str, status_callback: str) -> dict:
+    def send(self, creds: dict, *, to: str, body: str, sender: str, status_callback: str, idempotency_key: str | None = None) -> dict:
         form = {"To": to, "Body": body, "StatusCallback": status_callback}
         form["MessagingServiceSid" if sender.startswith("MG") else "From"] = sender
         req = urllib.request.Request(
             f"https://api.twilio.com/2010-04-01/Accounts/{self._account_sid(creds)}/Messages.json",
-            data=urllib.parse.urlencode(form).encode(), headers={**self._auth(creds),
-                                                                "Content-Type": "application/x-www-form-urlencoded"},
+            data=urllib.parse.urlencode(form).encode(), headers={**self._auth(creds), "Content-Type": "application/x-www-form-urlencoded",
+                                                                **({"I-Twilio-Idempotency-Token": idempotency_key} if idempotency_key else {})},
             method="POST")
         status, raw = _call(req, TWILIO_HOST)
         out = _json(raw)
@@ -166,7 +166,7 @@ class SesProvider:
             raise _fail(status, _json(raw).get("__type") or _json(raw).get("message_code"))
         return bool(_json(raw).get("VerifiedForSendingStatus"))
 
-    def send(self, creds: dict, *, to: str, subject: str, body: str, headers: dict, sender: dict) -> dict:
+    def send(self, creds: dict, *, to: str, subject: str, body: str, headers: dict, sender: dict, idempotency_key: str | None = None) -> dict:
         from_addr = f'"{sender["display_name"]}" <{sender["email_address"]}>' if sender.get("display_name") else sender["email_address"]
         payload = json.dumps({
             "FromEmailAddress": from_addr, "Destination": {"ToAddresses": [to]},
@@ -211,7 +211,7 @@ class PostmarkProvider:
                 return bool(d.get("DKIMVerified")) and bool(d.get("ReturnPathDomainVerified"))
         return False
 
-    def send(self, creds: dict, *, to: str, subject: str, body: str, headers: dict, sender: dict) -> dict:
+    def send(self, creds: dict, *, to: str, subject: str, body: str, headers: dict, sender: dict, idempotency_key: str | None = None) -> dict:
         from_addr = f'"{sender["display_name"]}" <{sender["email_address"]}>' if sender.get("display_name") else sender["email_address"]
         payload = json.dumps({"From": from_addr, "To": to, "Subject": subject, "TextBody": body,
                               "Headers": [{"Name": k, "Value": v} for k, v in headers.items()],

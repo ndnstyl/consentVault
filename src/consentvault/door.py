@@ -450,6 +450,8 @@ def _is_uuid(value: Any) -> bool:
 def _is_cut(conn, enter) -> bool:
     """True once this organisation's cutover is recorded (its effect_watermark row exists): the old fold writes it no event."""
     with _ctx(conn, enter):
+        if conn.execute("SELECT to_regclass('consentvault.effect_watermark') IS NULL AS missing").fetchone()["missing"]:
+            return False   # a store not yet migrated to the cutover tables
         return conn.execute("SELECT EXISTS (SELECT 1 FROM consentvault.effect_watermark"
                             " WHERE org_id = (SELECT consentvault.current_org())) AS c").fetchone()["c"]
 
@@ -504,6 +506,8 @@ def _shadow_history(writer, conn, enter, view: PostView, field_map: Any) -> bool
             earliest = conn.execute("SELECT consentvault.fold_earliest_copy(%s, %s) AS first",
                                     (uuid.UUID(view.post_id), auth.key)).fetchone()["first"]
         reason = decide(reading, replace(auth, org_id=view.org_id), lambda _k: not earliest)
+        if reason is None and fields.get("event_type") == "grant" and fields.get("contact_verification") == "inbound_keyword":
+            reason = REASON_TEXT   # a text never creates consent, whichever door the post came through
         facts_read = sorted([s, n] for (s, n) in facts)
         cut = _is_cut(conn, enter)
         contact = (history.contact_of(fields, (_stored_settings(facts) or {}).get("region"), view.org_id, getattr(writer, "crypto", None))

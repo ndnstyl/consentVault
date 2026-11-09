@@ -338,10 +338,18 @@ class RawPostWriter:
                 if wrapped is not None:
                     conn.execute("INSERT INTO consentvault.raw_post_key (org_id, post_id, post_key_wrapped, key_version)"
                                  " VALUES (%s, %s, %s, %s)", (org, post_id, wrapped.ciphertext, wrapped.key_version))
+                # a store not yet migrated to the status and label columns (migration 0082) takes the arrival facts without them
+                has_status = conn.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'consentvault'"
+                                          " AND table_name = 'raw_post_fact' AND column_name = 'status') AS s").fetchone()["s"]
                 for i, source, name, value_ct in fact_rows:
-                    conn.execute("INSERT INTO consentvault.raw_post_fact (org_id, post_id, fact_id, source, name, value_ct,"
-                                 " arrival_ordinal, status, label) VALUES (%s, %s, %s, %s, %s, %s, %s, 'value', 'arrival')",
-                                 (org, post_id, uuid.uuid4(), source, name, value_ct, i))
+                    if has_status:
+                        conn.execute("INSERT INTO consentvault.raw_post_fact (org_id, post_id, fact_id, source, name, value_ct,"
+                                     " arrival_ordinal, status, label) VALUES (%s, %s, %s, %s, %s, %s, %s, 'value', 'arrival')",
+                                     (org, post_id, uuid.uuid4(), source, name, value_ct, i))
+                    else:
+                        conn.execute("INSERT INTO consentvault.raw_post_fact (org_id, post_id, fact_id, source, name, value_ct,"
+                                     " arrival_ordinal) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                                     (org, post_id, uuid.uuid4(), source, name, value_ct, i))
                 for fact in req.facts:
                     if is_request_key(fact):
                         self.record_request_key(conn, org, post_id, fact.value)
@@ -396,6 +404,8 @@ class RawPostWriter:
             return []
         ctx = enter(conn) if enter is not None else conn.transaction()
         with ctx:
+            if conn.execute("SELECT to_regclass('consentvault.effect_watermark') IS NULL AS missing").fetchone()["missing"]:
+                return []   # a store not yet migrated to the cutover tables
             cut = conn.execute("SELECT EXISTS (SELECT 1 FROM consentvault.effect_watermark"
                                " WHERE org_id = consentvault.current_org()) AS c").fetchone()["c"]
             if not cut:

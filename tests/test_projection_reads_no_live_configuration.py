@@ -311,22 +311,28 @@ def test_the_repeated_site_key_lookup_takes_no_configuration_from_the_live_key()
     assert not used & {"brand_ids", "source_id", "allowed_origins"}, sorted(used & {"brand_ids", "source_id", "allowed_origins"})
 
 
-def test_no_module_keeps_state_between_intake_and_projection():
-    """A cache filled at intake (an allowed reader) and read in the projection would carry live configuration past the arrival
-    snapshot without any query to catch: no empty module-level container, no `global`, no lru_cache in a scanned module."""
-    # the safe logger's own registries and the stop-word list read from a file: none holds configuration
-    allowed = {("safelog.py", "_CLASSES"), ("safelog.py", "_DB_REFUSALS"), ("stopwords.py", "cache on _load")}
+# Module-level containers that are constant tables built from literals, or the safe logger's own registries: none holds configuration
+# and none is filled after import. Anything else mutable at module level is state that could carry live configuration from the intake
+# to the projection without a query to catch it.
+CONSTANT_TABLES = {
+    ("ledger.py", "HASH_VERSIONS"), ("ledger.py", "_CIPHER_COLUMNS_V2"), ("normalize.py", "TRUNK_REGIONS"), ("rawpost.py", "RECEIPT_FIELDS"),
+    ("safelog.py", "FIELDS"), ("safelog.py", "_CLASSES"), ("safelog.py", "_DB_REFUSALS"), ("safelog.py", "_SETUP"), ("safelog.py", "__all__"),
+    ("tenancy/admin_base.py", "STATUS"), ("tenancy/admin_base.py", "ROLE_SCOPES"), ("tenancy/audit.py", "ACTIONS"),
+    ("tenancy/logscrub.py", "_JSON_SIMPLE"), ("stopwords.py", "cache on _load"),
+}
+MUTABLE = (ast.Dict, ast.List, ast.Set, ast.DictComp, ast.ListComp, ast.SetComp)
+MUTABLE_CONSTRUCTORS = {"dict", "list", "set", "defaultdict", "OrderedDict", "deque", "Counter", "bytearray"}
+
+
+def state_violations(root: Path) -> list:
     found = []
     for m in MODULES:
-        tree = ast.parse((SRC / m).read_text())
+        tree = ast.parse((root / m).read_text())
         for n in tree.body:
             if isinstance(n, (ast.Assign, ast.AnnAssign)) and n.value is not None:
                 v = n.value
                 tgt = n.targets[0] if isinstance(n, ast.Assign) else n.target
-                empty = (isinstance(v, (ast.Dict, ast.List, ast.Set)) and not (getattr(v, "keys", None) or getattr(v, "elts", None))) or (
-                    isinstance(v, ast.Call) and getattr(v.func, "id", getattr(v.func, "attr", "")) in ("dict", "list", "set", "defaultdict", "OrderedDict", "deque")
-                    and not v.args)
-                if empty and (m, getattr(tgt, "id", "?")) not in allowed:
+                if isinstance(v, MUTABLE) or (isinstance(v, ast.Call) and getattr(v.func, "id", getattr(v.func, "attr", "")) in MUTABLE_CONSTRUCTORS):
                     found.append((m, getattr(tgt, "id", "?")))
         for n in ast.walk(tree):
             if isinstance(n, ast.Global):
@@ -335,5 +341,18 @@ def test_no_module_keeps_state_between_intake_and_projection():
                 for d in n.decorator_list:
                     if getattr(d, "id", getattr(getattr(d, "func", d), "attr", getattr(getattr(d, "func", d), "id", ""))) in ("lru_cache", "cache", "cached_property"):
                         found.append((m, "cache on " + n.name))
-    found = [f for f in found if f not in allowed]
-    assert not found, f"state kept between intake and projection: {found}"
+    return sorted(f for f in found if f not in CONSTANT_TABLES)
+
+
+def test_no_module_keeps_state_between_intake_and_projection():
+    assert state_violations(SRC) == []
+
+
+@pytest.mark.parametrize("line", ["_R9_CACHE: dict = {}", "_R9_CACHE = {k: v for k, v in ()}", "_R9_CACHE = dict()",
+                                  "_R9_CACHE = [x for x in ()]", "_R9_CACHE = {1: 2}"])
+def test_a_planted_module_level_cache_is_flagged(line, tmp_path):
+    root = tmp_path / "consentvault"
+    shutil.copytree(SRC, root, ignore=shutil.ignore_patterns("__pycache__"))
+    path = root / "door.py"
+    path.write_text(path.read_text() + "\n" + line + "\n")
+    assert ("door.py", "_R9_CACHE") in state_violations(root)

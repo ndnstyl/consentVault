@@ -296,7 +296,10 @@ def _tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None
             for r in conn.execute(
                     "SELECT * FROM consentvault.event WHERE org_id = consentvault.current_org()"
                     " AND (contact_fp = ANY(%s) OR subject_fp = ANY(%s))", (sorted(fps), sorted(sfps))):
-                rows[r["seq"]] = r
+                rows[("e", r["seq"])] = r
+            for r in conn.execute("SELECT * FROM consentvault.history_events WHERE org_id = consentvault.current_org()"
+                                  " AND contact_fp = ANY(%s)", (sorted(fps),)):
+                rows[("h", r["seq"])] = r
             fps |= {r["contact_fp"] for r in rows.values() if r["contact_fp"]}
             sfps |= {r["subject_fp"] for r in rows.values() if r["subject_fp"]}
             if len(rows) == before:
@@ -348,6 +351,11 @@ def _tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None
             "SELECT event_id, min(coalesce(gen_time, created_at)) AS gen_time, min(created_at) AS created_at"
             "  FROM consentvault.seal WHERE org_id = consentvault.current_org() AND event_id = ANY(%s::uuid[])"
             " GROUP BY event_id", (ids,))}) or {}
+    seals.update(read("timeline", lambda: {
+        str(r["event_id"]): (r["gen_time"] or r["created_at"]) for r in conn.execute(
+            "SELECT h.event_id, min(coalesce(s.gen_time, s.created_at)) AS gen_time, min(s.created_at) AS created_at"
+            "  FROM consentvault.post_history_seal s JOIN consentvault.post_history h ON h.org_id = s.org_id AND h.history_seq = s.history_seq"
+            " WHERE s.org_id = consentvault.current_org() AND h.event_id = ANY(%s::uuid[]) GROUP BY h.event_id", (ids,))}) or {})
 
     def tl_shape(r):
         sealed_at = seals.get(str(r["event_id"]))
@@ -358,9 +366,13 @@ def _tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None
                 "sealed": sealed_at is not None, "sealed_at": _iso_z(sealed_at),
                 "recorded_during_trial": during_trial(r["arrival_at"])}
 
-    timeline = paged("timeline", "SELECT * FROM (SELECT e.*, consentvault.arrival_at(e.org_id, e.event_id, e.received_at) AS arrival_at"
-                     " FROM consentvault.event e WHERE e.org_id = consentvault.current_org()"
-                     " AND e.event_id = ANY(%s::uuid[])) arrived WHERE true", ([str(i) for i in ids],), ("arrival_at", "seq"), True,
+    timeline = paged("timeline", "SELECT * FROM (SELECT e.event_id, e.seq, e.event_type, e.channels, e.purposes, e.source_id, e.brand_ids,"
+                     " e.disclosure_sha256, consentvault.arrival_at(e.org_id, e.event_id, e.received_at) AS arrival_at"
+                     " FROM consentvault.event e WHERE e.org_id = consentvault.current_org() AND e.event_id = ANY(%s::uuid[])"
+                     " UNION ALL SELECT h.event_id, h.seq, h.event_type, h.channels, h.purposes, h.source_id, h.brand_ids,"
+                     " h.disclosure_sha256, h.arrival_at FROM consentvault.history_events h"
+                     " WHERE h.org_id = consentvault.current_org() AND h.event_id = ANY(%s::uuid[])) arrived WHERE true",
+                     ([str(i) for i in ids], [str(i) for i in ids]), ("arrival_at", "seq"), True,
                      tl_shape) if "timeline" not in partial else None
     gate_decisions = paged(
         "gate_decisions", "SELECT * FROM consentvault.gate_decision WHERE org_id = consentvault.current_org()"
@@ -399,11 +411,22 @@ def _tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None
             "SELECT DISTINCT channel, purpose FROM consentvault.current_permission"
             " WHERE org_id = consentvault.current_org() AND contact_kind = %s AND contact_fp = ANY(%s)"
             " ORDER BY channel, purpose", (kind, fps)).fetchall()
-        return [{"channel": p["channel"], "purpose": p["purpose"], "status": facts.status,
-                 "basis_event_ids": [line["event_id"] for line in facts.history
-                                     if p["channel"] in line["channels"] and (p["purpose"] in line["purposes"]
-                                                                              or "*" in line["purposes"])]}
-                for p in pairs]
+        out = [{"channel": p["channel"], "purpose": p["purpose"], "status": facts.status,
+                "basis_event_ids": [line["event_id"] for line in facts.history
+                                    if p["channel"] in line["channels"] and (p["purpose"] in line["purposes"]
+                                                                             or "*" in line["purposes"])]}
+               for p in pairs]
+        # a stop that exists only in history (after an organisation's cutover) is shown under the derived label and its rule set
+        have = {o["channel"] for o in out}
+        for stop in facts.stops:
+            if stop["lifted_by_post_ids"]:
+                continue
+            for c in stop["channels"]:
+                if c not in have:
+                    have.add(c)
+                    out.append({"channel": c, "purpose": "*", "status": facts.status, "basis_event_ids": [stop["event_id"]],
+                                "derived": {"state": "stopped", "rule_set_version": "stopped-rule-0075"}})
+        return out
 
     def disclosures():
         shas = sorted({r["disclosure_sha256"] for r in ev_rows if r["disclosure_sha256"]})
@@ -447,6 +470,7 @@ def _tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None
         "found": True,
         "evaluated_at": evaluated_at,
         "notice": NOTICE,
+        "permissions_label": "derived: a reading of the history under a named rule set, not a record of what was sent",
         "permissions": read("permissions", permissions),
         "timeline": timeline,
         "disclosures": read("disclosures", disclosures),

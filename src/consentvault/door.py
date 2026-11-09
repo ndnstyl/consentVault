@@ -1040,4 +1040,7 @@ def submit(conn: psycopg.Connection, *, intake: str, payload: Mapping[str, Any],
 def event_by_id(conn: psycopg.Connection, event_id: str) -> Event:
     row = conn.execute("SELECT seq, event_id::text AS event_id, row_hash, prev_hash FROM consentvault.event WHERE event_id = %s",
                        (uuid.UUID(event_id),)).fetchone()
+    if row is None:   # after an organisation's cutover the event is its history row
+        row = conn.execute("SELECT history_seq AS seq, event_id::text AS event_id, row_hash, prev_hash FROM consentvault.post_history"
+                           " WHERE event_id = %s", (uuid.UUID(event_id),)).fetchone()
     return Event(seq=row["seq"], event_id=row["event_id"], row_hash=row["row_hash"], prev_hash=row["prev_hash"])

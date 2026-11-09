@@ -82,6 +82,29 @@ def lift_stops_for_post(conn: psycopg.Connection, writer: RawPostWriter, *, org:
                 raise ConsentVaultError(f"the lift of stop {stop['event_id']} by post {post_id} was refused by the database: "
                                         f"{type(exc).__name__}") from exc
             linked.append(stop["event_id"])
+        # a stop that exists only in history (after an organisation's cutover): lifted in history_stop_lift, by placement
+        for stop in conn.execute(
+                "SELECT h.event_id::text AS event_id, EXISTS (SELECT 1 FROM consentvault.history_stop_lift l"
+                "   WHERE l.org_id = h.org_id AND l.stop_event_id = h.event_id AND l.lifting_post_id = %s) AS done"
+                " FROM consentvault.post_history h WHERE h.org_id = %s AND h.contact_fp = %s AND h.label = 'projected'"
+                " AND h.event_type_sent IN ('revoke', 'suppress') AND h.standing = 'counts' AND h.earliest_copy"
+                " AND NOT EXISTS (SELECT 1 FROM consentvault.event_source_post s WHERE s.org_id = h.org_id AND s.post_id = h.post_id"
+                "                  AND s.role = 'trigger')"
+                " AND h.placed_at < (SELECT LEAST(p.received_at, coalesce(oa.arrived_at, p.received_at)) FROM consentvault.raw_post p"
+                "   LEFT JOIN consentvault.raw_post_original_arrival oa ON oa.org_id = p.org_id AND oa.post_id = p.post_id"
+                "   WHERE p.org_id = %s AND p.post_id = %s)"
+                " ORDER BY h.history_seq", (post_id, org, m["contact_fp"], org, post_id)).fetchall():
+            if stop["done"]:
+                already.append(stop["event_id"])
+                continue
+            try:
+                with conn.transaction():
+                    conn.execute("INSERT INTO consentvault.history_stop_lift (org_id, stop_event_id, lifting_post_id, contact_fp)"
+                                 " VALUES (%s, %s, %s, %s)", (org, stop["event_id"], post_id, m["contact_fp"]))
+            except psycopg.Error as exc:
+                raise ConsentVaultError(f"the lift of stop {stop['event_id']} by post {post_id} was refused by the database: "
+                                        f"{type(exc).__name__}") from exc
+            linked.append(stop["event_id"])
     if not linked and not already:
         return LiftResult(reason=SKIP_NO_STOP)
     return LiftResult(tuple(linked), None, tuple(already))

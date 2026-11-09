@@ -785,7 +785,9 @@ def contact_has_records(conn: psycopg.Connection, crypto, fp: str) -> bool:
     org = _tenant_org(conn)
     _require_proof_scope(conn)
     ev = conn.execute("SELECT 1 FROM consentvault.event WHERE org_id = (SELECT consentvault.current_org())"
-                      " AND contact_fp = %s LIMIT 1", (fp,)).fetchone()
+                      " AND contact_fp = %s LIMIT 1", (fp,)).fetchone() or conn.execute(
+        "SELECT 1 FROM consentvault.post_history WHERE org_id = (SELECT consentvault.current_org()) AND contact_fp = %s LIMIT 1",
+        (fp,)).fetchone()
     if ev is not None:
         return _open_contact_key(conn, crypto, org, fp) is not None  # an erased contact reads as no records
     for table in ("contact_log", "review"):
@@ -833,9 +835,12 @@ def _gather_tenant(conn: psycopg.Connection, crypto, contact_fp: str) -> tuple[d
         if len(rows) == before:
             break
 
+    # the history rows of the same contact points (after an organisation's cutover a post has a history row and no event)
+    hist_rows = conn.execute(f"SELECT * FROM consentvault.post_history WHERE {cur_org} AND contact_fp = ANY(%s) ORDER BY history_seq",
+                             (sorted(fps),)).fetchall()
     keys: dict[str, tuple[bytes, str]] = {}
     erased: set[str] = set()
-    for fp in sorted({r["contact_fp"] for r in rows.values()}):
+    for fp in sorted({r["contact_fp"] for r in rows.values()} | {h["contact_fp"] for h in hist_rows}):
         opened = _open_contact_key(conn, crypto, org, fp)
         if opened is None:
             erased.add(fp)
@@ -853,7 +858,7 @@ def _gather_tenant(conn: psycopg.Connection, crypto, contact_fp: str) -> tuple[d
         "SELECT review_uuid, kind, contact_kind, contact_fp, message_ct, event_id, status, resolution, created_at,"
         f" resolved_at, resolved_by FROM consentvault.review WHERE {cur_org} AND contact_fp = ANY(%s)"
         " ORDER BY created_at, review_uuid", (sorted(keys) or [contact_fp],)).fetchall()
-    if not readable and not contact_log and not reviews:
+    if not readable and not contact_log and not reviews and not hist_rows:
         raise NoRecordsError("no records for that contact in this organization")
 
     timeline: list[dict] = []
@@ -950,7 +955,10 @@ def _gather_tenant(conn: psycopg.Connection, crypto, contact_fp: str) -> tuple[d
     org_row = conn.execute(f"SELECT org_id, name FROM consentvault.organization WHERE {cur_org}").fetchone()
 
     first = next((e for e in timeline if e["contact_fp"] == contact_fp), None)
-    kind = first["contact_kind"] if first else (contact_log[0]["contact_kind"] if contact_log else reviews[0]["contact_kind"])
+    kind = (first["contact_kind"] if first else contact_log[0]["contact_kind"] if contact_log else reviews[0]["contact_kind"] if reviews
+            else hist_rows[0]["contact_kind_sent"])
+    history_head = conn.execute("SELECT seq, row_hash FROM consentvault.history_head()").fetchone()
+    history = [{k: (bytes(v).hex() if isinstance(v, (bytes, memoryview)) else _canon_value(v)) for k, v in h.items()} for h in hist_rows]
     contacts = sorted({(e["contact_kind"], e["contact_norm"]) for e in timeline})
     result = {
         "bundle_version": BUNDLE_VERSION,
@@ -962,12 +970,16 @@ def _gather_tenant(conn: psycopg.Connection, crypto, contact_fp: str) -> tuple[d
                   "resolved_as": kind},
         "found": True,
         "message": f"{len(timeline)} consent event(s) found.",
-        "tables_read": {"event": len(timeline), "seal": len(seals), "disclosure": len(disclosures),
+        "tables_read": {"event": len(timeline), "post_history": len(history), "seal": len(seals), "disclosure": len(disclosures),
                         "contact_log": len(contact_log), "review": len(review_items), "chain_head": len(anchors)},
         "erased_contacts_linked": len(erased),
         "contacts": [{"contact_kind": k, "contact_norm": n} for k, n in contacts],
         "subject_keys": sorted({e["subject_key"] for e in timeline}),
         "timeline": timeline,
+        "history": history,
+        "history_chain": {"head": _canon_dict(history_head) if history_head else None,
+                          "label": "the history chain; its rows are as sent, with the sender's standing recorded"},
+        "permissions_label": "derived: a reading of the history under a named rule set, not a record of what was sent",
         "permissions": [{**_canon_dict(p)} for p in permissions],
         "disclosures": disclosures,
         "contact_log": [{"contact_log_id": str(c["contact_log_uuid"]),

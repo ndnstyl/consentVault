@@ -458,6 +458,10 @@ def record_tenant_event(
             org = conn.execute("SELECT consentvault.current_org() AS org").fetchone()["org"]
             if org is None:
                 raise TenantRequiredError("no tenant entered: open the write inside tenancy.tokens.org_transaction")
+            if conn.execute("SELECT to_regclass('consentvault.effect_watermark') IS NOT NULL AS t").fetchone()["t"] and conn.execute(
+                    "SELECT EXISTS (SELECT 1 FROM consentvault.effect_watermark WHERE org_id = %s) AS c", (org,)).fetchone()["c"]:
+                raise InvalidEventError("the event append path is retired for this organisation after its cutover: an event is a history row, "
+                                        "written by the projection of the post (code retired_append_path)")
             conn.execute(_LOCK_SQL)
             received = conn.execute("SELECT clock_timestamp() AS now").fetchone()["now"]
             if captured_at is not None and captured_at > (arrived_at or received) + MAX_CAPTURE_SKEW:

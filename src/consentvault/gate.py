@@ -231,7 +231,29 @@ def tenant_facts(conn: psycopg.Connection, kind: str, fp: str) -> ContactFacts:
                    "linked_at": _iso(r["linked_at"])} for r in conn.execute(
         "SELECT stop_event_id::text AS stop_event_id, lifting_post_id::text AS lifting_post_id, linked_at"
         " FROM consentvault.stop_lift WHERE org_id = consentvault.current_org() AND contact_fp = %s"
-        " ORDER BY linked_at, lifting_post_id", (fp,)))
+        " UNION ALL SELECT stop_event_id::text, lifting_post_id::text, linked_at FROM consentvault.history_stop_lift"
+        " WHERE org_id = consentvault.current_org() AND contact_fp = %s"
+        " ORDER BY linked_at, lifting_post_id", (fp, fp)))
+    # a post with no event (after an organisation's cutover) is a line of history too: the counted, first-copy rows of the history
+    # table that no event stands beside
+    hist = conn.execute(
+        "SELECT h.history_seq AS seq, h.event_id::text AS event_id, h.event_type_sent AS event_type, h.origin_sent AS origin,"
+        " h.method_sent AS method, NULL::text AS source, NULL::text AS recorded_by, h.channels_sent AS channels,"
+        " h.purposes_sent AS purposes, h.captured_at_sent, h.received_at, h.placed_at, h.post_seq, h.post_id::text AS post_id,"
+        " h.wording_sha256_sent AS disclosure_sha256, NULL::text AS payload_sha256,"
+        " coalesce(h.contact_verification_sent, 'none') AS contact_verification, NULL::text AS release_of_event_id,"
+        " NULL::text AS release_outcome, NULL::text AS release_cause FROM consentvault.post_history h"
+        " WHERE h.org_id = consentvault.current_org() AND h.contact_fp = %s AND h.label = 'projected' AND h.standing = 'counts'"
+        " AND h.earliest_copy AND h.event_type_sent IS NOT NULL AND NOT EXISTS (SELECT 1 FROM consentvault.event_source_post s"
+        " WHERE s.org_id = h.org_id AND s.post_id = h.post_id AND s.role = 'trigger') ORDER BY h.placed_at, h.post_seq", (fp,)).fetchall()
+    if hist:
+        merged = [(r["received_at"], r["seq"], dict(r)) for r in rows]
+        for h in hist:
+            h = dict(h)
+            h["captured_at"] = datetime.fromisoformat(h["captured_at_sent"].replace("Z", "+00:00")) if h["captured_at_sent"] else h["received_at"]
+            posts[h["event_id"]] = [h["post_id"]]
+            merged.append((h["placed_at"], h["seq"], h))
+        rows = [m[2] for m in sorted(merged, key=lambda m: (m[0], m[1]))]
     return _facts(rows, lifts, posts)
 
 

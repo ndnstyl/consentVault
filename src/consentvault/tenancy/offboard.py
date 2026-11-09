@@ -146,8 +146,9 @@ def build_final_export(conn, crypto, signer, *, now: datetime) -> tuple[bytes, d
     from ..evidence import NoRecordsError, build_tenant_files, gather_tenant
 
     fps = [r["contact_fp"] for r in conn.execute(
-        "SELECT DISTINCT contact_fp FROM consentvault.event WHERE org_id = (SELECT consentvault.current_org())"
-        " AND contact_fp IS NOT NULL ORDER BY contact_fp")]
+        "SELECT contact_fp FROM (SELECT contact_fp FROM consentvault.event WHERE org_id = (SELECT consentvault.current_org())"
+        " UNION SELECT contact_fp FROM consentvault.history_events WHERE org_id = (SELECT consentvault.current_org())) x"
+        " WHERE contact_fp IS NOT NULL ORDER BY contact_fp")]
     buf, counts = io.BytesIO(), {"contacts": 0, "erased": 0}
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for fp in fps:

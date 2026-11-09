@@ -38,7 +38,7 @@ from typing import Any, Callable, Iterator, Optional
 import psycopg
 import psycopg.sql
 
-from .. import dbclock, safelog
+from .. import dbclock, history, safelog
 from ..safelog import constraint_name, db_refusal_id, describe
 from .admin_base import ROLE_ADMIN, ApiError, Ctx, body_dict, iso, need_text, to_uuid
 from .errors import TenancyError
@@ -344,6 +344,10 @@ def record_erasure_stop(conn, crypto, *, fp: str, erasure_id, ledger: Optional[L
     last = conn.execute("SELECT event_id, contact_kind, contact_ct FROM consentvault.event"
                         " WHERE org_id = (SELECT consentvault.current_org()) AND contact_fp = %s"
                         " ORDER BY seq DESC LIMIT 1", (fp,)).fetchone()
+    if last is None:   # a contact whose only rows are in history (after an organisation's cutover)
+        last = conn.execute("SELECT event_id, contact_kind, contact_ct FROM consentvault.history_events"
+                            " WHERE org_id = (SELECT consentvault.current_org()) AND contact_fp = %s AND contact_ct IS NOT NULL"
+                            " ORDER BY seq DESC LIMIT 1", (fp,)).fetchone()
     if not channels or last is None:
         return None
     held = conn.execute("SELECT * FROM consentvault.contact_key_of(%s)", (fp,)).fetchone()
@@ -358,6 +362,13 @@ def record_erasure_stop(conn, crypto, *, fp: str, erasure_id, ledger: Optional[L
     marker = erasure_stop_marker(erasure_id, stop_seq or 0, unconfirmed=unconfirmed)
     data_key = crypto.open_contact_key(org, WrappedKey(bytes(held["wrapped_key"]), held["key_version"]))
     norm = tc.decrypt_text(data_key, org, str(last["event_id"]), "contact_norm", bytes(last["contact_ct"]))
+    if conn.execute("SELECT EXISTS (SELECT 1 FROM consentvault.effect_watermark WHERE org_id = (SELECT consentvault.current_org())) AS c"
+                    ).fetchone()["c"]:
+        # after the organisation's cutover the stop is the post and its history row; the frozen event table gets no row, and a post
+        # that cannot be stored is a refused erasure, never a stop that was only half written
+        stored = door.store_erasure_stop_post(conn, crypto, erasure_id=erasure_id, contact_fp=fp, channels=channels, marker=marker,
+                                              source=ERASURE_SOURCE)
+        return history.event_id_of(stored.post_id)
     ev = door.write_system_event(conn, crypto, contact=norm, contact_kind=last["contact_kind"], event_type="suppress",
                                  channels=channels, purposes=["*"], method="written", origin="consumer",
                                  source=ERASURE_SOURCE, recorded_by=marker)

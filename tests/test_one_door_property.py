@@ -149,7 +149,10 @@ class Library:
             except ConsentVaultError:
                 return
             # behind an unfinished earlier post a stop is recorded at once and anything else is stored and waiting
-            assert isinstance(answer, door.StoredWaiting) or (kind == "stop" and hasattr(answer, "event_id")), answer
+            if kind == "stop":
+                assert not isinstance(answer, door.StoredWaiting) and getattr(answer, "event_id", None), answer   # a stop has its event id
+            else:
+                assert isinstance(answer, door.StoredWaiting), answer
             return
         if kind == "stop":
             return revoke(self.conn, method="keyword", origin="consumer", **common)
@@ -190,9 +193,12 @@ class Cli:
         except SystemExit as exc:  # loud-failure-exempt: the exit code is the answer under test
             code = exc.code
         if kind == "start" or fail:   # an error exit, or stored-and-waiting behind an unfinished earlier post (exit 0, answered by name)
-            printed = self.capsys.readouterr().out
-            recorded_at_once = kind == "stop" and '"event_id"' in printed   # a stop is never held behind an unfinished earlier post
-            assert code in (0, None) and ('"waiting": true' in printed or recorded_at_once) or code not in (0, None), (argv, code)
+            printed = (self.capsys.readouterr().out.strip().splitlines() or [""])[-1]   # this command's own answer
+            if code in (0, None):
+                if kind == "stop":   # a stop is never held behind an unfinished earlier post: it prints its event id
+                    assert '"event_id"' in printed and '"waiting"' not in printed, (argv, printed)
+                else:
+                    assert '"waiting": true' in printed, (argv, printed)
         else:
             assert code == 0, (argv, code)
 

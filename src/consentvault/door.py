@@ -313,21 +313,26 @@ class TenantBackend:
 
     def prepare(self, conn, payload: Mapping[str, Any], body: bytes, auth: Auth) -> dict | str:
         from .tenancy.admin_base import ApiError
-        from .tenancy.pipeline import check_channel_purpose, check_source_from_settings, parse_capture, settings_complete
+        from .tenancy.pipeline import check_channel_purpose, check_source_from_settings, parse_capture, settings_complete, stop_settings
+        from .tenancy.pipeline import normalize as normalize_tenant_contact
 
         cred = auth.credential or {}
-        if not settings_complete(self.settings):
-            return "settings_missing_at_arrival"   # final: never decided from the live configuration
+        settings = self.settings
+        if not settings_complete(settings):
+            if payload.get("event_type") not in ("revoke", "suppress"):
+                return "settings_missing_at_arrival"   # final for a grant: never decided from the live configuration
+            settings = stop_settings(payload)          # a stop is decided from the post alone, never lost for want of configuration
         try:
             req = parse_capture(dict(payload), body, tuple(cred.get("scopes") or ()))
             f = dict(req.fields)
-            # decided only from what was stored beside the post at arrival: final
-            check_channel_purpose(f["channels"], f["purposes"], allow_star=f["event_type"] != "grant", stored=self.settings)
-            check_source_from_settings(f, self.settings)
+            # decided only from what was stored beside the post at arrival (or the post alone, for a stop): final
+            check_channel_purpose(f["channels"], f["purposes"], allow_star=f["event_type"] != "grant", stored=settings)
+            check_source_from_settings(f, settings)
+            normalize_tenant_contact(f["contact"], settings["region"])   # an unreadable contact reads the same every time: final
         except ApiError as exc:
             return exc.name
         return {"req": req, "credential_id": uuid.UUID(str(cred.get("credential_id"))), "credential": dict(cred), "org_id": auth.org_id,
-                "settings": self.settings}
+                "settings": settings}
 
     def check_wording(self, conn, fields: dict) -> None:
         """The wording checks (the registered wording exists, and names the brands the post names), from the hash the post carries."""

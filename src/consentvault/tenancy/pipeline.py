@@ -266,7 +266,15 @@ SETTINGS_KEYS = ("region", "channels", "purposes", "source_id", "source_status",
 def settings_complete(settings: Mapping[str, Any] | None) -> bool:
     """True when the settings stored beside a post say everything the projection decides from. A post stored without them is
     refused by name (``settings_missing_at_arrival``) and never decided from the live configuration."""
-    return isinstance(settings, Mapping) and all(k in settings for k in SETTINGS_KEYS)
+    return isinstance(settings, Mapping) and (bool(settings.get("from_the_post_alone")) or all(k in settings for k in SETTINGS_KEYS))
+
+
+def stop_settings(f: Mapping[str, Any]) -> dict:
+    """The settings a revoke or suppress is decided from when none were stored with its post: the post alone. Its channels and
+    purposes as sent, no source or brand check, and no phone region, so a national number is a named refusal and an E.164 number
+    or an email reads as itself. A stop is never lost for want of configuration."""
+    return {"region": None, "channels": list(f.get("channels") or []), "purposes": list(f.get("purposes") or []),
+            "source_id": None, "source_status": "active", "source_brand_ids": [], "from_the_post_alone": True}
 
 
 def check_channel_purpose(channels: list[str], purposes: list[str], *, allow_star: bool, stored: Mapping[str, Any]) -> None:
@@ -283,6 +291,9 @@ def check_source_from_settings(f: dict, stored: Mapping[str, Any]) -> None:
     """The source and brand checks, decided only from what the organisation's configuration said when the post arrived (the source
     the credential holds, its status, and the brands it and the organisation both held), stored beside the post. Pure: no
     database, so the answer is the same however late the post is projected and however the source has been edited since."""
+    if stored.get("from_the_post_alone"):   # a stop without settings: no source, no brands
+        f["source_id"], f["brand_ids"] = None, []
+        return
     held = stored.get("source_id")
     wanted = f.get("source_id") or held
     if held is None or wanted != held:

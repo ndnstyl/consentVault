@@ -61,7 +61,7 @@ def test_every_stored_tenant_post_carries_its_settings(hw):
 @pytest.mark.parametrize("settings", [None, {}, {"region": "US", "channels": ["sms"]}])
 def test_a_post_stored_without_its_settings_has_a_final_named_reason(settings):
     backend = door.TenantBackend(None, None, settings)
-    payload = {"contact": "+12125550423", "event_type": "revoke", "channels": ["sms"], "purposes": ["*"], "method": "keyword",
-               "origin": "consumer"}
+    payload = {"contact": "+12125550423", "event_type": "grant", "checked": True, "channels": ["sms"], "purposes": ["marketing"],
+               "method": "checkbox", "origin": "consumer", "disclosure_sha256": "a" * 64}   # a grant: a stop is decided without them
     auth = door.Auth(credential={"credential_id": str(uuid.uuid4()), "scopes": ["capture"]}, org_id=str(uuid.uuid4()))
     assert backend.prepare(None, payload, b"{}", auth) == "settings_missing_at_arrival"

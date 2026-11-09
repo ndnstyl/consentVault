@@ -316,10 +316,10 @@ class TenantBackend:
         from .tenancy.pipeline import check_channel_purpose, check_source_from_settings, parse_capture, settings_complete
 
         cred = auth.credential or {}
+        if not settings_complete(self.settings):
+            return "settings_missing_at_arrival"   # final: never decided from the live configuration
         try:
             req = parse_capture(dict(payload), body, tuple(cred.get("scopes") or ()))
-            if not settings_complete(self.settings):
-                return "settings_missing_at_arrival"   # final: never decided from the live configuration
             f = dict(req.fields)
             # decided only from what was stored beside the post at arrival: final
             check_channel_purpose(f["channels"], f["purposes"], allow_star=f["event_type"] != "grant", stored=self.settings)
@@ -335,13 +335,6 @@ class TenantBackend:
 
         with self.enter_for_credential(fields["org_id"], fields["credential"])(conn):
             _check_disclosure(conn, dict(fields["req"].fields))
-
-    def late_settings(self, conn, owner) -> dict:
-        """The settings of a post whose site key could not be read when it arrived: read once, when the key is first read, and
-        stored beside the post as a fact, so every later projection of it decides from the same stored answer."""
-        cred = {"credential_id": str(owner.credential_id), "scopes": ["capture"]}
-        with self.enter_for_credential(str(owner.org_id), cred)(conn):
-            return self.pipeline.projection_settings(conn, owner.credential_id)
 
     def reroute(self, writer, conn, view: "PostView", owner, found: Mapping[tuple[str, str], Any]):
         """Store the post again in the organisation the site key belongs to, with everything known about it (the original facts,
@@ -589,19 +582,13 @@ def _resolve_site_key(writer, conn, enter, backend, view: PostView, *, field_map
     except (TypeError, ValueError):  # loud-failure-exempt: stored as the fact edge_timestamp unreadable, the same as the intake stores it
         found[("vault", "edge_timestamp")] = "unreadable"
     if owner is not None:
-        found[("vault", "site_owner")] = {"source_id": str(owner.source_id) if owner.source_id else None,
-                                          "brand_ids": [str(b) for b in (owner.brand_ids or ())]}
         # The key was not read when the post arrived (that is why the lookup is repeated). Its state AT ARRIVAL is worked out from the
-        # times it was revoked and its source retired, so the history is the same whenever it is rebuilt: a key that was not active
-        # when the post arrived keeps the final reason it would have had at arrival, and a key revoked later goes ahead.
+        # times it was revoked and its source retired, so the history is the same whenever it is rebuilt. Nothing else of the key's
+        # live configuration (its source, brands, origins) is taken in: the post arrived without its settings, so it has the final
+        # reason settings_missing_at_arrival, whatever the key's state is when the projection runs.
         if state == "active":
             found[("vault", "credential")] = {"state": "verified", "credential_id": str(owner.credential_id),
                                               "scopes": ["capture"], "via": "edge", "key_state_now": owner.state}
-            late = getattr(_backend_for(backend, view.intake), "late_settings", None)
-            if late is not None:   # the post arrived while the key could not be read, so no settings were stored with it: store them now, once
-                found[("vault", TENANT_SETTINGS_FACT)] = late(conn, owner)
-        origin = next((v for n, v in env.headers if n.lower() == "origin"), "")
-        found[("vault", "origin_on_list")] = origin in owner.allowed_origins
     moved_org = owner is not None and str(owner.org_id) != view.org_id
     if not moved_org:
         try:

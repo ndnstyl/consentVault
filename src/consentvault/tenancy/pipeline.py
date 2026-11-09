@@ -315,12 +315,14 @@ def wording_at_arrival(conn: psycopg.Connection, sha256: str) -> dict:
             "channels": list((row or {}).get("channels") or []), "purposes": list((row or {}).get("purposes") or [])}
 
 
-def check_wording_from_fact(f: dict, fact: Mapping[str, Any] | None) -> None:
+def check_wording_from_fact(f: dict, fact: Mapping[str, Any] | None, fallback=None) -> Mapping[str, Any] | None:
     """The wording checks, decided only from the wording fact stored at arrival (and the hash the post carries). Pure."""
     if f["event_type"] != "grant":
         if f.get("disclosure_sha256"):
             raise ApiError("validation_failed", "only a grant carries wording", {"disclosure_sha256": "only on a grant"})
-        return
+        return None
+    if (not isinstance(fact, Mapping) or fact.get("sha256") != str(f["disclosure_sha256"])) and fallback is not None:
+        fact = fallback(str(f["disclosure_sha256"]))   # a post stored without the fact: the wording as of its stored arrival
     if not isinstance(fact, Mapping) or fact.get("sha256") != str(f["disclosure_sha256"]):
         raise ApiError("settings_missing_at_arrival", "the post was stored without what the intake saw of its wording")
     if not fact.get("known"):
@@ -328,6 +330,7 @@ def check_wording_from_fact(f: dict, fact: Mapping[str, Any] | None) -> None:
     named = {str(b) for b in (fact.get("brand_ids") or [])}
     if named and any(b not in named for b in f.get("brand_ids") or []):
         raise ApiError("brand_not_allowed", "a brand is not named on that wording")
+    return fact
 
 
 def retention_until(conn: psycopg.Connection, default_years: int, now: datetime) -> datetime:

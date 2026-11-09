@@ -43,7 +43,7 @@ from .rawpost import Fact, RawPostWriter, RawRequest, StoredPost, request_key_di
 
 _log = safelog.get("consentvault.door")
 
-CODE_VERSION = "door-2"
+CODE_VERSION = "door-3"
 REASON_TEXT = "a_text_is_not_consent"
 EDGE_INTAKES = ("edge_single", "edge_site_key")
 TENANT_SETTINGS_FACT = "tenant_projection_settings"
@@ -155,6 +155,7 @@ class Auth:
     key: str | None = None          # the request's own identity (its signature, the edge's request id, a request id header)
     verified_key: bool = False      # the verified-grant secret signed it (or a local caller the vault trusts)
     org_id: str = ""
+    arrived_epoch: float | None = None   # the post's stored arrival, for the one decision that needs it before the event is written
     credential: Mapping[str, Any] | None = None   # the verified credential a multi-tenant intake established (id, scopes)
 
 
@@ -364,12 +365,24 @@ class TenantBackend:
             check_channel_purpose(f["channels"], f["purposes"], allow_star=f["event_type"] != "grant", stored=settings)
             check_source_from_settings(f, settings)
             normalize_tenant_contact(f["contact"], settings["region"])   # an unreadable contact reads the same every time: final
-            check_wording_from_fact(f, self.wording)   # the wording as the intake saw it, stored at arrival: final
+            wording = check_wording_from_fact(f, self.wording, lambda sha: self._wording_as_of(conn, auth, cred, sha)) or self.wording
             check_event_shape(f)   # the box, the channel, the purpose, the wording hash: the bytes alone, final
         except ApiError as exc:
             return exc.name
         return {"req": req, "credential_id": uuid.UUID(str(cred.get("credential_id"))), "credential": dict(cred), "org_id": auth.org_id,
-                "settings": settings, "wording": self.wording}
+                "settings": settings, "wording": wording}
+
+    def _wording_as_of(self, conn, auth: Auth, cred: Mapping[str, Any], sha: str) -> dict | None:
+        """For a post stored without the wording fact: the wording as of the post's stored arrival, through the one pinned lookup."""
+        if auth.arrived_epoch is None:
+            return None
+        as_of = datetime.fromtimestamp(auth.arrived_epoch, tz=timezone.utc)
+        with self.enter_for_credential(auth.org_id, cred)(conn):
+            row = conn.execute("SELECT * FROM consentvault.wording_as_of(%s, %s)", (sha, as_of)).fetchone()
+        if row is None:
+            return {"sha256": sha, "known": False, "brand_ids": [], "channels": [], "purposes": []}
+        return {"sha256": sha, "known": True, "brand_ids": [str(b) for b in (row["brand_ids"] or [])],
+                "channels": list(row["channels"] or []), "purposes": list(row["purposes"] or [])}
 
     def reroute(self, writer, conn, view: "PostView", owner, found: Mapping[tuple[str, str], Any]):
         """Store the post again in the organisation the site key belongs to, with everything known about it (the original facts,
@@ -508,7 +521,7 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
             if hasattr(backend, "for_post"):
                 backend = backend.for_post(view.facts)
             reading = read_post(view.body, field_map, CODE_VERSION, intake=view.intake, context=_view_context(view))
-            auth = replace(auth_from_facts(view.facts), org_id=view.org_id)
+            auth = replace(auth_from_facts(view.facts), org_id=view.org_id, arrived_epoch=view.arrived_epoch)
             if auth.pending:
                 moved = _resolve_site_key(writer, conn, enter, backend, view, field_map=field_map, raise_errors=raise_errors)
                 if isinstance(moved, Outcome):
@@ -517,7 +530,7 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
                 if hasattr(base_backend, "for_post"):   # the repeated lookup stored the settings beside the post: read them now
                     backend = base_backend.for_post(view.facts)
                 reading = read_post(view.body, field_map, CODE_VERSION, intake=view.intake, context=_view_context(view))
-                auth = replace(auth_from_facts(view.facts), org_id=view.org_id)
+                auth = replace(auth_from_facts(view.facts), org_id=view.org_id, arrived_epoch=view.arrived_epoch)
 
             def link(c, event_id):
                 c.execute("INSERT INTO consentvault.event_source_post (org_id, event_id, post_id, role, request_key)"

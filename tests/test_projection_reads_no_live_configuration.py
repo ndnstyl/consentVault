@@ -51,6 +51,7 @@ READS = {
     ('confirmations.py', 'enqueue_confirmation_intents', 'confirmation_enqueue()'): "downstream_effect",
     ('disclosure.py', 'get', 'disclosure'): "immutable_wording",
     ('disclosure.py', 'register', 'disclosure'): "immutable_wording",
+    ('door.py', '_wording_as_of', 'wording_as_of()'): "immutable_wording",   # as of the post's stored arrival, for a post stored without the fact
     ('door.py', '_already', 'event_source_post'): "post_and_facts",
     ('door.py', '_attempt', 'projection_attempt'): "post_and_facts",
     ('door.py', '_first_attempt_age', 'projection_attempt'): "post_and_facts",

@@ -43,7 +43,7 @@ DECLARE
                              'request_counted', 'arrival_at', 'arrival_key', 'arrival_place', 'arrival_post_seq',
                              'sync_targets', 'sync_echo_targets', 'sync_advance_state', 'sync_enqueue', 'sync_enqueue_refresh',
                              'confirmation_enqueue', 'record_upsert', 'record_index_refresh', 'record_display_write',
-                             'resolve_site_key', 'resolve_site_key_times'];
+                             'resolve_site_key', 'resolve_site_key_times', 'wording_as_of'];
     r record;
     c record;
     p text;
@@ -90,5 +90,18 @@ BEGIN
 END;
 $$;
 REVOKE ALL ON FUNCTION consentvault.sync_projection_grants() FROM PUBLIC;
+
+-- The one read of the wording table the projection keeps, for a post stored by a build that did not store the wording fact beside it:
+-- whether the organisation had the wording, and what it names, AS OF the post's stored arrival (wording is immutable, so first_seen_at
+-- against the arrival is the answer the intake would have given). Security definer, read-only, one organisation, pinned by body hash.
+CREATE FUNCTION consentvault.wording_as_of(p_sha text, p_as_of timestamptz)
+    RETURNS TABLE (known boolean, brand_ids uuid[], channels text[], purposes text[])
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+    SELECT true, d.brand_ids, d.channels, d.purposes FROM consentvault.disclosure d
+     WHERE d.org_id OPERATOR(pg_catalog.=) consentvault.current_org() AND d.sha256 OPERATOR(pg_catalog.=) p_sha
+       AND d.first_seen_at OPERATOR(pg_catalog.<=) p_as_of;
+$$;
+REVOKE ALL ON FUNCTION consentvault.wording_as_of(text, timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION consentvault.wording_as_of(text, timestamptz) TO consentvault_app;
 
 SELECT consentvault.sync_projection_grants();

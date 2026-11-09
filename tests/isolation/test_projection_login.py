@@ -175,7 +175,7 @@ ALLOWED_DEFINERS = {"current_org", "home_org", "enter_org", "current_token_scope
                     "ledger_lock_key", "raw_post_lock_key", "raw_post_head", "ledger_head", "contact_key_of", "receipt_of",
                     "request_counted", "arrival_at", "arrival_key", "arrival_place", "arrival_post_seq", "sync_targets",
                     "sync_echo_targets", "sync_advance_state", "sync_enqueue", "sync_enqueue_refresh", "confirmation_enqueue",
-                    "record_upsert", "record_index_refresh", "record_display_write", "resolve_site_key", "resolve_site_key_times"}
+                    "record_upsert", "record_index_refresh", "record_display_write", "resolve_site_key", "resolve_site_key_times", "wording_as_of"}
 
 
 def test_the_projection_role_executes_only_the_listed_definer_functions(hw):
@@ -268,6 +268,7 @@ def test_no_scanned_module_switches_roles():
 # The body of EVERY security-definer function the projection role can execute (trigger functions included), pinned: a new body of
 # one of them, however it reads configuration, changes its hash and fails here until it is reviewed and re-pinned.
 PINNED_DEFINER_FUNCTIONS = {
+    'consentvault.wording_as_of(text,timestamp with time zone)': '89006fc64e5ef447',
     'consentvault.arrival_at(uuid,uuid,timestamp with time zone)': '6b18ea3304067974',
     'consentvault.arrival_key(uuid,uuid,bigint,timestamp with time zone)': '9b54b499e6e49718',
     'consentvault.arrival_place(uuid,uuid)': '3fa6bc5f65eec684',

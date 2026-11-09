@@ -127,8 +127,8 @@ READS = {
     ('tenancy/oauth.py', 'issue_token', 'resolve_credential()'): "outside_projection",
     ('tenancy/pipeline.py', '<module>', 'current_org()'): "plumbing",
     ('tenancy/pipeline.py', '<module>', 'ledger_lock_key()'): "plumbing",
-    ('tenancy/pipeline.py', '_check_disclosure', 'current_org()'): "plumbing",
-    ('tenancy/pipeline.py', '_check_disclosure', 'disclosure'): "immutable_wording",
+    ('tenancy/pipeline.py', 'wording_at_arrival', 'current_org()'): "plumbing",
+    ('tenancy/pipeline.py', 'wording_at_arrival', 'disclosure'): "arrival_snapshot",
     ('tenancy/pipeline.py', 'capture', 'current_org()'): "plumbing",
     ('tenancy/pipeline.py', 'capture', 'evidence_object'): "derived_record",
     ('tenancy/pipeline.py', 'capture', 'receipt_of()'): "derived_record",
@@ -158,12 +158,14 @@ READS = {
 
 # A reader of live configuration may be called only from its named caller(s): (file, function).
 ARRIVAL_ONLY = {
-    "projection_settings": {("api.py", "_capture"), ("api.py", "_projection_settings_selfcheck")},   # intake, and the start-up self-check of it
+    "projection_settings": {("api.py", "_capture"), ("api.py", "settings_reader"),   # the intake, and its reader run in the store
+                           ("api.py", "_projection_settings_selfcheck")},   # intake, and the start-up self-check of it
     "org_region": {("tenancy/pipeline.py", "projection_settings")},
     "org_channels": {("tenancy/pipeline.py", "projection_settings")},
     "org_purposes": {("tenancy/pipeline.py", "projection_settings")},
     "resolve_site_key": {("api.py", "_edge_envelope"), ("door.py", "_resolve_site_key")},
     "resolve_site_key_times": {("door.py", "_resolve_site_key")},
+    "wording_at_arrival": {("api.py", "_capture"), ("api.py", "settings_reader")},
 }
 
 EXPECTED_TRIGGERS = {

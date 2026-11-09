@@ -952,8 +952,15 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                     settings_reader = None
                     if identity["claims"] is not None:   # the configuration as it stands now, read inside the store and kept beside the post
                         credential_id = identity["claims"].credential_id
-                        settings_reader = lambda c: [Fact("vault", door.TENANT_SETTINGS_FACT,
-                                                          self.pipeline.projection_settings(c, credential_id))]
+                        wording_sha = _wording_hash(inner.body if inner is not None else body)
+
+                        def settings_reader(c):
+                            facts_in = [Fact("vault", door.TENANT_SETTINGS_FACT, self.pipeline.projection_settings(c, credential_id))]
+                            if wording_sha is not None:   # what the intake saw of the wording, read in the store's own transaction
+                                from .tenancy.pipeline import wording_at_arrival
+
+                                facts_in.append(Fact("vault", door.WORDING_FACT, wording_at_arrival(c, wording_sha)))
+                            return facts_in
                     # what is stored is what was received: for an edge post, the signed envelope bytes exactly
                     raw = RawRequest(
                         intake=identity["intake"], method=self.command, path=url.path, query=url.query,
@@ -1342,6 +1349,15 @@ def rebuild_cloud(settings: CloudApiSettings, org_ids, outcomes: list | None = N
     if failures is None and failed:
         raise ConsentVaultError("the rebuild failed for organisation(s): " + ", ".join(f"{o} ({n})" for o, n in failed))
     return done
+
+
+def _wording_hash(raw: bytes) -> str | None:
+    """The wording hash a capture body names, lower-cased as the pipeline reads it, or None when it names none."""
+    try:
+        value = json.loads(bytes(raw).decode("utf-8")).get("disclosure_sha256")
+    except (ValueError, UnicodeDecodeError, AttributeError):  # loud-failure-exempt: a body that is not a JSON object names no wording; it is stored as sent
+        return None
+    return value.lower() if isinstance(value, str) else None
 
 
 def _projection_settings_selfcheck(settings: CloudApiSettings, pipeline) -> None:

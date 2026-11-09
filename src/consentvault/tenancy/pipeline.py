@@ -306,19 +306,25 @@ def check_source_from_settings(f: dict, stored: Mapping[str, Any]) -> None:
         raise ApiError("brand_not_allowed", "a brand does not belong to this organization and source")
 
 
-def _check_disclosure(conn: psycopg.Connection, f: dict, arrived_at: datetime | None = None) -> None:
-    """The wording checks, from the hash the post carries. Wording is immutable, but whether the organisation had registered it
-    changes over time, so a wording first seen after the post arrived does not count: the answer is the one at arrival."""
+def wording_at_arrival(conn: psycopg.Connection, sha256: str) -> dict:
+    """What the intake saw of the wording a post names, read INSIDE the store transaction and stored beside the post: whether the
+    organisation had registered it, and the brands it names. Call inside the organisation's entry, at intake only."""
+    row = conn.execute("SELECT brand_ids FROM consentvault.disclosure WHERE org_id = consentvault.current_org() AND sha256 = %s",
+                       (str(sha256),)).fetchone()
+    return {"sha256": str(sha256), "known": row is not None, "brand_ids": [str(b) for b in ((row or {}).get("brand_ids") or [])]}
+
+
+def check_wording_from_fact(f: dict, fact: Mapping[str, Any] | None) -> None:
+    """The wording checks, decided only from the wording fact stored at arrival (and the hash the post carries). Pure."""
     if f["event_type"] != "grant":
         if f.get("disclosure_sha256"):
             raise ApiError("validation_failed", "only a grant carries wording", {"disclosure_sha256": "only on a grant"})
         return
-    row = conn.execute("SELECT to_jsonb(d) AS d FROM consentvault.disclosure d"
-                       " WHERE org_id = consentvault.current_org() AND sha256 = %s",
-                       (str(f["disclosure_sha256"]),)).fetchone()
-    if row is None or (arrived_at is not None and datetime.fromisoformat(str(row["d"]["first_seen_at"])) > arrived_at):
+    if not isinstance(fact, Mapping) or fact.get("sha256") != str(f["disclosure_sha256"]):
+        raise ApiError("settings_missing_at_arrival", "the post was stored without what the intake saw of its wording")
+    if not fact.get("known"):
         raise ApiError("UnknownDisclosureError", "this organization has not registered that wording")
-    named = {str(b) for b in (row["d"].get("brand_ids") or [])}
+    named = {str(b) for b in (fact.get("brand_ids") or [])}
     if named and any(b not in named for b in f.get("brand_ids") or []):
         raise ApiError("brand_not_allowed", "a brand is not named on that wording")
 
@@ -422,7 +428,6 @@ class CapturePipeline:
                 kind, norm = normalize(f["contact"], region)
                 check_channel_purpose(f["channels"], f["purposes"], allow_star=f["event_type"] != "grant", stored=settings)
                 check_source_from_settings(f, settings)
-                _check_disclosure(conn, f, arrived_at)
                 fp, data_key = contact_key(conn, self.crypto, org, kind, norm, create=True)
                 retain = retention_until(conn, self.default_retain_years,
                                         self.clock() if self.clock else dbclock.now(conn))

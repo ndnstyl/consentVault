@@ -73,3 +73,34 @@ def test_a_wording_registered_after_the_post_arrived_does_not_change_its_outcome
         disc.register(app, text, "late", "en", ["sms"], ["marketing"])
     from .test_door_replay_after_brand_edit import _decisions
     assert _decisions(hw, a.org.org_id)[str(_last_post(hw, a)["post_id"])] == "UnknownDisclosureError"
+
+
+def test_a_wording_whose_registration_straddles_the_post_is_decided_as_the_intake_saw_it(hw):
+    """The registering transaction starts before the post and commits after it: the row's first_seen_at (the transaction start)
+    precedes the arrival, but the intake could not see the row. The fact stored in the store transaction says what the intake saw,
+    so the live answer and a replay agree."""
+    import hashlib
+    from consentvault import disclosure as disc
+    from consentvault.tenancy.tokens import org_transaction
+
+    a = hw.cloud.a
+    text = "Inflight wording %s may text you. Reply STOP to end." % uuid.uuid4()
+    sha = hashlib.sha256(text.encode()).hexdigest()
+    with hw.t.app() as app, org_transaction(app, hw.t.token(a.org)):
+        disc.register(app, text, "inflight", "en", ["sms"], ["marketing"])
+        hw.cloud.grant(a, "+12125550452", disclosure_sha256=sha)
+    api.rebuild_cloud(hw.cloud.settings, _orgs(hw))
+    live, attempts = _reason(hw, _last_post(hw, a))
+    from .test_door_replay_after_brand_edit import _decisions
+    replay = _decisions(hw, a.org.org_id)[str(_last_post(hw, a)["post_id"])]
+    assert live == replay == "UnknownDisclosureError" and not attempts
+
+
+def test_the_wording_fact_is_stored_with_every_grant_post(hw):
+    from .cloud_harness import facts_of
+
+    a = hw.cloud.a
+    hw.cloud.grant(a, "+12125550453")
+    facts = facts_of(hw.t, _last_post(hw, a))
+    assert facts["wording_known_at_arrival"]["known"] is True and facts["wording_known_at_arrival"]["sha256"] == a.wording
+

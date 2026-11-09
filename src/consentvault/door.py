@@ -46,6 +46,7 @@ CODE_VERSION = "door-2"
 REASON_TEXT = "a_text_is_not_consent"
 EDGE_INTAKES = ("edge_single", "edge_site_key")
 TENANT_SETTINGS_FACT = "tenant_projection_settings"
+WORDING_FACT = "wording_known_at_arrival"
 
 EVENT_FIELDS = (
     "contact", "event_type", "channels", "purposes", "method", "origin", "disclosure_sha256",
@@ -302,18 +303,21 @@ class TenantBackend:
     takes_arrival = True
 
     def __init__(self, pipeline: Any, enter_for_credential: Callable[[str, Mapping[str, Any]], Callable],
-                 settings: Mapping[str, Any] | None = None) -> None:
-        self.pipeline, self.enter_for_credential, self.settings = pipeline, enter_for_credential, settings
+                 settings: Mapping[str, Any] | None = None, wording: Mapping[str, Any] | None = None) -> None:
+        self.pipeline, self.enter_for_credential, self.settings, self.wording = pipeline, enter_for_credential, settings, wording
 
     def for_post(self, facts: Mapping[tuple[str, str], Any]) -> "TenantBackend":
         """The projection of a post reads the organisation's configuration as it stood when the post arrived (stored beside it
         by the intake), never the live configuration. A post stored before the intake kept this reads the live one."""
         stored = facts.get(("vault", TENANT_SETTINGS_FACT))
-        return TenantBackend(self.pipeline, self.enter_for_credential, stored if isinstance(stored, dict) else None)
+        wording = facts.get(("vault", WORDING_FACT))
+        return TenantBackend(self.pipeline, self.enter_for_credential, stored if isinstance(stored, dict) else None,
+                             wording if isinstance(wording, dict) else None)
 
     def prepare(self, conn, payload: Mapping[str, Any], body: bytes, auth: Auth) -> dict | str:
         from .tenancy.admin_base import ApiError
         from .tenancy.pipeline import check_channel_purpose, check_source_from_settings, parse_capture, settings_complete, stop_settings
+        from .tenancy.pipeline import check_wording_from_fact
         from .tenancy.pipeline import normalize as normalize_tenant_contact
 
         cred = auth.credential or {}
@@ -329,17 +333,11 @@ class TenantBackend:
             check_channel_purpose(f["channels"], f["purposes"], allow_star=f["event_type"] != "grant", stored=settings)
             check_source_from_settings(f, settings)
             normalize_tenant_contact(f["contact"], settings["region"])   # an unreadable contact reads the same every time: final
+            check_wording_from_fact(f, self.wording)   # the wording as the intake saw it, stored at arrival: final
         except ApiError as exc:
             return exc.name
         return {"req": req, "credential_id": uuid.UUID(str(cred.get("credential_id"))), "credential": dict(cred), "org_id": auth.org_id,
                 "settings": settings}
-
-    def check_wording(self, conn, fields: dict) -> None:
-        """The wording checks (the registered wording exists, and names the brands the post names), from the hash the post carries."""
-        from .tenancy.pipeline import _check_disclosure
-
-        with self.enter_for_credential(fields["org_id"], fields["credential"])(conn):
-            _check_disclosure(conn, dict(fields["req"].fields), fields.get("arrived_at"))
 
     def reroute(self, writer, conn, view: "PostView", owner, found: Mapping[tuple[str, str], Any]):
         """Store the post again in the organisation the site key belongs to, with everything known about it (the original facts,
@@ -509,15 +507,6 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
                     _log.error("a stored post produces no event; the reason is stored beside it", error=reason_of(skew))
                     _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason_of(skew)))
                     raise _FinalReading from skew
-            if isinstance(fields, dict) and hasattr(backend, "check_wording"):
-                from .tenancy.admin_base import ApiError
-
-                try:
-                    backend.check_wording(conn, fields)   # wording is immutable, looked up by its hash: the answer never changes
-                except ApiError as exc:
-                    _log.error("a stored post produces no event; the reason is stored beside it", error=reason_of(exc))
-                    _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason_of(exc)))
-                    raise _FinalReading from exc
             if reason is not None or isinstance(fields, str):
                 outcome = Outcome(view.post_id, reason=reason or fields)
             else:

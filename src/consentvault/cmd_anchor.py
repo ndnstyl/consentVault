@@ -91,7 +91,8 @@ def anchor_tenants(worker_conn: psycopg.Connection, app_conn: psycopg.Connection
         try:
             with org_transaction(app_conn, row["token"]):
                 head = app_conn.execute("SELECT seq, row_hash FROM consentvault.ledger_head()").fetchone()
-                if head is None:  # nothing to anchor yet (a new organization, or the home organization of a cloud vault)
+                hist = app_conn.execute("SELECT seq, row_hash FROM consentvault.history_head_entered()").fetchone()
+                if head is None and hist is None:  # nothing to anchor yet (a new organization, or the home organization of a cloud vault)
                     results.append({"org_id": str(org), "status": "empty"})
                     continue
                 sink = sink_for(org)
@@ -99,18 +100,25 @@ def anchor_tenants(worker_conn: psycopg.Connection, app_conn: psycopg.Connection
                     raise AnchorError("no anchor sink is configured for this organization", code="no_anchor_sink")
                 when = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
                 stamp = when.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-                record = {"seq": head["seq"], "row_hash": head["row_hash"], "anchored_at": stamp,
-                          "key_id": signer.key_id, "key_version": signer.key_version,
-                          "algorithm": "ECDSA_P256_SHA256",
-                          "signature": _sign(signer, anchor_payload(org, head["seq"], head["row_hash"], stamp))}
-                receipt = sink.publish(str(org), record)
-                last = app_conn.execute(
-                    "SELECT seq, row_hash FROM consentvault.chain_head"
-                    " WHERE org_id = (SELECT consentvault.current_org()) ORDER BY anchored_at DESC, seq DESC LIMIT 1"
-                ).fetchone()
-                if last is None or (last["seq"], last["row_hash"]) != (head["seq"], head["row_hash"]):
-                    app_conn.execute("INSERT INTO consentvault.chain_head (seq, row_hash, sink, anchored_at)"
-                                     " VALUES (%s, %s, %s, %s)", (head["seq"], head["row_hash"], sink.label, when))
+
+                def publish(h, extra, table, seq_col):
+                    record = {"seq": h["seq"], "row_hash": h["row_hash"], "anchored_at": stamp,
+                              "key_id": signer.key_id, "key_version": signer.key_version,
+                              "algorithm": "ECDSA_P256_SHA256", **extra,
+                              "signature": _sign(signer, anchor_payload(org, h["seq"], h["row_hash"], stamp))}
+                    got = sink.publish(str(org), record)
+                    last = app_conn.execute(
+                        f"SELECT {seq_col} AS seq, row_hash FROM consentvault.{table}"
+                        f" WHERE org_id = (SELECT consentvault.current_org()) ORDER BY anchored_at DESC, {seq_col} DESC LIMIT 1").fetchone()
+                    if last is None or (last["seq"], last["row_hash"]) != (h["seq"], h["row_hash"]):
+                        app_conn.execute(f"INSERT INTO consentvault.{table} ({seq_col}, row_hash, sink, anchored_at) VALUES (%s, %s, %s, %s)",
+                                         (h["seq"], h["row_hash"], sink.label, when))
+                    return got
+
+                receipt = publish(head, {}, "chain_head", "seq") if head is not None else None
+                if hist is not None:   # the history chain is anchored beside the frozen one; the answer names the newest head, which is history's
+                    receipt = publish(hist, {"chain": "history"}, "post_history_chain_head", "history_seq")
+                    head = hist
             results.append({"org_id": str(org), "status": "published", "seq": head["seq"],
                             "row_hash": head["row_hash"], "sink": receipt.sink, "tenant_owned": receipt.tenant_owned})
         except (ConsentVaultError, ProviderError, TenancyError, psycopg.Error) as exc:

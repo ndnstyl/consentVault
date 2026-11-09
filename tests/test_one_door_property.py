@@ -202,16 +202,36 @@ def history(conn) -> dict[int, list[str]]:
     return out
 
 
+# What a replay into an empty database cannot reproduce by construction: the event's own place in the chain and its hashes, the
+# per-database salt and commitment, the receipt time, the id of another event, the organisation (a fresh database mints its own)
+# and the chain's version of the row format.
+NOT_REPRODUCED = ("seq", "event_id", "contact_salt", "contact_commit", "received_at", "release_of_event_id", "hash_version",
+                  "prev_hash", "row_hash", "org_id")
+
+
 def fingerprint(conn) -> str:
     """The history as the vault tells it, as one hash: every event in the order of the post that placed it (the earliest post
-    carrying its request key), with what the event says. Independent of the order the projection wrote the events in, of which
-    copy of a request produced one, and of the event's own sequence number."""
+    carrying its request key), with EVERY field the event holds (the cited post's place, the capture time as the sender claimed it,
+    the wording hash, the page, the address, the user agent, the source, the payload hash and the rest) except the few columns a
+    replay cannot reproduce (``NOT_REPRODUCED``). Independent of the order the projection wrote the events in, of which copy of
+    a request produced one, and of the event's own sequence number."""
     rows = conn.execute(
-        "SELECT consentvault.arrival_post_seq(e.org_id, e.event_id) AS place, e.contact_norm, e.event_type, e.channels,"
-        " e.purposes, e.method, e.origin, e.session_ref FROM consentvault.event e"
-        " WHERE e.event_type IN ('grant', 'revoke', 'suppress') ORDER BY place, e.contact_norm, e.event_type, e.session_ref").fetchall()
-    return hashlib.sha256(json.dumps([[r["place"], r["contact_norm"], r["event_type"], list(r["channels"]), list(r["purposes"]),
-                                       r["method"], r["origin"], r["session_ref"]] for r in rows]).encode()).hexdigest()
+        "SELECT consentvault.arrival_post_seq(e.org_id, e.event_id) AS place,"
+        " (to_jsonb(e) - %s::text[]) || jsonb_build_object('captured_at', CASE WHEN e.captured_at = e.received_at THEN NULL"
+        "                                                                 ELSE e.captured_at END) AS body"
+        " FROM consentvault.event e WHERE e.event_type IN ('grant', 'revoke', 'suppress')"
+        " ORDER BY place, e.contact_norm, e.event_type, e.session_ref, e.captured_at", (list(NOT_REPRODUCED),)).fetchall()
+    return hashlib.sha256(json.dumps([[r["place"], r["body"]] for r in rows], sort_keys=True).encode()).hexdigest()
+
+
+def test_the_fingerprint_hashes_every_event_column_but_the_named_ones(conn):
+    cols = {r["column_name"] for r in conn.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'consentvault' AND table_name = 'event'").fetchall()}
+    assert set(NOT_REPRODUCED) <= cols
+    hashed = cols - set(NOT_REPRODUCED)
+    assert {"disclosure_sha256", "captured_at", "page_url", "client_ip", "user_agent", "payload_sha256", "source_id"} <= hashed
+    conn.execute("SELECT 1")   # the query itself must run against the live columns
+    assert fingerprint(conn)
 
 
 def replay_from_empty(conn, pg_server) -> str:

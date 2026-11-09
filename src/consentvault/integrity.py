@@ -128,10 +128,12 @@ def seal_every_org(conn: psycopg.Connection, tsa_url: str, limit: int, *, backof
     """{org id: event ids sealed in this run}. ``oldest_unsealed`` (when given) receives {org id: seconds the oldest
     event still unsealed has waited}, read after the organisation's seals."""
     from .seal import seal_pending
+    from .seal_history import seal_pending_history
     from .seal_raw import seal_pending_raw
 
     def one(c, org):
-        done = seal_pending(c, tsa_url, limit, backoff=backoff) + seal_pending_raw(c, tsa_url, limit, backoff=backoff)
+        done = (seal_pending(c, tsa_url, limit, backoff=backoff) + seal_pending_raw(c, tsa_url, limit, backoff=backoff)
+                + seal_pending_history(c, tsa_url, limit, backoff=backoff))
         if oldest_unsealed is not None:
             oldest_unsealed[str(org)] = c.execute(OLDEST_UNSEALED_SQL).fetchone()["age"]
         return done
@@ -147,15 +149,17 @@ def verify_seals_every_org(conn: psycopg.Connection, max_delay: timedelta | None
     ug = unsealed_grace if unsealed_grace is not None else seal.DEFAULT_UNSEALED_GRACE
 
     def one(c, org):
+        from .seal_history import verify_all_history
         from .seal_raw import verify_all_raw
 
         checked, failures = seal.verify_all(c, md, ug)
         raw_checked, raw_failures = verify_all_raw(c, md, ug)
-        checked, failures = checked + raw_checked, failures + raw_failures
+        hist_checked, hist_failures, waiting = verify_all_history(c, md, ug)
+        checked, failures = checked + raw_checked + hist_checked, failures + raw_failures + hist_failures
         if failures:
             raise _OrgFailure(f"{len(failures)} seal failure(s): "
                               + "; ".join(f"{f.event_id}: {f.reason}" for f in failures[:20]))
-        return checked
+        return {"checked": checked, "unsealed_history": waiting} if waiting else checked
     return _each_org(conn, JOB_VERIFY_SEALS, one)
 
 
@@ -207,6 +211,10 @@ def verify_chain_every_org(conn: psycopg.Connection, *, sink_file: str | None = 
         if missing:   # gate 2: a stored post with no history row and no recorded reason is named, never counted past
             _log.error("stored posts have no history row and no recorded reason")
             return {"records": count, "posts_without_history": missing}
+        cut = c.execute("SELECT EXISTS (SELECT 1 FROM consentvault.effect_watermark WHERE org_id = consentvault.current_org()) AS c").fetchone()["c"]
+        if cut:   # after cutover the history head is part of the answer (item 35)
+            head = c.execute("SELECT seq, row_hash FROM consentvault.history_head()").fetchone()
+            return {"records": count, "history_head": head and head["row_hash"], "history_head_seq": head and head["seq"]}
         return count
     return _each_org(conn, JOB_VERIFY_CHAIN, one)
 
@@ -229,7 +237,8 @@ def anchor_every_org(conn: psycopg.Connection, sink: str) -> dict:
     def one(c, org):
         head = c.execute("SELECT seq FROM consentvault.ledger_head()").fetchone()
         raw_head = c.execute("SELECT seq FROM consentvault.raw_post_head()").fetchone()
-        if (head is None or head["seq"] is None) and raw_head is None:
+        hist_head = c.execute("SELECT seq FROM consentvault.history_head()").fetchone()
+        if (head is None or head["seq"] is None) and raw_head is None and hist_head is None:
             skipped.append(str(org))
             return None
         return anchor(c, sink)

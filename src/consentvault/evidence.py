@@ -280,7 +280,7 @@ def main():
                             continue
                         try:
                             rec = json.loads(line)
-                            if rec.get("chain") == "raw_post":  # the raw post chain's head, not an event head: not on this path
+                            if rec.get("chain") in ("raw_post", "history"):  # another chain's head, not an event head: not on this path
                                 continue
                             seq_v, hash_v = int(rec["seq"]), str(rec["row_hash"])
                             if seq_v < 1 or not re.fullmatch(r"[0-9a-f]{64}", hash_v):

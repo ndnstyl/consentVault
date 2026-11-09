@@ -167,6 +167,34 @@ def _anchor_raw_posts(conn: psycopg.Connection, sink: str, when: datetime, org: 
     return {**record, "sink": sink_label(sink), "anchor_id": str(row["head_uuid"])}
 
 
+def _anchor_history(conn: psycopg.Connection, sink: str, when: datetime, org: str, tenant: bool) -> dict | None:
+    """Anchor the head of the organisation's history chain (item 1): verified first, written to the sink, then recorded in
+    post_history_chain_head. None when the organisation has no history row yet."""
+    breaks = conn.execute("SELECT history_seq, reason FROM consentvault.history_chain_breaks()").fetchall()
+    if breaks:
+        raise ChainError(f"refusing to anchor a broken history chain: {len(breaks)} break(s), first at seq {breaks[0]['history_seq']}")
+    head = conn.execute("SELECT seq, row_hash FROM consentvault.history_head()").fetchone()
+    if head is None:
+        return None
+    record = {"chain": "history", "seq": head["seq"], "row_hash": head["row_hash"],
+              "anchored_at": when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")}
+    if tenant:
+        record["org_id"] = org
+    line = json.dumps(record, sort_keys=True, separators=(",", ":"))
+    if is_s3(sink):
+        publish_s3(sink, org, record)
+    elif _is_url(sink):
+        _post(sink, line)
+    else:
+        _write_file(sink, line)
+    try:
+        row = conn.execute("INSERT INTO consentvault.post_history_chain_head (history_seq, row_hash, sink, anchored_at)"
+                           " VALUES (%s, %s, %s, %s) RETURNING head_uuid", (head["seq"], head["row_hash"], sink_label(sink), when)).fetchone()
+    except psycopg.Error as exc:
+        raise AnchorError(f"the history head was written to the sink but post_history_chain_head refused it: {describe(exc)}") from exc
+    return {**record, "sink": sink_label(sink), "anchor_id": str(row["head_uuid"])}
+
+
 def anchor(conn: psycopg.Connection, sink: str, *, now: datetime | None = None) -> dict:
     """Anchor the current head of both chains (the events and the raw posts). Refuses an empty or broken ledger; the sink is
     written before the database row. The answer is the event head's record, with the raw post head's under ``raw_post``."""
@@ -204,8 +232,13 @@ def anchor(conn: psycopg.Connection, sink: str, *, now: datetime | None = None) 
                 f"the head was written to the sink but chain_head refused it: {describe(exc)}") from exc
         result = {**record, "sink": sink_label(sink), "anchor_id": str(row["head_uuid"])}
     raw = _anchor_raw_posts(conn, sink, when, str(orgs["org"]), tenant)
-    if head is None and raw is None:
+    hist = _anchor_history(conn, sink, when, str(orgs["org"]), tenant)
+    if head is None and raw is None and hist is None:
         raise AnchorError("the ledger is empty; there is no head to anchor")
+    if hist is not None:
+        result["history"] = hist
+        result.setdefault("anchor_id", hist["anchor_id"])
+        result.setdefault("sink", hist["sink"])
     if raw is not None:
         result["raw_post"] = raw
         result.setdefault("anchor_id", raw["anchor_id"])

@@ -619,7 +619,7 @@ def read_file_sink(path: str) -> list[dict]:
                     continue
                 try:
                     rec = json.loads(line)
-                    if rec.get("chain") == "raw_post":  # the raw post chain's anchors are read by rawpost.verify_raw_anchors
+                    if rec.get("chain") in ("raw_post", "history"):  # the raw post chain's anchors are read by rawpost.verify_raw_anchors
                         continue
                     anchor = {"seq": int(rec["seq"]), "row_hash": str(rec["row_hash"])}
                     if rec.get("org_id"):

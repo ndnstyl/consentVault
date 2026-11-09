@@ -7,34 +7,30 @@
 -- Not readable by the projection: capture_source (source status, brands, origins), brand, disclosure (a grant's wording is read
 -- from the fact stored at arrival; the ledger's own grant-scope check is a security-definer trigger and still sees it), channel and
 -- purpose (the lists), credential (site keys), retention_policy (read at intake and stored), tenancy_setting, and organization except its id and status (the region, the
--- default settings). Everything else is the app's, copied at the time this runs and again whenever sync_projection_grants() is
+-- default settings). Everything else is the app's, copied at the time this runs and again whenever grant_projection_privileges() is
 -- called, which every later migration that grants the app something must do (tests/test_projection_login.py names any drift).
 --
--- The role is made once per cluster by a superuser (docker/initdb/10-roles.sh, or the managed database's master user) and the
--- app group is made a member of it there: CREATE ROLE consentvault_projection NOLOGIN; GRANT consentvault_projection TO
--- consentvault_app. This migration refuses to run without them.
+-- The role is made once per cluster by a superuser (docker/initdb/10-roles.sh, or the managed database's master user): CREATE ROLE
+-- consentvault_projection NOLOGIN. The projection's login is a member of it and NOT of the app group (the role is never a member
+-- of anything and nothing of the app inherits it). This migration refuses to run without it. The grants are a full resync (they are
+-- revoked and granted again), and must be run once more after the vault is switched to multi-tenant mode, which withdraws some
+-- of the app's privileges: SELECT consentvault.grant_projection_privileges();
 
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'consentvault_projection') THEN
         RAISE EXCEPTION 'consentvault migration 0093 refused: the role consentvault_projection does not exist. As a superuser '
-                        '(or the managed database master user) run: CREATE ROLE consentvault_projection NOLOGIN; '
-                        'GRANT consentvault_projection TO consentvault_app'
+                        '(or the managed database master user) run: CREATE ROLE consentvault_projection NOLOGIN'
             USING ERRCODE = 'undefined_object';
     END IF;
     IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'consentvault_projection' AND (rolsuper OR rolbypassrls OR rolcanlogin)) THEN
         RAISE EXCEPTION 'consentvault migration 0093 refused: consentvault_projection must be a NOLOGIN group, neither a superuser nor BYPASSRLS'
             USING ERRCODE = 'insufficient_privilege';
     END IF;
-    IF NOT pg_catalog.pg_has_role('consentvault_app', 'consentvault_projection', 'MEMBER') THEN
-        RAISE EXCEPTION 'consentvault migration 0093 refused: consentvault_app is not a member of consentvault_projection. As a '
-                        'superuser run: GRANT consentvault_projection TO consentvault_app'
-            USING ERRCODE = 'insufficient_privilege';
-    END IF;
 END
 $$;
 
-CREATE FUNCTION consentvault.sync_projection_grants() RETURNS void
+CREATE FUNCTION consentvault.grant_projection_privileges() RETURNS void
     LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
     unreadable text[] := ARRAY['capture_source', 'brand', 'disclosure', 'channel', 'purpose', 'credential', 'tenancy_setting', 'retention_policy'];
@@ -48,9 +44,25 @@ DECLARE
     c record;
     p text;
 BEGIN
+    -- start from nothing; a partition is left alone (it takes its privileges from its parent, and a partition made later has none of its own)
+    FOR r IN SELECT cl.oid, cl.relname, cl.relkind FROM pg_class cl JOIN pg_namespace n ON n.oid = cl.relnamespace
+              WHERE n.nspname = 'consentvault' AND cl.relkind IN ('r', 'p', 'v', 'm', 'S') AND NOT cl.relispartition LOOP
+        IF r.relkind = 'S' THEN
+            EXECUTE format('REVOKE ALL ON SEQUENCE consentvault.%I FROM consentvault_projection', r.relname);
+        ELSE
+            EXECUTE format('REVOKE ALL ON consentvault.%I FROM consentvault_projection', r.relname);
+        END IF;
+    END LOOP;
+    FOR r IN SELECT cl.oid, cl.relname FROM pg_class cl JOIN pg_namespace n ON n.oid = cl.relnamespace
+              WHERE n.nspname = 'consentvault' AND cl.relkind IN ('r', 'p', 'v', 'm') AND NOT cl.relispartition LOOP
+        FOR c IN SELECT a.attname FROM pg_attribute a
+                  WHERE a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped AND a.attacl IS NOT NULL LOOP
+            EXECUTE format('REVOKE ALL (%I) ON consentvault.%I FROM consentvault_projection', c.attname, r.relname);
+        END LOOP;
+    END LOOP;
     GRANT USAGE ON SCHEMA consentvault TO consentvault_projection;
     FOR r IN SELECT cl.oid, cl.relname, cl.relkind FROM pg_class cl JOIN pg_namespace n ON n.oid = cl.relnamespace
-              WHERE n.nspname = 'consentvault' AND cl.relkind IN ('r', 'p', 'v', 'm') AND cl.relname <> ALL (unreadable)
+              WHERE n.nspname = 'consentvault' AND cl.relkind IN ('r', 'p', 'v', 'm') AND NOT cl.relispartition AND cl.relname <> ALL (unreadable)
               ORDER BY cl.relname LOOP
         IF r.relname = 'organization' THEN
             EXECUTE 'GRANT SELECT (org_id, status) ON consentvault.organization TO consentvault_projection';
@@ -89,7 +101,7 @@ BEGIN
     END LOOP;
 END;
 $$;
-REVOKE ALL ON FUNCTION consentvault.sync_projection_grants() FROM PUBLIC;
+REVOKE ALL ON FUNCTION consentvault.grant_projection_privileges() FROM PUBLIC;
 
 -- The one read of the wording table the projection keeps, for a post stored by a build that did not store the wording fact beside it:
 -- whether the organisation had the wording, and what it names, AS OF the post's stored arrival (wording is immutable, so first_seen_at
@@ -104,4 +116,4 @@ $$;
 REVOKE ALL ON FUNCTION consentvault.wording_as_of(text, timestamptz) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION consentvault.wording_as_of(text, timestamptz) TO consentvault_app;
 
-SELECT consentvault.sync_projection_grants();
+SELECT consentvault.grant_projection_privileges();

@@ -1353,6 +1353,24 @@ def rebuild_cloud(settings: CloudApiSettings, org_ids, outcomes: list | None = N
     return done
 
 
+def projection_role_drift(conn: psycopg.Connection) -> list[str]:
+    """Privileges the projection role holds that the app does not (the app's own were withdrawn by the switch to multi-tenant mode
+    and the projection's were not re-synced): the names of the tables, columns and sequences. Empty when the role holds only what
+    the app does, apart from the organisation's id and status columns."""
+    rows = conn.execute(
+        "SELECT c.relname || coalesce('.' || a.attname, '') AS what FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+        " LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped AND c.relkind IN ('r','p','v','m')"
+        " WHERE n.nspname = 'consentvault' AND c.relkind IN ('r','p','v','m','S') AND ("
+        "   (c.relkind = 'S' AND has_sequence_privilege('consentvault_projection', c.oid, 'USAGE')"
+        "                    AND NOT has_sequence_privilege('consentvault_app', c.oid, 'USAGE'))"
+        "   OR (c.relkind <> 'S' AND a.attname IS NOT NULL AND (c.relname, a.attname) NOT IN (('organization', 'org_id'), ('organization', 'status'))"
+        "       AND EXISTS (SELECT 1 FROM unnest(ARRAY['SELECT','INSERT','UPDATE']) p"
+        "                    WHERE has_column_privilege('consentvault_projection', c.oid, a.attname, p)"
+        "                      AND NOT has_column_privilege('consentvault_app', c.oid, a.attname, p))))"
+        " ORDER BY 1").fetchall()
+    return [r["what"] for r in rows]
+
+
 def _projection_login_check(settings: CloudApiSettings) -> None:
     """The projection runs on its own login: a member of consentvault_projection and not of the app group, neither a superuser nor
     able to bypass row security. Anything else refuses the start, so the structural guard cannot be configured away."""
@@ -1367,6 +1385,12 @@ def _projection_login_check(settings: CloudApiSettings) -> None:
     except (ConsentVaultError, psycopg.Error) as exc:
         raise StartupRefusedError(f"the multi-tenant API cannot use the projection login: {describe(exc)}",
                                   code="startup_projection_login_unusable") from exc
+    with connect(settings.dsn) as appconn:
+        drift = projection_role_drift(appconn)
+    if drift:
+        raise StartupRefusedError("the multi-tenant API will not serve this database: the projection role holds privileges the app "
+                                  "does not (" + ", ".join(drift[:5]) + "); as the schema owner run SELECT "
+                                  "consentvault.grant_projection_privileges()", code="startup_projection_role_drift")
     if not row["projection"] or row["app"] or row["powerful"]:
         raise StartupRefusedError("the multi-tenant API will not serve this database: the projection login must be a member of "
                                   "consentvault_projection and not of consentvault_app, and neither a superuser nor BYPASSRLS",

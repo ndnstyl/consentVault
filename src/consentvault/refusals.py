@@ -22,6 +22,7 @@ PYTHON_REFUSALS: dict[str, str] = {
     "startup_migration_login_can_log_in": "a migration login can still log in outside a migration run",
     "startup_projection_login_missing": "no projection login is configured for the multi-tenant API",
     "startup_projection_login_refused": "the projection login is not a member of the projection role alone",
+    "startup_projection_role_drift": "the projection role holds a privilege the app does not (run grant_projection_privileges)",
     "startup_projection_login_unusable": "the projection login cannot connect",
     "startup_projection_settings_refused": "the settings read that every tenant post is stored with fails against this database",
     "startup_manifest_drift": "the database's security surface differs from the manifest shipped with this build",

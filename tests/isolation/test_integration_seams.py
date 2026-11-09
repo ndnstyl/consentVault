@@ -194,7 +194,7 @@ OPERATOR_COLUMNS = {
     "kms_key_ledger": "*",
     "billing_account": {"org_id", "stripe_customer_id"},
     # brand_ids and status: the site-key lookup answers a retired source by name (0015)
-    "capture_source": {"org_id", "source_id", "allowed_origins", "brand_ids", "status"},
+    "capture_source": {"org_id", "source_id", "allowed_origins", "brand_ids", "status", "retired_at"},
     # site_key_hash: the hash the site-key lookup compares (0015); never the key itself
     "credential": {"org_id", "credential_id", "source_id", "kind", "alg", "public_key", "scope", "revoked_at",
                    "site_key_hash"},

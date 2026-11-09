@@ -39,7 +39,7 @@ def test_the_projection_role_cannot_read_any_configuration_table(hw):
 
 def test_the_projection_role_holds_everything_the_app_holds_except_the_configuration(hw):
     """Drift: a table, function or sequence the app has gained and the projection has not (a migration that grants the app something
-    must call consentvault.sync_projection_grants())."""
+    must call consentvault.grant_projection_privileges())."""
     with hw.t.superuser() as su:
         tables = su.execute(
             "SELECT c.relname AS t, p AS priv FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace,"
@@ -347,3 +347,16 @@ def test_a_new_body_for_a_definer_function_the_projection_can_execute_changes_it
     changed = {k for k in before if before[k] != after.get(k)}
     assert changed == {"consentvault.resolve_site_key_times(text)"}
     assert after != PINNED_DEFINER_FUNCTIONS
+
+
+def test_the_projection_role_holds_nothing_the_app_does_not(hw):
+    """After the switch to multi-tenant mode (which withdraws the counting ids and more from the app) the projection holds no
+    privilege on a table, column or sequence that the app lacks, apart from the organisation's id and status."""
+    from consentvault.api import projection_role_drift
+
+    with api.connect(hw.cloud.settings.dsn) as conn:
+        assert projection_role_drift(conn) == []
+
+
+def test_the_app_inherits_nothing_from_the_projection_role(hw):
+    assert _can(hw, "SELECT pg_has_role('consentvault_app', 'consentvault_projection', 'MEMBER')") is False

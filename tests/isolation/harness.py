@@ -214,6 +214,7 @@ def build_tenancy(dsn: str, port: int) -> Tenancy:
         migrator.execute("SELECT consentvault.install_token_key(%s, %s)", (key.key_id, key.secret))
         home = migrator.execute("SELECT consentvault.home_org() AS h").fetchone()["h"]
         migrator.execute("SELECT consentvault.enable_multi_tenant()")
+        migrator.execute("SELECT consentvault.grant_projection_privileges()")   # multi mode withdrew some of the app's privileges
     with db.connect(operator_dsn) as operator:
         me = operator.execute("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user").fetchone()
         assert me == {"rolsuper": False, "rolbypassrls": False}, "the operator console must be bound by row security"

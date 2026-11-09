@@ -53,7 +53,6 @@ def clean_apply_surface(port: int) -> dict:
             " IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_isolation_self_test') THEN CREATE ROLE consentvault_isolation_self_test NOLOGIN; END IF;"
             " IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_restore_drill') THEN CREATE ROLE consentvault_restore_drill NOLOGIN; END IF;"
             " IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_projection') THEN CREATE ROLE consentvault_projection NOLOGIN; END IF;"
-            " IF NOT pg_has_role('consentvault_app', 'consentvault_projection', 'MEMBER') THEN GRANT consentvault_projection TO consentvault_app; END IF;"
             f" IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{OWNER}') THEN CREATE ROLE {OWNER} NOLOGIN IN ROLE consentvault_operator; END IF;"
             f" IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{MIGRATOR}') THEN CREATE ROLE {MIGRATOR} LOGIN IN ROLE {OWNER};"
             f"   ALTER ROLE {MIGRATOR} SET role = '{OWNER}'; END IF;"
@@ -65,6 +64,7 @@ def clean_apply_surface(port: int) -> dict:
     with db.connect(f"postgresql://{MIGRATOR}@127.0.0.1:{port}/{name}") as m:
         db.migrate(m)
         m.execute("SELECT consentvault.enable_multi_tenant()")  # the surface the multi-tenant API serves
+        m.execute("SELECT consentvault.grant_projection_privileges()")  # the projection role follows what multi mode withdrew
     with psycopg.connect(_admin(port, name), autocommit=True) as su:
         su.execute("SELECT consentvault_guard.pin_guards()")
         return surface.live_surface(su)

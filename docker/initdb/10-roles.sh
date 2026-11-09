@@ -13,7 +13,7 @@
 #   consentvault_worker    group role for background jobs (per-organisation worker tokens, replay-guard sweep)
 #   consentvault_records_jobs group role for the records export worker in multi-tenant mode (migration 0050); its login is a member.
 #   consentvault_isolation_self_test group role for the nightly isolation self-test (migration 0059): canary tokens only.
-#   consentvault_projection group role for the projection (migration 0093): the app's grants minus any read of the configuration tables; the app group is a member so a login can SET ROLE to it.
+#   consentvault_projection group role for the projection (migration 0093): the app's grants minus any read of the configuration tables; its login is a member of it and not of the app group.
 #   consentvault_restore_drill group role for the restore drill (migration 0059): appends the drill record only.
 #   consentvault_integrity group role for the seal, verify and anchor jobs in multi-tenant mode (migration 0048): the
 #                          per-organisation token handout and the evidence-table reads and appends those jobs make
@@ -55,7 +55,6 @@ SELECT NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_projecti
 \if :make_projection
 CREATE ROLE consentvault_projection NOLOGIN;
 \endif
-GRANT consentvault_projection TO consentvault_app;
 SELECT NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_console') AS make_console \gset
 \if :make_console
 CREATE ROLE consentvault_console NOLOGIN;

@@ -534,9 +534,11 @@ def _resolve_site_key(writer, conn, enter, backend, view: PostView, *, field_map
     if owner is not None:
         found[("vault", "site_owner")] = {"source_id": str(owner.source_id) if owner.source_id else None,
                                           "brand_ids": [str(b) for b in (owner.brand_ids or ())]}
-        if owner.state == "active":
-            found[("vault", "credential")] = {"state": "verified", "credential_id": str(owner.credential_id),
-                                              "scopes": ["capture"], "via": "edge"}
+        # The key was not read when the post arrived (that is why the lookup is repeated), so its state now is not its state then:
+        # it is stored as a fact beside the post and decides nothing. The post goes ahead under the credential the key belongs to,
+        # whatever the key's state is when the projection runs, so the history is the same whenever it is rebuilt.
+        found[("vault", "credential")] = {"state": "verified", "credential_id": str(owner.credential_id),
+                                          "scopes": ["capture"], "via": "edge", "key_state_when_read": owner.state}
         origin = next((v for n, v in env.headers if n.lower() == "origin"), "")
         found[("vault", "origin_on_list")] = origin in owner.allowed_origins
     moved_org = owner is not None and str(owner.org_id) != view.org_id

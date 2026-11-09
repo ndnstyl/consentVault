@@ -38,6 +38,8 @@ CREATE ROLE consentvault_integrity NOLOGIN;            -- the seal, verify and a
 CREATE ROLE consentvault_records_jobs NOLOGIN;         -- the records export worker in multi-tenant mode (0050); sign-in by AWS token only
 CREATE ROLE consentvault_isolation_self_test NOLOGIN;  -- the nightly isolation self-test (0059): canary tokens and reads only
 CREATE ROLE consentvault_restore_drill NOLOGIN;        -- the restore drill (0059): appends its drill record only
+CREATE ROLE consentvault_projection NOLOGIN;           -- the projection (0093): the app's grants minus any read of the configuration tables
+GRANT consentvault_projection TO consentvault_app;      -- so a login of the app group can SET ROLE to it
 CREATE ROLE consentvault_owner NOLOGIN IN ROLE consentvault_operator;
 CREATE ROLE consentvault_migrator LOGIN PASSWORD '...' IN ROLE consentvault_owner;
 ALTER ROLE consentvault_migrator SET role = 'consentvault_owner';

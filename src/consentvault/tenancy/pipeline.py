@@ -309,9 +309,10 @@ def check_source_from_settings(f: dict, stored: Mapping[str, Any]) -> None:
 def wording_at_arrival(conn: psycopg.Connection, sha256: str) -> dict:
     """What the intake saw of the wording a post names, read INSIDE the store transaction and stored beside the post: whether the
     organisation had registered it, and the brands it names. Call inside the organisation's entry, at intake only."""
-    row = conn.execute("SELECT brand_ids FROM consentvault.disclosure WHERE org_id = consentvault.current_org() AND sha256 = %s",
-                       (str(sha256),)).fetchone()
-    return {"sha256": str(sha256), "known": row is not None, "brand_ids": [str(b) for b in ((row or {}).get("brand_ids") or [])]}
+    row = conn.execute("SELECT brand_ids, channels, purposes FROM consentvault.disclosure"
+                       " WHERE org_id = consentvault.current_org() AND sha256 = %s", (str(sha256),)).fetchone()
+    return {"sha256": str(sha256), "known": row is not None, "brand_ids": [str(b) for b in ((row or {}).get("brand_ids") or [])],
+            "channels": list((row or {}).get("channels") or []), "purposes": list((row or {}).get("purposes") or [])}
 
 
 def check_wording_from_fact(f: dict, fact: Mapping[str, Any] | None) -> None:
@@ -409,7 +410,7 @@ class CapturePipeline:
 
     def capture(self, conn: psycopg.Connection, enter: Callable, req: CaptureRequest, *,
                 credential_id: uuid.UUID, link: Callable | None = None, settings: Mapping[str, Any] | None = None,
-                arrived_at: datetime | None = None) -> CaptureResult:
+                arrived_at: datetime | None = None, wording: Mapping[str, Any] | None = None) -> CaptureResult:
         """``enter(conn)`` is a context manager that opens a transaction inside the caller's tenant and yields its
         org id (``tenancy.tokens.org_transaction`` bound to the caller's token). ``link(conn, event_id)``, when given, writes the
         link from the event to the post it came from inside the transaction that writes the event, so the two stand or fall
@@ -450,7 +451,8 @@ class CapturePipeline:
         try:
             with enter(conn):
                 ev = door.write_tenant_event(conn, self.crypto, payload=req.body, region=region,
-                                    allowed_purposes=None, display=req.display, arrived_at=arrived_at, **f)
+                                    allowed_purposes=None, display=req.display, arrived_at=arrived_at,
+                                    held_wording=({"channels": wording["channels"], "purposes": wording["purposes"]} if wording else None), **f)
                 if link is not None:
                     link(conn, ev.event_id)
                 conn.execute("UPDATE consentvault.evidence_object SET status = 'committed', event_id = %s,"

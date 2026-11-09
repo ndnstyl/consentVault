@@ -234,7 +234,7 @@ def clean_purposes(
 def _validate(
     conn: psycopg.Connection, *, contact, event_type, channels, purposes, method, origin, disclosure_sha256,
     contact_kind, region, captured_at, edge_received_at, release_of_event_id, release_outcome, release_cause,
-    allowed_purposes, contact_verification,
+    allowed_purposes, contact_verification, held_wording=None,
 ) -> tuple[list[str], list[str], str, str]:
     """Every check a writer makes before it touches the chain. Returns (channels, purposes, contact kind, norm)."""
     if event_type not in EVENT_TYPES:
@@ -253,7 +253,7 @@ def _validate(
     kind, norm = normalize_contact(contact, contact_kind, region)
     held = None
     if disclosure_sha256 is not None:
-        held = disclosure_mod.get(conn, disclosure_sha256)
+        held = held_wording if held_wording is not None else disclosure_mod.get(conn, disclosure_sha256)
     elif event_type == "grant":
         raise UnknownDisclosureError("a grant must reference a disclosure the vault holds")
     if event_type == "grant":
@@ -412,6 +412,7 @@ def record_tenant_event(
     source_system_id: str | uuid.UUID | None = None,
     display: dict | None = None,
     arrived_at: datetime | None = None,
+    held_wording: dict | None = None,
 ) -> Event:
     """Append one hash-version-2 event to the current organisation's chain.
 
@@ -439,7 +440,7 @@ def record_tenant_event(
         origin=origin, disclosure_sha256=disclosure_sha256, contact_kind=contact_kind, region=region,
         captured_at=captured_at, edge_received_at=edge_received_at, release_of_event_id=release_of_event_id,
         release_outcome=release_outcome, release_cause=release_cause, allowed_purposes=allowed_purposes,
-        contact_verification=contact_verification)
+        contact_verification=contact_verification, held_wording=held_wording)
     if payload is not None and not isinstance(payload, bytes):
         raise InvalidEventError("payload must be bytes (it is stored only as a keyed hash)")
     try:

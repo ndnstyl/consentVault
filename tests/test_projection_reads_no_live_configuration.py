@@ -308,3 +308,31 @@ def test_the_repeated_site_key_lookup_takes_no_configuration_from_the_live_key()
     fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "_resolve_site_key")
     used = {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
     assert not used & {"brand_ids", "source_id", "allowed_origins"}, sorted(used & {"brand_ids", "source_id", "allowed_origins"})
+
+
+def test_no_module_keeps_state_between_intake_and_projection():
+    """A cache filled at intake (an allowed reader) and read in the projection would carry live configuration past the arrival
+    snapshot without any query to catch: no empty module-level container, no `global`, no lru_cache in a scanned module."""
+    # the safe logger's own registries and the stop-word list read from a file: none holds configuration
+    allowed = {("safelog.py", "_CLASSES"), ("safelog.py", "_DB_REFUSALS"), ("stopwords.py", "cache on _load")}
+    found = []
+    for m in MODULES:
+        tree = ast.parse((SRC / m).read_text())
+        for n in tree.body:
+            if isinstance(n, (ast.Assign, ast.AnnAssign)) and n.value is not None:
+                v = n.value
+                tgt = n.targets[0] if isinstance(n, ast.Assign) else n.target
+                empty = (isinstance(v, (ast.Dict, ast.List, ast.Set)) and not (getattr(v, "keys", None) or getattr(v, "elts", None))) or (
+                    isinstance(v, ast.Call) and getattr(v.func, "id", getattr(v.func, "attr", "")) in ("dict", "list", "set", "defaultdict", "OrderedDict", "deque")
+                    and not v.args)
+                if empty and (m, getattr(tgt, "id", "?")) not in allowed:
+                    found.append((m, getattr(tgt, "id", "?")))
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Global):
+                found.append((m, "global " + ",".join(n.names)))
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for d in n.decorator_list:
+                    if getattr(d, "id", getattr(getattr(d, "func", d), "attr", getattr(getattr(d, "func", d), "id", ""))) in ("lru_cache", "cache", "cached_property"):
+                        found.append((m, "cache on " + n.name))
+    found = [f for f in found if f not in allowed]
+    assert not found, f"state kept between intake and projection: {found}"

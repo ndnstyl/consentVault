@@ -812,6 +812,15 @@
    "defined_in": "0059_self_checks.sql"
   },
   {
+   "code": "db_inline_code_block_qgyyyr",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 14,
+   "template": "consentvault migration 0093 refused: consentvault_app is not a member of consentvault_projection. As a ",
+   "meaning": "consentvault migration 0093 refused: consentvault_app is not a member of consentvault_projection. As a",
+   "defined_in": "0093_projection_login.sql"
+  },
+  {
    "code": "db_inline_code_block_rjvzrw",
    "function": "inline_code_block",
    "signature": "",
@@ -819,6 +828,15 @@
    "template": "consentvault migration 0050 refused: the role consentvault_records_jobs does not exist. As a superuser ",
    "meaning": "consentvault migration 0050 refused: the role consentvault_records_jobs does not exist. As a superuser",
    "defined_in": "0050_records_jobs.sql"
+  },
+  {
+   "code": "db_inline_code_block_rjxnrp",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault migration 0093 refused: the role consentvault_projection does not exist. As a superuser ",
+   "meaning": "consentvault migration 0093 refused: the role consentvault_projection does not exist. As a superuser",
+   "defined_in": "0093_projection_login.sql"
   },
   {
    "code": "db_inline_code_block_rvwqpv",
@@ -873,6 +891,15 @@
    "template": "consentvault migration 0050 refused: consentvault_records_jobs must be a NOLOGIN group, neither a ",
    "meaning": "consentvault migration 0050 refused: consentvault_records_jobs must be a NOLOGIN group, neither a",
    "defined_in": "0050_records_jobs.sql"
+  },
+  {
+   "code": "db_inline_code_block_zpyvpq",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 10,
+   "template": "consentvault migration 0093 refused: consentvault_projection must be a NOLOGIN group, neither a superuser nor BYPASSRLS",
+   "meaning": "consentvault migration 0093 refused: consentvault_projection must be a NOLOGIN group, neither a superuser nor BYPASSRLS",
+   "defined_in": "0093_projection_login.sql"
   },
   {
    "code": "db_inline_code_block_zszqpx",

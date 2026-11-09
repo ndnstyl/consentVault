@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import functools
 import hashlib
 import json
 import re
@@ -32,6 +33,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
 import psycopg
+import psycopg.sql
 
 from . import edge_envelope, safelog, stopwords
 from .errors import (ClockSkewError, ConsentVaultError, EmptyConsentError, InvalidEventError, UncheckedConsentError)
@@ -209,6 +211,33 @@ class Backends:
         return self.by_intake.get(intake) or self.by_intake.get("*")
 
 
+PROJECTION_ROLE = "consentvault_projection"
+
+
+def _restricted(backend: Any) -> bool:
+    """True when every writer this process projects with works in an organisation's chain, where the projection must run under the
+    role that cannot read the configuration tables (migration 0093)."""
+    if isinstance(backend, Backends):
+        return bool(backend.by_intake) and all(getattr(b, "restricted_login", False) for b in backend.by_intake.values())
+    return bool(getattr(backend, "restricted_login", False))
+
+
+def _under_projection_login(fn):
+    """Run the projection as ``consentvault_projection``: the app's grants minus any read of the configuration tables, so a read of
+    live configuration anywhere in the projection, however it is written, raises ``permission denied`` and is an attempt (migration
+    0093). Nested calls keep the role; the role is reset on every exit."""
+    @functools.wraps(fn)
+    def wrapper(writer, conn, enter, backend, *args, **kwargs):
+        if not _restricted(backend) or conn.execute("SELECT current_user = %s AS already", (PROJECTION_ROLE,)).fetchone()["already"]:
+            return fn(writer, conn, enter, backend, *args, **kwargs)
+        conn.execute(psycopg.sql.SQL("SET ROLE {}").format(psycopg.sql.Identifier(PROJECTION_ROLE)))
+        try:
+            return fn(writer, conn, enter, backend, *args, **kwargs)
+        finally:
+            conn.execute("RESET ROLE")
+    return wrapper
+
+
 def _backend_for(backend: Any, intake: str) -> Any:
     return backend.get(intake) if isinstance(backend, Backends) else backend
 
@@ -301,6 +330,7 @@ class TenantBackend:
     the tenant's own checks). The pipeline puts the link in the transaction that writes the event."""
 
     takes_arrival = True
+    restricted_login = True   # projected under consentvault_projection (migration 0093)
 
     def __init__(self, pipeline: Any, enter_for_credential: Callable[[str, Mapping[str, Any]], Callable],
                  settings: Mapping[str, Any] | None = None, wording: Mapping[str, Any] | None = None) -> None:
@@ -337,7 +367,7 @@ class TenantBackend:
         except ApiError as exc:
             return exc.name
         return {"req": req, "credential_id": uuid.UUID(str(cred.get("credential_id"))), "credential": dict(cred), "org_id": auth.org_id,
-                "settings": settings}
+                "settings": settings, "wording": self.wording}
 
     def reroute(self, writer, conn, view: "PostView", owner, found: Mapping[tuple[str, str], Any]):
         """Store the post again in the organisation the site key belongs to, with everything known about it (the original facts,
@@ -359,7 +389,8 @@ class TenantBackend:
 
     def apply(self, conn, enter, fields: dict, link: Callable) -> str:
         result = self.pipeline.capture(conn, self.enter_for_credential(fields["org_id"], fields["credential"]), fields["req"], credential_id=fields["credential_id"],
-                                       link=link, settings=fields.get("settings"), arrived_at=fields.get("arrived_at"))
+                                       link=link, settings=fields.get("settings"), arrived_at=fields.get("arrived_at"),
+                                       wording=fields.get("wording"))
         return result.event_id
 
 
@@ -456,6 +487,7 @@ def _is_uuid(value: Any) -> bool:
     return True
 
 
+@_under_projection_login
 def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, backend: Any, view: PostView, *,
                  field_map: Any = None, raise_errors: bool = False) -> Outcome:
     """Append the event one post produces, if it produces one, and record the plain reason when it does not. Idempotent: a post
@@ -493,7 +525,7 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
                 reason = decide(reading, auth, _seen(conn, view.org_id))
             try:
                 fields = backend.prepare(conn, reading.payload, view.body, auth) if reason is None else None
-            except (MemoryError, RecursionError):   # the machine ran out, not the bytes: an attempt below, never a final reason
+            except (MemoryError, RecursionError, psycopg.Error):   # the machine or the database, not the bytes: an attempt below, never a final reason
                 raise
             except Exception as exc:  # loud-failure-exempt: the pure phase of the reader; its refusal is final and is stored below
                 _log.error("a stored post produces no event; the reason is stored beside it", error=reason_of(exc))
@@ -660,6 +692,7 @@ HALT_CAP_SECONDS = 900
 LIVE_RETRY_INTERVAL_SECONDS = 60.0
 
 
+@_under_projection_login
 def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, backend: Any, *,
                     through_seq: int | None = None, intakes: tuple[str, ...] | None = None,
                     retry_interval_s: float | None = None) -> list[Outcome]:
@@ -792,6 +825,7 @@ class TenantLedgerBackend:
     the stops and the system events whose evidence is the post itself). ``defaults`` fill fields the post does not carry."""
 
     takes_arrival = True
+    restricted_login = True
 
     def __init__(self, crypto: Any, *, defaults: Mapping[str, Any] | None = None, region: str | None = None,
                  allowed_purposes=None, enter_for_org: Callable[[str], Callable] | None = None) -> None:

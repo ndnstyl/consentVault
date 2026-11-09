@@ -104,6 +104,15 @@ def _first_attempt_of_last(cloud, org):
     return attempts_of(cloud.t, post)[0]
 
 
+def _reason_of_last(cloud, org):
+    """The named reason of the organisation's newest post: a final reason when the stored bytes and the facts stored at arrival
+    decide it (source, brand), else the class of the first error the projection met."""
+    from .cloud_harness import attempts_of, facts_of
+    post = _last_post(cloud, org)
+    final = facts_of(cloud.t, post).get("event_not_derived")
+    return final if final is not None else attempts_of(cloud.t, post)[0]
+
+
 def _facts_of_last(cloud, org):
     from .cloud_harness import facts_of
     return facts_of(cloud.t, _last_post(cloud, org))
@@ -135,9 +144,9 @@ def test_capture_stores_another_orgs_source_brand_and_wording_exactly_like_ones_
     ]
     for theirs, nobodys, name in cases:
         s1, r1 = cloud.grant(a, X, **theirs)
-        f1 = _first_attempt_of_last(cloud, a.org)
+        f1 = _reason_of_last(cloud, a.org)
         s2, r2 = cloud.grant(a, X, **nobodys)
-        f2 = _first_attempt_of_last(cloud, a.org)
+        f2 = _reason_of_last(cloud, a.org)
         # the sender is told the same thing either way (stored); the operator's record names the same reason either way
         assert s1 == s2 == 201 and r1["stored"] is r2["stored"] is True
         assert f1 == f2 == name

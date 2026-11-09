@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
+from datetime import datetime
 from dataclasses import dataclass
 
 import psycopg
@@ -51,3 +52,15 @@ def resolve_site_key(conn: psycopg.Connection, site_key: str) -> SiteKeyOwner | 
     return SiteKeyOwner(row["org_id"], row["credential_id"], row["source_id"],
                         tuple(str(b) for b in (row["brand_ids"] or ())), tuple(row["allowed_origins"] or ()),
                         row["state"])
+
+
+def resolve_site_key_times(conn: psycopg.Connection, site_key: str) -> tuple[datetime | None, datetime | None] | None:
+    """When the key was revoked and when its capture source was retired (None for a time that has not happened), or None when no
+    credential holds the key. A projection judges a key by these against the post's arrival, never by its state now."""
+    if not isinstance(site_key, str) or not SITE_KEY.match(site_key):
+        return None
+    try:
+        row = conn.execute("SELECT * FROM consentvault.resolve_site_key_times(%s)", (site_key,)).fetchone()
+    except psycopg.Error as exc:
+        raise SiteKeyLookupError(f"the site key lookup failed: {type(exc).__name__}") from exc
+    return None if row is None else (row["revoked_at"], row["source_retired_at"])

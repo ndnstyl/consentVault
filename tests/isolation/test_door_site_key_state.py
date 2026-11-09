@@ -92,3 +92,23 @@ def test_a_post_stored_again_in_its_owners_organisation_is_placed_at_its_origina
     with hw.t.operator() as o, org_transaction(o, hw.t.admin_token(a.org.org_id)):
         placed = o.execute("SELECT consentvault.arrival_at(%s, %s, now()) AS t", (a.org.org_id, made[0]["event_id"])).fetchone()["t"]
     assert placed == original   # not the time the copy was stored again
+
+
+def _outage_then_rebuild(hw, monkeypatch, **kw):
+    a = hw.cloud.a
+    key = _site_key(hw, a, **kw)
+    before = len(_events_of(hw, a.org))
+    with monkeypatch.context() as m:
+        _down(m)
+        _edge_post(hw, _envelope(key, _edge_body(a, key)))
+    api.rebuild_cloud(hw.cloud.settings, _orgs(hw))
+    api.rebuild_cloud(hw.cloud.settings, _orgs(hw))
+    return len(_events_of(hw, a.org)) - before
+
+
+def test_a_key_revoked_before_the_post_arrived_gives_no_event_even_when_the_lookup_was_down(hw, monkeypatch):
+    assert _outage_then_rebuild(hw, monkeypatch, revoke=True) == 0
+
+
+def test_a_source_retired_before_the_post_arrived_gives_no_event_even_when_the_lookup_was_down(hw, monkeypatch):
+    assert _outage_then_rebuild(hw, monkeypatch, retire=True) == 0

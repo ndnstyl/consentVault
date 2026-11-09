@@ -525,13 +525,19 @@ def _resolve_site_key(writer, conn, enter, backend, view: PostView, *, field_map
     stored beside the post as facts; a post that belongs to another organisation than the one it was stored under is stored again
     in its owner's organisation and projected there (an event cites a post of its own organisation). A lookup that is still
     failing raises: the post is not refused or counted, and it is projected again on the next run."""
-    from .tenancy.site_keys import resolve_site_key
+    from .tenancy.site_keys import resolve_site_key, resolve_site_key_times
 
     env = edge_envelope.unpack(view.body)
     site_key = next((v for n, v in env.headers if n.lower() == "x-consentvault-site-key"), None)
     owner = resolve_site_key(conn, site_key) if site_key else None
-    found: dict[tuple[str, str], Any] = {("vault", "site_key_state"): owner.state if owner else "unknown",
-                                         ("vault", "site_key_lookup"): "resolved"}
+    state = owner.state if owner else "unknown"
+    times = resolve_site_key_times(conn, site_key) if owner is not None and view.arrived_epoch is not None else None
+    if times is not None:   # the key is judged by the state it was in when the post arrived, not the state it is in now
+        arrived = datetime.fromtimestamp(view.arrived_epoch, tz=timezone.utc)
+        revoked_at, retired_at = times
+        state = "revoked" if revoked_at is not None and revoked_at <= arrived else \
+            "source_retired" if retired_at is not None and retired_at <= arrived else "active"
+    found: dict[tuple[str, str], Any] = {("vault", "site_key_state"): state, ("vault", "site_key_lookup"): "resolved"}
     signed = view.facts.get(("vault", "edge_signed_timestamp"))
     window = view.facts.get(("vault", "edge_timestamp_window_s"))
     try:
@@ -542,11 +548,12 @@ def _resolve_site_key(writer, conn, enter, backend, view: PostView, *, field_map
     if owner is not None:
         found[("vault", "site_owner")] = {"source_id": str(owner.source_id) if owner.source_id else None,
                                           "brand_ids": [str(b) for b in (owner.brand_ids or ())]}
-        # The key was not read when the post arrived (that is why the lookup is repeated), so its state now is not its state then:
-        # it is stored as a fact beside the post and decides nothing. The post goes ahead under the credential the key belongs to,
-        # whatever the key's state is when the projection runs, so the history is the same whenever it is rebuilt.
-        found[("vault", "credential")] = {"state": "verified", "credential_id": str(owner.credential_id),
-                                          "scopes": ["capture"], "via": "edge", "key_state_when_read": owner.state}
+        # The key was not read when the post arrived (that is why the lookup is repeated). Its state AT ARRIVAL is worked out from the
+        # times it was revoked and its source retired, so the history is the same whenever it is rebuilt: a key that was not active
+        # when the post arrived keeps the final reason it would have had at arrival, and a key revoked later goes ahead.
+        if state == "active":
+            found[("vault", "credential")] = {"state": "verified", "credential_id": str(owner.credential_id),
+                                              "scopes": ["capture"], "via": "edge", "key_state_now": owner.state}
         origin = next((v for n, v in env.headers if n.lower() == "origin"), "")
         found[("vault", "origin_on_list")] = origin in owner.allowed_origins
     moved_org = owner is not None and str(owner.org_id) != view.org_id

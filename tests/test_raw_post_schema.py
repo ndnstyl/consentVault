@@ -179,10 +179,12 @@ def test_the_0067_down_migration_leaves_nothing_behind_on_an_empty_vault(dsn, su
     down_0069 = (MIGRATIONS / "down" / "0071_stop_lift.sql").read_text()  # the stop lift table depends on the raw post table
     down_0073 = (MIGRATIONS / "down" / "0073_one_door_projection.sql").read_text()  # the link table's columns depend on it too
     down_0077 = (MIGRATIONS / "down" / "0077_projection_attempts.sql").read_text()  # the recorded attempts depend on it too
+    down_0081 = (MIGRATIONS / "down" / "0081_site_key_state_times.sql").read_text()
     down_0080 = (MIGRATIONS / "down" / "0080_request_keys_as_digests.sql").read_text()  # the guard function it added
     down_0079 = (MIGRATIONS / "down" / "0079_restored_copy_original_arrival.sql").read_text()  # the original arrivals depend on it
     down_0078 = (MIGRATIONS / "down" / "0078_request_key_on_the_post.sql").read_text()  # the request keys beside the posts depend on it
     with psycopg.connect(super_dsn, autocommit=True) as su:
+        su.execute(down_0081)
         su.execute(down_0080)
         su.execute(down_0079)
         su.execute(down_0078)

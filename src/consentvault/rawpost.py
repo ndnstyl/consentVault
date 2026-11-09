@@ -95,6 +95,9 @@ class RawRequest:
     # when the request first arrived, for a post stored again in another organisation than the one that first took it in: the
     # copy is placed in a person's history at this time, not at the time it was stored again
     original_arrival: datetime | None = None
+    # facts read from the database INSIDE the store, in the entered organisation, before the post is written: if the read fails
+    # nothing is stored, so no post is ever stored without them (the sender is told to resend)
+    facts_in_store: Callable[[psycopg.Connection], Iterable[Fact]] | None = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +114,7 @@ class StoredPost:
     encryption: str
     receipt: dict
     data_key: bytes | None = field(default=None, repr=False)
+    stored_facts: tuple = ()   # the facts read inside the store (``RawRequest.facts_in_store``), kept beside the post
 
     def answer(self) -> dict:
         """The 201 answer of contracts/capture-api.md section 3. Never a judgment of the post."""
@@ -272,6 +276,8 @@ class RawPostWriter:
             with ctx:
                 who = conn.execute("SELECT consentvault.current_org() AS org, consentvault.home_org() AS home,"
                                    " clock_timestamp() AS now").fetchone()
+                extra = tuple(req.facts_in_store(conn)) if req.facts_in_store is not None else ()
+            facts = (*req.facts, *extra)
             org, home = who["org"], who["home"]
             if org is None:
                 raise StoreUnavailable("no organisation is entered for the write (the home organisation was not reachable)")
@@ -299,7 +305,7 @@ class RawPostWriter:
             path_ct = self._seal(key, org, post_id, COL_PATH, path_raw)
             fact_rows = [(i, _db_text(f.source), _db_text(f.name),
                           self._seal(key, org, post_id, COL_FACT, canonical_dumps(f.value).encode("utf-8")))
-                         for i, f in enumerate(req.facts)]
+                         for i, f in enumerate(facts)]
             query_ct = self._seal(key, org, post_id, COL_QUERY, _as_bytes(req.query))
             headers_ct = self._seal(key, org, post_id, COL_HEADERS, headers_json(req.headers))
             ctx = enter(conn) if enter is not None else conn.transaction()
@@ -336,7 +342,7 @@ class RawPostWriter:
                     conn.execute("INSERT INTO consentvault.raw_post_fact (org_id, post_id, fact_id, source, name, value_ct,"
                                  " arrival_ordinal) VALUES (%s, %s, %s, %s, %s, %s, %s)",
                                  (org, post_id, uuid.uuid4(), source, name, value_ct, i))
-                for fact in req.facts:
+                for fact in facts:
                     if is_request_key(fact):
                         self.record_request_key(conn, org, post_id, fact.value)
                 if req.original_arrival is not None:
@@ -350,7 +356,7 @@ class RawPostWriter:
             raise StoreUnavailable(f"the post could not be stored: {describe(exc)}") from exc
         receipt = self._receipt(org, post_id, row["seq"], row_hash, received, body_sha)
         return StoredPost(str(org), str(post_id), row["seq"], row_hash, row["prev_hash"], received, body_sha, size,
-                          row["unusual_size"], enc, receipt, key)
+                          row["unusual_size"], enc, receipt, key, extra)
 
     def _insert_fact(self, conn: psycopg.Connection, org: uuid.UUID, post_id: uuid.UUID, key: bytes | None, fact: Fact) -> None:
         raw = canonical_dumps(fact.value).encode("utf-8")

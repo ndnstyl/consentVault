@@ -948,14 +948,11 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                     else:
                         _, org_token = self._home_token(conn)
                     enter = self._enter(org_token)
-                    if identity["claims"] is not None:   # the configuration as it stands now, kept beside the post it will project
-                        try:
-                            with enter(conn):
-                                facts.append(Fact("vault", door.TENANT_SETTINGS_FACT,
-                                                  self.pipeline.projection_settings(conn, identity["claims"].credential_id)))
-                        except (ConsentVaultError, psycopg.Error) as exc:
-                            _log.error("the settings a post is projected with could not be read at intake; the live ones will be used",
-                                       request_id=self.request_id, error=type(exc).__name__)
+                    settings_reader = None
+                    if identity["claims"] is not None:   # the configuration as it stands now, read inside the store and kept beside the post
+                        credential_id = identity["claims"].credential_id
+                        settings_reader = lambda c: [Fact("vault", door.TENANT_SETTINGS_FACT,
+                                                          self.pipeline.projection_settings(c, credential_id))]
                     # what is stored is what was received: for an edge post, the signed envelope bytes exactly
                     raw = RawRequest(
                         intake=identity["intake"], method=self.command, path=url.path, query=url.query,
@@ -963,7 +960,8 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                         kind="preflight" if preflight_inner else "post", edge_received_at=identity["edge_received_at"],
                         facts=tuple(facts), path_bytes=self.path.split("?", 1)[0].encode("latin-1", "replace"),
                         read_body=inner.body if inner is not None else None,
-                        read_headers=inner.headers if inner is not None else None)
+                        read_headers=inner.headers if inner is not None else None,
+                        facts_in_store=settings_reader)
                     stored = self.writer.write(conn, enter, raw)
             except (StoreUnavailable, ConsentVaultError, psycopg.Error) as exc:
                 _log.critical("a post could not be stored", request_id=self.request_id, error=type(exc).__name__)
@@ -1064,7 +1062,7 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                 if raw.kind == "post":
                     claims = identity["claims"]
                     view = door.PostView(stored.org_id, stored.post_id, stored.seq, raw.intake, bytes(raw.body),
-                                         {**{(f.source, f.name): f.value for f in raw.facts},
+                                         {**{(f.source, f.name): f.value for f in (*raw.facts, *stored.stored_facts)},
                                           ("__key__", "data_key"): stored.data_key}, raw.method, raw.path,
                                          stored.received_at.timestamp())
                     backend = cloud_backends(self.settings, self.pipeline)

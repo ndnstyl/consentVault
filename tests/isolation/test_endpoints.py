@@ -174,10 +174,10 @@ def test_an_unknown_purpose_or_channel_is_stored_and_the_reason_is_a_fact(cloud,
     monkeypatch.setattr(door, "HALT_CAP_SECONDS", 0)   # each post is tried on its own; the halt behind an unfinished post is tested apart
     s, r = cloud.grant(cloud.a, X, purposes=["surveys"])
     assert s == 201 and r["stored"] is True and "event_id" not in r
-    assert _first_attempt_of_last(cloud, cloud.a.org) == "UnknownPurposeError"
+    assert _reason_of_last(cloud, cloud.a.org) == "UnknownPurposeError"   # decided from the lists stored at arrival: final
     s, r = cloud.grant(cloud.a, X, channels=["fax"])
     assert s == 201 and r["stored"] is True and "event_id" not in r
-    assert _first_attempt_of_last(cloud, cloud.a.org) == "invalid_channel"
+    assert _reason_of_last(cloud, cloud.a.org) == "invalid_channel"
 
 
 def test_scopes_are_held_to_their_endpoints_and_a_capture_with_the_wrong_scope_is_stored_on_the_platform_intake(cloud):

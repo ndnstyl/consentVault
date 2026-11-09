@@ -260,14 +260,21 @@ def org_purposes(conn: psycopg.Connection) -> set[str]:
         "SELECT purpose FROM consentvault.purpose WHERE org_id = consentvault.current_org()")}
 
 
-def check_channel_purpose(conn: psycopg.Connection, channels: list[str], purposes: list[str], *,
-                          allow_star: bool, stored: Mapping[str, Any] | None = None) -> None:
-    have_ch = set(stored["channels"]) if stored and stored.get("channels") is not None else org_channels(conn)
-    bad = [c for c in channels if c not in have_ch]
+SETTINGS_KEYS = ("region", "channels", "purposes", "source_id", "source_status", "source_brand_ids")
+
+
+def settings_complete(settings: Mapping[str, Any] | None) -> bool:
+    """True when the settings stored beside a post say everything the projection decides from. A post stored without them is
+    refused by name (``settings_missing_at_arrival``) and never decided from the live configuration."""
+    return isinstance(settings, Mapping) and all(k in settings for k in SETTINGS_KEYS)
+
+
+def check_channel_purpose(channels: list[str], purposes: list[str], *, allow_star: bool, stored: Mapping[str, Any]) -> None:
+    """The channel and purpose checks, decided from the lists stored beside the post at arrival. Pure."""
+    bad = [c for c in channels if c not in set(stored["channels"])]
     if bad:
         raise ApiError("invalid_channel", f"channel(s) {bad} are not channels this organization has")
-    have_pu = set(stored["purposes"]) if stored and stored.get("purposes") is not None else org_purposes(conn)
-    bad = [p for p in purposes if p not in have_pu and not (allow_star and p == "*")]
+    bad = [p for p in purposes if p not in set(stored["purposes"]) and not (allow_star and p == "*")]
     if bad:
         raise ApiError("UnknownPurposeError", f"purpose(s) {bad} are not in this organization's configured list")
 
@@ -286,33 +293,6 @@ def check_source_from_settings(f: dict, stored: Mapping[str, Any]) -> None:
     allowed = {str(b) for b in (stored.get("source_brand_ids") or [])}
     if any(b not in allowed for b in (f.get("brand_ids") or [])):
         raise ApiError("brand_not_allowed", "a brand does not belong to this organization and source")
-
-
-def _check_source_and_brands(conn: psycopg.Connection, f: dict, credential_id: uuid.UUID,
-                             stored: Mapping[str, Any] | None = None) -> None:
-    if stored is not None and "source_brand_ids" in stored:
-        check_source_from_settings(f, stored)
-        return
-    cred = conn.execute("SELECT source_id FROM consentvault.credential WHERE org_id = consentvault.current_org()"
-                        " AND credential_id = %s", (credential_id,)).fetchone()
-    held = str(cred["source_id"]) if cred and cred["source_id"] else None
-    wanted = f.get("source_id") or held
-    if held is None or wanted != held:
-        raise ApiError("source_not_allowed", "the source does not belong to the credential")
-    f["source_id"] = held
-    src = conn.execute("SELECT to_jsonb(s) AS s FROM consentvault.capture_source s"
-                       " WHERE org_id = consentvault.current_org() AND source_id = %s", (held,)).fetchone()
-    status = stored.get("source_status") if stored and stored.get("source_status") is not None else src["s"].get("status", "active") if src else None
-    if src is None or status != "active":
-        raise ApiError("source_not_allowed", "the source does not belong to the credential or is retired")
-    brands = f.get("brand_ids") or []
-    if brands:
-        known = {str(r["brand_id"]) for r in conn.execute(
-            "SELECT brand_id FROM consentvault.brand WHERE org_id = consentvault.current_org()"
-            " AND brand_id = ANY(%s::uuid[])", (brands,))}
-        source_brands = {str(b) for b in (src["s"].get("brand_ids") or [])}
-        if any(b not in known or b not in source_brands for b in brands):
-            raise ApiError("brand_not_allowed", "a brand does not belong to this organization and source")
 
 
 def _check_disclosure(conn: psycopg.Connection, f: dict) -> None:
@@ -420,13 +400,15 @@ class CapturePipeline:
         f = dict(req.fields)
         object_id = uuid.uuid4()
         key = f"events/{object_id}"
+        if not settings_complete(settings):
+            raise ApiError("settings_missing_at_arrival", "the post was stored without the settings it is decided from")
         try:
             with enter(conn) as org:
                 require_serving(conn)
-                region = settings["region"] if settings and settings.get("region") is not None else org_region(conn, self.region)
+                region = settings["region"]
                 kind, norm = normalize(f["contact"], region)
-                check_channel_purpose(conn, f["channels"], f["purposes"], allow_star=f["event_type"] != "grant", stored=settings)
-                _check_source_and_brands(conn, f, credential_id, settings)
+                check_channel_purpose(f["channels"], f["purposes"], allow_star=f["event_type"] != "grant", stored=settings)
+                check_source_from_settings(f, settings)
                 _check_disclosure(conn, f)
                 fp, data_key = contact_key(conn, self.crypto, org, kind, norm, create=True)
                 retain = retention_until(conn, self.default_retain_years,

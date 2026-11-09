@@ -313,17 +313,28 @@ class TenantBackend:
 
     def prepare(self, conn, payload: Mapping[str, Any], body: bytes, auth: Auth) -> dict | str:
         from .tenancy.admin_base import ApiError
-        from .tenancy.pipeline import check_source_from_settings, parse_capture
+        from .tenancy.pipeline import check_channel_purpose, check_source_from_settings, parse_capture, settings_complete
 
         cred = auth.credential or {}
         try:
             req = parse_capture(dict(payload), body, tuple(cred.get("scopes") or ()))
-            if self.settings is not None and "source_brand_ids" in self.settings:
-                check_source_from_settings(dict(req.fields), self.settings)   # decided from the source as it stood at arrival: final
+            if not settings_complete(self.settings):
+                return "settings_missing_at_arrival"   # final: never decided from the live configuration
+            f = dict(req.fields)
+            # decided only from what was stored beside the post at arrival: final
+            check_channel_purpose(f["channels"], f["purposes"], allow_star=f["event_type"] != "grant", stored=self.settings)
+            check_source_from_settings(f, self.settings)
         except ApiError as exc:
             return exc.name
         return {"req": req, "credential_id": uuid.UUID(str(cred.get("credential_id"))), "credential": dict(cred), "org_id": auth.org_id,
                 "settings": self.settings}
+
+    def late_settings(self, conn, owner) -> dict:
+        """The settings of a post whose site key could not be read when it arrived: read once, when the key is first read, and
+        stored beside the post as a fact, so every later projection of it decides from the same stored answer."""
+        cred = {"credential_id": str(owner.credential_id), "scopes": ["capture"]}
+        with self.enter_for_credential(str(owner.org_id), cred)(conn):
+            return self.pipeline.projection_settings(conn, owner.credential_id)
 
     def reroute(self, writer, conn, view: "PostView", owner, found: Mapping[tuple[str, str], Any]):
         """Store the post again in the organisation the site key belongs to, with everything known about it (the original facts,
@@ -456,6 +467,7 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
 
     try:
         try:
+            base_backend = backend
             if hasattr(backend, "for_post"):
                 backend = backend.for_post(view.facts)
             reading = read_post(view.body, field_map, CODE_VERSION, intake=view.intake, context=_view_context(view))
@@ -465,6 +477,8 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
                 if isinstance(moved, Outcome):
                     return moved
                 view = moved
+                if hasattr(base_backend, "for_post"):   # the repeated lookup stored the settings beside the post: read them now
+                    backend = base_backend.for_post(view.facts)
                 reading = read_post(view.body, field_map, CODE_VERSION, intake=view.intake, context=_view_context(view))
                 auth = replace(auth_from_facts(view.facts), org_id=view.org_id)
 
@@ -567,6 +581,9 @@ def _resolve_site_key(writer, conn, enter, backend, view: PostView, *, field_map
         if state == "active":
             found[("vault", "credential")] = {"state": "verified", "credential_id": str(owner.credential_id),
                                               "scopes": ["capture"], "via": "edge", "key_state_now": owner.state}
+            late = getattr(_backend_for(backend, view.intake), "late_settings", None)
+            if late is not None:   # the post arrived while the key could not be read, so no settings were stored with it: store them now, once
+                found[("vault", TENANT_SETTINGS_FACT)] = late(conn, owner)
         origin = next((v for n, v in env.headers if n.lower() == "origin"), "")
         found[("vault", "origin_on_list")] = origin in owner.allowed_origins
     moved_org = owner is not None and str(owner.org_id) != view.org_id

@@ -263,3 +263,77 @@ def test_no_scanned_module_switches_roles():
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docs and pattern.search(node.value):
                 hits.append(m)
     assert not hits, f"role switching in the projection's modules: {hits}"
+
+
+# The body of EVERY security-definer function the projection role can execute (trigger functions included), pinned: a new body of
+# one of them, however it reads configuration, changes its hash and fails here until it is reviewed and re-pinned.
+PINNED_DEFINER_FUNCTIONS = {
+    'consentvault.arrival_at(uuid,uuid,timestamp with time zone)': '6b18ea3304067974',
+    'consentvault.arrival_key(uuid,uuid,bigint,timestamp with time zone)': '9b54b499e6e49718',
+    'consentvault.arrival_place(uuid,uuid)': '3fa6bc5f65eec684',
+    'consentvault.arrival_post_seq(uuid,uuid)': 'cf3b8ae777346900',
+    'consentvault.check_chain_head()': '7dfe756985548afb',
+    'consentvault.check_clear_contact_home_only()': 'e0342abb7255541a',
+    'consentvault.check_contact_salt()': '04044692bf122be2',
+    'consentvault.check_grant_scope()': 'e4c419982af070ed',
+    'consentvault.check_raw_post_chain()': 'f45b0a6d2d720fd4',
+    'consentvault.check_release_ref()': 'c8250d80d1981c47',
+    'consentvault.confirmation_enqueue(uuid,text)': 'ec7cb95348eb6db2',
+    'consentvault.contact_key_hold_guard()': '00c0f886a19dd358',
+    'consentvault.contact_key_of(text)': '6c31b8d7219ccae7',
+    'consentvault.contact_key_version_guard()': '28a05160227fafe5',
+    'consentvault.current_org()': 'd16fbfdef23cfef7',
+    'consentvault.current_token_claims()': '2d32d55962c8e795',
+    'consentvault.current_token_scopes()': '0fdb898050889726',
+    'consentvault.enter_org(text)': 'a6c23f04d4680708',
+    'consentvault.erasure_request_guard()': '7b9c6a30231d6920',
+    'consentvault.gate_decision_restore_guard()': '34663cb94b29ab6e',
+    'consentvault.home_org()': '2c698ccc893f53fe',
+    'consentvault.ledger_head()': 'b5d65913e7d2acad',
+    'consentvault.ledger_lock_key(uuid)': '44bccac761d17405',
+    'consentvault.operator_access_gag()': 'ecacb1d31df70f7a',
+    'consentvault.org_key_hold_guard()': 'aa4615f040df5500',
+    'consentvault.org_key_version_guard()': 'ce16e4ceb6d977b2',
+    'consentvault.raw_post_head()': '5a249dbf8e73a7e1',
+    'consentvault.receipt_of(uuid)': '2489eb6450277616',
+    'consentvault.record_display_write(uuid,bytea,bytea)': '09e4fa9642bc148e',
+    'consentvault.record_index_refresh(uuid,text,bytea,text)': '8230f5ea9cfae0af',
+    'consentvault.record_upsert(uuid,text,text)': '49d68257d084c94f',
+    'consentvault.request_counted(text)': 'ef897b3e4f393e21',
+    'consentvault.resolve_site_key(text)': 'fc6cb984c3a17d50',
+    'consentvault.resolve_site_key_times(text)': '38bd0135561a858d',
+    'consentvault.sync_advance_state(uuid,text)': 'ce7b90484821618b',
+    'consentvault.sync_echo_targets()': '7aa90a1da8441d76',
+    'consentvault.sync_enqueue(uuid,uuid,text,text,text,integer,bytea)': '28cd93d20ae861b1',
+    'consentvault.sync_enqueue_refresh(uuid,uuid,text,bytea)': 'b7de4d589566dddf',
+    'consentvault.sync_targets()': '2e5bfe044e5cf64d',
+}
+
+
+def _definer_hashes(hw):
+    import hashlib
+
+    with hw.t.superuser() as su:
+        rows = su.execute(
+            "SELECT p.oid::regprocedure::text AS sig, pg_get_functiondef(p.oid) AS d FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace"
+            " WHERE n.nspname = 'consentvault' AND p.prosecdef AND p.prokind IN ('f','p')"
+            " AND has_function_privilege('consentvault_projection', p.oid, 'EXECUTE')").fetchall()
+    return {r["sig"]: hashlib.sha256(r["d"].encode()).hexdigest()[:16] for r in rows}
+
+
+def test_every_definer_function_the_projection_can_execute_is_pinned_by_body_hash(hw):
+    assert _definer_hashes(hw) == PINNED_DEFINER_FUNCTIONS
+
+
+def test_a_new_body_for_a_definer_function_the_projection_can_execute_changes_its_hash(hw):
+    """The reviewer's mutation: resolve_site_key_times given a body that also reads the brands. The role cannot stop it (a definer
+    function runs with its owner's rights); the pin does."""
+    before = _definer_hashes(hw)
+    with hw.t.superuser() as su:
+        su.execute("CREATE OR REPLACE FUNCTION consentvault.resolve_site_key_times(p_site_key text)"
+                   " RETURNS TABLE (revoked_at timestamptz, source_retired_at timestamptz) LANGUAGE sql STABLE SECURITY DEFINER"
+                   " SET search_path = pg_catalog, pg_temp AS $$ SELECT now(), (SELECT max(retired_at) FROM consentvault.capture_source) $$")
+    after = _definer_hashes(hw)
+    changed = {k for k in before if before[k] != after.get(k)}
+    assert changed == {"consentvault.resolve_site_key_times(text)"}
+    assert after != PINNED_DEFINER_FUNCTIONS

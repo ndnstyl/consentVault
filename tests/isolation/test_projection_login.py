@@ -27,10 +27,12 @@ def _can(hw, sql, *params):
 
 
 def test_the_projection_role_cannot_read_any_configuration_table(hw):
+    app_can = [t for t in CONFIG_TABLES if _can(hw, "SELECT has_table_privilege('consentvault_app', %s, 'SELECT')", f"consentvault.{t}")]
+    assert app_can, "the check is only meaningful while the app itself can read some configuration table"
     for t in CONFIG_TABLES:
         assert _can(hw, "SELECT has_table_privilege('consentvault_projection', %s, 'SELECT')", f"consentvault.{t}") is False, t
-        assert _can(hw, "SELECT has_table_privilege('consentvault_app', %s, 'SELECT')", f"consentvault.{t}") or t in (
-            "tenancy_setting", "credential", "capture_source", "brand", "disclosure", "channel", "purpose")   # the app may; the projection may not
+        assert _can(hw, "SELECT count(*) FROM information_schema.column_privileges WHERE grantee = 'consentvault_projection'"
+                    " AND table_schema = 'consentvault' AND table_name = %s AND privilege_type = 'SELECT'", t) == 0, t
     assert _can(hw, "SELECT has_column_privilege('consentvault_projection', 'consentvault.organization', 'default_region', 'SELECT')") is False
     assert _can(hw, "SELECT has_column_privilege('consentvault_projection', 'consentvault.organization', 'status', 'SELECT')") is True
 
@@ -111,14 +113,21 @@ def test_a_planted_read_of_configuration_raises_under_the_projection_login(hw, m
     assert added == 0 and "InsufficientPrivilege" in attempts, (name, added, attempts)
 
 
-def test_the_projection_login_is_reset_after_every_projection(hw):
+def test_the_live_projection_runs_on_the_projection_login(hw, monkeypatch):
+    """The connection the live projection uses is the projection's own login, not the app's."""
+    seen = []
+    real = door.project_post
+
+    def spy(writer, conn, enter, backend, view, **k):
+        seen.append(conn.execute("SELECT current_user AS u, pg_has_role(current_user, 'consentvault_app', 'MEMBER') AS app").fetchone())
+        return real(writer, conn, enter, backend, view, **k)
+
+    monkeypatch.setattr(door, "project_post", spy)
     hw.cloud.call("/v1/events", {"contact": "+12125550472", "event_type": "revoke", "channels": ["sms"], "purposes": ["*"],
                                  "method": "keyword", "origin": "consumer", "client_nonce": str(uuid.uuid4())},
                   token=hw.cloud.token(hw.cloud.a, "capture"))
-    from consentvault.api import connect
-    with connect(hw.cloud.settings.dsn) as conn:
-        door.rebuild  # noqa: B018  (the module imports)
-        assert conn.execute("SELECT current_user <> 'consentvault_projection' AS ok").fetchone()["ok"]
+    projection_login = hw.t.projection_dsn.split("//", 1)[1].split("@", 1)[0]
+    assert seen and all(r["u"] == projection_login and r["app"] is False for r in seen), seen
 
 
 def test_a_planted_invoker_trigger_that_reads_configuration_raises_under_the_login(hw, monkeypatch):

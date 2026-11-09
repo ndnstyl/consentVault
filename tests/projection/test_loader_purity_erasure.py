@@ -1,9 +1,10 @@
 """Migration 0084 (loading a fresh database at stored arrival), the proof of purity, and the erasure stop as a post."""
 
+from .support import product_erase
 import psycopg
 import pytest
 
-from .support import (ALLOWED_KEY_CALLS, PHONE, call_with_nulls, cut_grant, door_post, grant_fields, history_row, history_rows,
+from .support import (new_database, ALLOWED_KEY_CALLS, PHONE, call_with_nulls, cut_grant, door_post, grant_fields, history_row, history_rows,
                       load_into_fresh, login_in_group, need_cutover, need_function, need_py, need_sql, need_table, purity_run, sql)
 
 spec = pytest.mark.spec_item
@@ -62,13 +63,28 @@ def test_a_session_that_sets_the_loading_setting_cannot_insert_a_post_in_the_pas
 
 
 @spec("0084.ordinary_intake_succeeds_unmarked_and_marked")
-def test_an_ordinary_intake_insert_as_the_app_role_succeeds_on_an_unmarked_and_on_a_marked_database(world):
+def test_an_ordinary_intake_insert_as_the_app_role_succeeds_on_an_unmarked_and_on_a_marked_database(world, tmp_path):
     need_table("replay_target")
+    from urllib.parse import urlparse
+
+    from conftest import MIGRATOR_ROLE, _dsn
+    from isolation.cloud_harness import Cloud
+    from isolation.harness import build_tenancy
     o = world.a
     door_post(world, o, grant_fields(o, PHONE))   # unmarked
     assert len(sql(world, "SELECT 1 FROM consentvault.raw_post WHERE org_id = %s", (o.org_id,))) >= 1
-    pytest.fail("ADAPTER TO COMPLETE: on an empty marked database an ordinary intake insert as consentvault_app succeeds (the mark does "
-                "not loosen or tighten the live path)", pytrace=False)
+    port = urlparse(world.vault.super_dsn).port
+    name = new_database(port)
+    t = build_tenancy(_dsn(port, name, MIGRATOR_ROLE), port)
+    with t.superuser() as su:
+        su.execute("INSERT INTO consentvault.replay_target DEFAULT VALUES")
+        assert su.execute("SELECT consentvault.is_replay_database() AS r").fetchone()["r"] is True
+    cloud = Cloud(t, str(tmp_path / "evidence"))
+    try:
+        status, answer = cloud.grant(cloud.a, PHONE)
+        assert status == 201 and answer.get("stored"), "the mark does not loosen or tighten the live intake path"
+    finally:
+        cloud.close()
 
 
 @spec("0084.out_of_seq_order_refused")
@@ -161,7 +177,7 @@ def test_an_erasure_stores_its_stop_as_a_post_through_the_ordinary_writer_and_th
     from consentvault import door
     o = world.a
     cut_grant(world, o, PHONE)
-    world.erase(o, PHONE)
+    product_erase(world, o.org_id, PHONE)
     posts = sql(world, "SELECT post_id, intake FROM consentvault.raw_post WHERE org_id = %s AND intake = 'erasure'", (o.org_id,))
     assert len(posts) == 1, "the erasure job stores one post of intake erasure before it deletes the contact key"
     row = history_row(world, o, str(posts[0]["post_id"]))
@@ -181,8 +197,7 @@ def test_replay_from_empty_of_a_database_holding_one_erased_contact_holds_its_er
     co = cloud.a
     assert cloud.grant(co, PHONE)[0] == 201
     fp = cloud.t.crypto.contact_fingerprint(co.org.org_id, "phone", PHONE)
-    with cloud.t.operator() as op, org_transaction(op, cloud.t.admin_token(co.org.org_id)):
-        op.execute("SELECT consentvault.erase_contact(%s)", (fp,))
+    product_erase(cloud, co.org.org_id, PHONE)
     store, first, second = purity_run(cloud)
     assert first.fingerprints == second.fingerprints == store.fingerprints
     stops = [r for r in sql(cloud, "SELECT event_type_sent FROM consentvault.post_history WHERE org_id = %s", (co.org.org_id,)) if r["event_type_sent"] in ("revoke", "suppress")]

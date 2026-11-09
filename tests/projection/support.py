@@ -140,7 +140,7 @@ def door_post(world, org, fields: dict | None = None, *, facts: list | None = No
 
 def sql(env, query: str, params=()):
     """Read out of band as the superuser; ``env`` is the contract world (``.vault``) or the cloud (``.t``)."""
-    factory = env.vault.superuser if hasattr(env, "vault") else env.t.superuser
+    factory = env.vault.superuser if hasattr(env, "vault") else env.t.superuser if hasattr(env, "t") else env.superuser
     with factory() as su:
         return su.execute(query, params).fetchall()
 
@@ -560,3 +560,34 @@ def call_fn(world, org, name: str, **values):
 def as_text(rows) -> str:
     import json as _json
     return _json.dumps(rows, default=str).lower()
+
+
+def product_erase(env, org_id, contact: str) -> dict:
+    """Erase a contact through the product's own path: the organisation's admin requests the erasure (request_erasure) and the
+    operator confirms it (confirm_erasure). The SQL function erase_contact cannot write the erasure stop as a post, so tests never
+    call it. ``env`` is the contract world or the cloud."""
+    import tempfile
+    from pathlib import Path
+
+    from consentvault import db, dbclock
+    from consentvault.providers.evidence import LocalAppendOnlyEvidenceStore
+    from consentvault.tenancy import erasure
+    from consentvault.tenancy.admin_base import ROLE_SCOPES, Ctx
+    from consentvault.tenancy.erasure import LifecycleLedger
+    from consentvault.tenancy.session import MEMBER_CREDENTIAL_PREFIX, actor_from_token
+    from consentvault.tenancy.tokens import mint_org_token
+
+    if hasattr(env, "vault"):
+        app, operator, key, crypto, app_dsn, su = env.vault.appconn, env.vault.operator, env.vault.key, env.crypto, env.vault.app_dsn, env.vault.superuser
+    else:
+        app, operator, key, crypto, app_dsn, su = env.t.app, env.t.operator, env.t.key, env.t.crypto, env.t.app_dsn, env.t.superuser
+    with su() as s:
+        member = s.execute("SELECT member_id FROM consentvault.member WHERE org_id = %s AND role = 'admin' LIMIT 1", (org_id,)).fetchone()["member_id"]
+    token = mint_org_token(key, org_id, ROLE_SCOPES["admin"], credential_id=MEMBER_CREDENTIAL_PREFIX + str(member))
+    with app() as conn, org_transaction(conn, token):
+        req = erasure.request_erasure(Ctx(conn, actor_from_token(conn), "req-test"), {"contact": contact, "reason": "the person asked"}, crypto=crypto)
+    ledger = LifecycleLedger(LocalAppendOnlyEvidenceStore(Path(tempfile.mkdtemp(prefix="cv-ledger-"))),
+                             clock=dbclock.datetime_clock(lambda: db.connect(app_dsn)))
+    with operator() as c:
+        return erasure.confirm_erasure(c, token_key=key, crypto=crypto, ledger=ledger, operator_id="op-1", request_id="req-op",
+                                       org_id=org_id, erasure_id=req["erasure_id"])

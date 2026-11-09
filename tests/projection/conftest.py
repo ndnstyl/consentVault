@@ -65,13 +65,37 @@ def cloud(request, tmp_path):
 
 
 @pytest.fixture
+def tenancy(request):
+    """The two-organisation tenancy the isolation suites build (needed by their ``hw`` fixture, imported below)."""
+    port = _loader_role(request)
+    return build_tenancy(request.getfixturevalue("dsn"), port)
+
+
+from isolation.test_hardening_wave2 import hw  # noqa: E402,F401
+
+
+@pytest.fixture
 def world(request, tmp_path):
     return Lazy(lambda: _build_world(request, tmp_path))
 
 
+def _record_idempotency(stack):
+    """The effects layer hands the provider the intent id as ``idempotency_key``; the shared fakes take no such argument, so each fake
+    is wrapped here to accept it and keep it (``stack.twilio.idempotency_keys``, ``stack.email.idempotency_keys``)."""
+    for fake in (stack.twilio, stack.email):
+        fake.idempotency_keys = []
+        real = fake.send
+
+        def send(creds, _real=real, _fake=fake, **kw):
+            _fake.idempotency_keys.append(kw.pop("idempotency_key", None))
+            return _real(creds, **kw)
+        fake.send = send
+    return stack
+
+
 @pytest.fixture
 def stack(world):
-    lazy = Lazy(lambda: build_stack(world), needs=[world])
+    lazy = Lazy(lambda: _record_idempotency(build_stack(world)), needs=[world])
     world._after(lazy._get)
     return lazy
 

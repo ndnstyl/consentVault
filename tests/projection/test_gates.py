@@ -2,6 +2,7 @@
 own control (a planted fault the check must report, or a forced failure that must return nothing), so a check that cannot fail
 cannot pass. The call shapes the build must provide are listed in support.py."""
 
+from .support import product_erase
 import hashlib
 import json
 
@@ -148,7 +149,7 @@ def test_gate_7_the_chain_verifies_from_the_newest_anchor_after_an_erasure_and_a
     cut_grant(world, o, PHONE)
     last = cut_grant(world, o, PHONE2)
     integrity.anchor_every_org(integrity_conn(world), str(tmp_path / "anchors.jsonl"))
-    world.erase(o, PHONE)
+    product_erase(world, o.org_id, PHONE)
     assert sql(world, "SELECT 1 FROM consentvault.contact_key WHERE org_id = %s AND contact_fp = %s", (o.org_id, o.fp(PHONE))) == []
     assert sql(world, "SELECT * FROM consentvault.history_chain_breaks()") == []
     assert "break" not in json.dumps(integrity.verify_chain_every_org(integrity_conn(world), sink_file=str(tmp_path / "anchors.jsonl")), default=str).lower()
@@ -179,6 +180,6 @@ def test_gate_9_matching_is_exact_on_the_normalised_contact_under_a_versioned_ru
     a = door_post(world, o, grant_fields(o, "+13055550142"))
     b = door_post(world, o, grant_fields(o, "(305) 555-0142"))
     c = door_post(world, o, grant_fields(o, "+13055550143"))
-    rows = {r["post_id"]: r for r in history_rows(world, o)}
+    rows = {str(r["post_id"]): r for r in history_rows(world, o)}
     assert rows[a]["contact_fp"] == rows[b]["contact_fp"] != rows[c]["contact_fp"]
     assert all(r["rule_set_version"] for r in rows.values()), "the normalisation rule is named by its version"

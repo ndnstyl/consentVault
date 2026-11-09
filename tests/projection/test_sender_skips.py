@@ -7,6 +7,7 @@ The reason is read where an operator reads it today, the sends list. The last te
 the message goes out once with the intent id as the provider's idempotency key.
 """
 
+from .support import product_erase
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -79,7 +80,7 @@ CASES = [
     ("rule_off_no_row", "rule_off", None,
      lambda w, s: force(w, "DELETE FROM consentvault.confirmation_rule WHERE org_id = %s AND channel = 'sms'", (w.a.org_id,)),
      lambda w, s: _put_rule(w.a)),
-    ("contact_erased", "contact_erased", None, lambda w, s: w.erase(w.a, PHONE_NY), None),
+    ("contact_erased", "contact_erased", None, lambda w, s: product_erase(w, w.a.org_id, PHONE_NY), None),
     ("channel_not_in_grant", "channel_not_in_grant", _before_email_only, None, None),
     ("contact_kind", "contact_kind", _before_email_kind, None, None),
     ("brand_not_in_grant", "brand_not_in_grant", _before_rule_brand, None, None),
@@ -165,19 +166,19 @@ def _second_run(world, stack, state, contact):
         stack.run()
         return second
     box = {}
-    real = type(stack.twilio).send
+    real = stack.twilio.send   # the instance's recording wrapper (conftest), so the idempotency key is still kept
 
-    def blocking(self, creds, **kw):
+    def blocking(creds, **kw):
         if "second" not in box:
             box["second"] = cut_grant(world, o, contact)
             stack.run()   # a second worker runs while the first intent is claimed and the provider call has not returned
-        return real(self, creds, **{k: v for k, v in kw.items() if k != "idempotency_key"})
+        return real(creds, **kw)
 
-    type(stack.twilio).send = blocking
+    stack.twilio.send = blocking
     try:
         stack.run()
     finally:
-        type(stack.twilio).send = real
+        stack.twilio.send = real
     return box["second"]
 
 
@@ -212,22 +213,14 @@ def _hold_first_cap(world, state):
 
 
 @pytest.mark.spec_item("5.sends_once_with_intent_id")
-def test_a_pending_intent_with_every_check_passing_is_sent_once_with_its_intent_id_as_the_idempotency_key(world, stack, armed, monkeypatch):
+def test_a_pending_intent_with_every_check_passing_is_sent_once_with_its_intent_id_as_the_idempotency_key(world, stack, armed):
     need_cutover()
     o = world.a
-    seen = []
-    real = type(stack.twilio).send
-
-    def spy(self, creds, **kw):
-        seen.append(kw)
-        return real(self, creds, **{k: v for k, v in kw.items() if k != "idempotency_key"})
-
-    monkeypatch.setattr(type(stack.twilio), "send", spy)
     post = cut_grant(world, o, PHONE_NY)
     (intent,) = [i for i in confirmation_intents(world, o, post) if i["channel"] == "sms"]
     stack.run()
     stack.run()   # a second pass sends nothing more
-    assert len(stack.twilio.sent) == 1 and len(seen) == 1
-    assert seen[0]["idempotency_key"] == str(intent["intent_id"])
+    assert len(stack.twilio.sent) == 1
+    assert stack.twilio.idempotency_keys == [str(intent["intent_id"])]
     (after,) = [i for i in confirmation_intents(world, o, post) if i["channel"] == "sms"]
     assert after["state"] == "sent"

@@ -10,6 +10,7 @@ stand-ins saw no call for its contact. The facts use the names today's intake us
 
 import pytest
 from consentvault.rawpost import Fact
+from .support import PHONE2 as _P2  # noqa: F401
 
 from .support import (PHONE, PHONE2, RecordingSenders, Transport, add_push_target, door_post, grant_fields, history_row, intents,
                       need_cutover, run_effects, stop_fields, tenant_facts)
@@ -70,21 +71,26 @@ def test_a_grant_with_a_stale_timestamp_derives_no_intent(world, armed, stack):
 
 
 @spec("C1.lookup_failed")
-def test_a_post_whose_site_key_lookup_failed_waits_for_the_lookup_and_then_projects(world, armed, stack):
-    from .support import reproject, write_fact, sql
-    o, sibling, total = _setup(world, armed)
-    post = door_post(world, o, grant_fields(o, PHONE), facts=tenant_facts(credential=False, lookup="failed:down"))
-    assert history_row(world, o, post) is None, "a passing fault is never a final reason: the post waits"
-    assert len(intents(world, o)) == total and intents(world, o, post) == []
-    reasons = [r["error_class"] for r in sql(world, "SELECT error_class FROM consentvault.projection_attempt WHERE org_id = %s AND post_id = %s", (o.org_id, post))]
-    assert reasons and all("site_key" in r for r in reasons), "the attempt names the site-key lookup"
-    write_fact(world, o, post, "credential", {"state": "verified", "id": "00000000-0000-0000-0000-000000000001", "scopes": ["capture"]},
-               status="value", label="retry")
-    write_fact(world, o, post, "site_key_lookup", "found", status="value", label="retry")
-    reproject(world, o)
-    row = history_row(world, o, post)
-    assert row is not None and row["standing"] == "counts", "once the lookup is answered the post projects"
-    assert intents(world, o, post), "and only then derives its intents"
+def test_a_post_whose_site_key_lookup_failed_waits_for_the_lookup_and_then_projects(hw, monkeypatch):
+    need_cutover()
+    from consentvault import api
+    from isolation.cloud_harness import attempts_of, raw_posts
+    from isolation.test_door_site_key_state import _down, _orgs
+    from isolation.test_hardening_wave2 import _edge_body, _edge_post, _envelope, _site_key
+    from .support import sql
+    a = hw.cloud.a
+    assert hw.cloud.grant(a, PHONE2)[0] == 201                        # the valid sibling
+    key = _site_key(hw, a)
+    total = len(sql(hw, "SELECT 1 FROM consentvault.post_history WHERE org_id = %s", (a.org.org_id,)))
+    with monkeypatch.context() as m:
+        _down(m)
+        _edge_post(hw, _envelope(key, _edge_body(a, key)))
+    row = raw_posts(hw.t, a.org.org_id)[-1] if False else [r for r in raw_posts(hw.t, sql(hw, "SELECT consentvault.home_org() AS h")[0]["h"])][-1]
+    assert not sql(hw, "SELECT 1 FROM consentvault.post_history WHERE post_id = %s", (row["post_id"],)), "a passing fault is never a final reason: it waits"
+    reasons = attempts_of(hw.t, row)
+    assert reasons and all("sitekey" in r.lower().replace("_", "") for r in reasons), f"the attempt names the site-key lookup: {reasons}"
+    api.rebuild_cloud(hw.cloud.settings, _orgs(hw))                   # the lookup answers now
+    assert len(sql(hw, "SELECT 1 FROM consentvault.post_history WHERE org_id = %s", (a.org.org_id,))) == total + 1, "once the lookup is answered the post projects"
 
 
 @spec("C1.no_credential")

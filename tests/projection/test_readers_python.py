@@ -4,6 +4,7 @@ Each test runs where a grant or a stop arrived after the cutover and exists only
 the history row exists and the frozen event table got nothing), so a reader still answering from the event table cannot pass.
 Item 5 (the sender) and item 39 are in test_sender_skips.py."""
 
+from .support import product_erase
 import json
 
 import pytest
@@ -59,7 +60,8 @@ def test_3_the_page_of_a_post_cutover_grant_shows_its_channels(world, stack, arm
     stack.run()
     token = re.search(r"/c/r/([\w-]+)", stack.twilio.sent[0]["body"]).group(1)
     page = stack.public("GET", f"/c/r/{token}", host="consent.example.com")
-    assert page.status == 200 and "text" in json.dumps(page.payload, default=str).lower() and "call" in json.dumps(page.payload, default=str).lower()
+    text = (page.raw.decode("utf-8", "replace") if page.raw is not None else json.dumps(page.payload, default=str)).lower()
+    assert page.status == 200 and "text" in text and "call" in text
 
 
 @spec("item4")
@@ -70,7 +72,7 @@ def test_4_a_reply_from_a_post_cutover_grants_contact_is_found(world, stack, arm
     cut_grant(world, o, PHONE_NY)
     stack.inbound(armed.twilio_key, {"From": PHONE_NY, "To": OUR_NUMBER, "Body": "hello", "MessageSid": "SM" + uuid.uuid4().hex[:30]})
     (reply,) = replies(o.boss)
-    assert reply["record_id"] == world.record_id(o, PHONE_NY)
+    assert reply["matched_record_id"] == world.record_id(o, PHONE_NY)
 
 
 @spec("item6")
@@ -138,10 +140,26 @@ def test_10_a_broken_history_prev_hash_fails_verification(world):
 
 
 @spec("item11")
-def test_11_a_post_cutover_stop_is_found_and_a_lift_is_written_to_the_history_lift_table(world):
+def test_11_a_post_cutover_stop_is_found_and_a_lift_is_written_to_the_history_lift_table(cloud, tmp_path):
     need_table("history_stop_lift")
-    pytest.fail("ADAPTER TO COMPLETE: a stop stored after cutover, then a later form consent of the same contact; lift_stops_for_post "
-                "finds the stop in history and writes one history_stop_lift row, none to the frozen stop_lift", pytrace=False)
+    need_cutover()
+    from consentvault import door, lift, rawpost
+    from consentvault.providers.evidence import LocalAppendOnlyEvidenceStore
+    from consentvault.tenancy.pipeline import ReceiptSigner
+    from consentvault.tenancy.tokens import org_transaction
+    from test_stop_lift import _lift, _post
+    t, org, contact = cloud.t, cloud.t.a, PHONE2
+    with t.app() as app, org_transaction(app, t.token(org)):
+        door.record_observed(app, t.crypto, intake="stop_page", enter=lambda c: c.transaction(), region="US", fields=dict(
+            contact=contact, event_type="revoke", channels=["sms"], purposes=["*"], method="checkbox", origin="consumer",
+            source_id=org.source_id, recorded_by="stop-page"))
+    writer = rawpost.RawPostWriter(crypto=t.crypto, store=LocalAppendOnlyEvidenceStore(str(tmp_path / "ev")), receipts=ReceiptSigner.generate(key_id="k1"))
+    stored = _post(t, writer, org, contact=contact)
+    before = sql(cloud, "SELECT count(*) AS n FROM consentvault.stop_lift WHERE org_id = %s", (org.org_id,))[0]["n"]
+    result = _lift(t, writer, org, stored)
+    assert len(result.linked) == 1, result
+    assert sql(cloud, "SELECT count(*) AS n FROM consentvault.history_stop_lift WHERE org_id = %s", (org.org_id,))[0]["n"] == 1
+    assert sql(cloud, "SELECT count(*) AS n FROM consentvault.stop_lift WHERE org_id = %s", (org.org_id,))[0]["n"] == before, "none in the frozen table"
 
 
 @spec("item12")
@@ -182,18 +200,29 @@ def test_15_a_second_erasure_request_after_cutover_finds_the_first_stop(world):
     need_cutover()
     o = world.a
     cut_grant(world, o, PHONE)
-    world.erase(o, PHONE)
+    product_erase(world, o.org_id, PHONE)
     try:
-        world.erase(o, PHONE)
+        product_erase(world, o.org_id, PHONE)
     except Exception:  # noqa: BLE001  (the second request may be refused by name; what matters is that it wrote no second stop)
         pass
     assert len(sql(world, "SELECT 1 FROM consentvault.raw_post WHERE org_id = %s AND intake = 'erasure'", (o.org_id,))) == 1
 
 
 @spec("item16")
-def test_16_a_post_cutover_contact_is_offboarded(world):
+def test_16_a_post_cutover_contact_is_offboarded(cloud):
     need_cutover()
-    pytest.fail("ADAPTER TO COMPLETE: offboard.build_final_export lists a contact whose only rows are in history", pytrace=False)
+    from datetime import datetime, timezone
+    from consentvault.evidence import LocalEcdsaSigner
+    from consentvault.tenancy.offboard import build_final_export
+    from consentvault.tenancy.tokens import org_transaction
+    co, t = cloud.a, cloud.t
+
+    def count():
+        with t.app() as app, org_transaction(app, t.admin_token(co.org.org_id)):
+            return build_final_export(app, t.crypto, LocalEcdsaSigner.generate("k", 1), now=datetime.now(timezone.utc))[1]["contacts"]
+    before = count()
+    assert cloud.grant(co, "+13055550166")[0] == 201
+    assert count() == before + 1, "a contact whose only rows are in history is in the final export"
 
 
 @spec("item17")
@@ -210,21 +239,50 @@ def test_17_a_post_cutover_contact_shows_in_the_records_admin(world):
 
 
 @spec("item18")
-def test_18_a_post_cutover_contact_is_found_by_the_restore_job(world):
+def test_18_a_post_cutover_contact_is_found_by_the_restore_job(cloud):
     need_cutover()
-    pytest.fail("ADAPTER TO COMPLETE: restore._replay_stop checks the contact exists in history, not in the event table", pytrace=False)
+    from consentvault.tenancy.restore import _replay_stop
+    from consentvault.tenancy.tokens import org_transaction
+    co, t = cloud.a, cloud.t
+    assert cloud.grant(co, "+13055550167")[0] == 201
+    done = product_erase(cloud, co.org.org_id, "+13055550167")
+    fp = t.crypto.contact_fingerprint(co.org.org_id, "phone", "+13055550167")
+    before = len(sql(cloud, "SELECT 1 FROM consentvault.raw_post WHERE org_id = %s AND intake = 'erasure'", (co.org.org_id,)))
+    n = {"stops_present": 0, "stops_replayed": 0, "stops_superseded": [], "failed_checks": []}
+    with t.app() as app, org_transaction(app, t.admin_token(co.org.org_id)):
+        _replay_stop(app, t.crypto, {"contact_fp": fp, "erasure_id": done["erasure_id"], "seq": 0, "channels": ["sms"]}, n, set())
+    assert len(sql(cloud, "SELECT 1 FROM consentvault.raw_post WHERE org_id = %s AND intake = 'erasure'", (co.org.org_id,))) == before, \
+        "the restore finds the erasure stop that exists only in history and writes no second one"
+    assert n["stops_present"] == 1 and not n["failed_checks"]
 
 
 @spec("item33")
-def test_33_the_anchor_command_reads_history_head(world):
+def test_33_the_anchor_command_reads_history_head(cloud, tmp_path):
     need_function("history_head")
-    pytest.fail("ADAPTER TO COMPLETE: cmd_anchor.anchor_tenants anchors history_head() for an organisation whose only rows are history", pytrace=False)
+    need_cutover()
+    from consentvault.cmd_anchor import anchor_tenants
+    from consentvault.evidence import LocalEcdsaSigner
+    from consentvault.providers.anchors import FileAnchorSink
+    co = cloud.a
+    assert cloud.grant(co, PHONE)[0] == 201
+    worker = login_in_group(cloud, "consentvault_worker")
+    with cloud.t.app() as app:
+        results = anchor_tenants(worker, app, LocalEcdsaSigner.generate("k", 1), lambda org: FileAnchorSink(tmp_path / f"{org}.jsonl"))
+    (mine,) = [r for r in results if r["org_id"] == str(co.org.org_id)]
+    head = sql(cloud, "SELECT row_hash FROM consentvault.post_history WHERE org_id = %s ORDER BY history_seq DESC LIMIT 1", (co.org.org_id,))[0]["row_hash"]
+    assert mine["status"] == "published" and mine["row_hash"] == head, "the anchored head is the history head, not the frozen event head"
 
 
 @spec("item34")
 def test_34_the_seal_command_seals_a_post_cutover_row(world, request):
     need_function("unsealed_history")
-    pytest.fail("ADAPTER TO COMPLETE: cmd_seal reads unsealed_history and seals the row", pytrace=False)
+    from consentvault import integrity
+    o = world.a
+    post = cut_grant(world, o, PHONE)
+    eid = history_event_id(world, o, post)
+    done = integrity.seal_every_org(integrity_conn(world), request.getfixturevalue("tsa").url, 100, backoff=0)   # what the seal command runs
+    assert eid in {str(e) for ids in done.values() for e in ids}
+    assert eid not in {str(r["event_id"]) for r in sql(world, "SELECT * FROM consentvault.unsealed_history()")}
 
 
 @spec("item35")

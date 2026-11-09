@@ -13,8 +13,8 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 |---|---|---|
 | item 1 | `test_1_the_anchor_command_anchors_the_history_head` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 2 | `test_2_a_confirmation_for_a_post_cutover_grant_resolves_its_contact` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
-| item 3 | `test_3_the_page_of_a_post_cutover_grant_shows_its_channels` in `test_readers_python.py` | E   IndexError: list index out of range |
-| item 4 | `test_4_a_reply_from_a_post_cutover_grants_contact_is_found` in `test_readers_python.py` | E   KeyError: 'record_id' |
+| item 3 | `test_3_the_page_of_a_post_cutover_grant_shows_its_channels` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
+| item 4 | `test_4_a_reply_from_a_post_cutover_grants_contact_is_found` in `test_readers_python.py` | E   AssertionError: [] |
 | item 5 | `test_a_pending_intent_skips_with_the_old_reason_ends_terminal_and_a_rerun_after_clearing_sends_nothing[rule_off_no_row]` in `test_sender_skips.py` | PASSES TODAY (not a failing test) |
 | item 5 | `test_a_pending_intent_skips_with_the_old_reason_ends_terminal_and_a_rerun_after_clearing_sends_nothing[contact_erased]` in `test_sender_skips.py` | PASSES TODAY (not a failing test) |
 | item 5 | `test_a_pending_intent_skips_with_the_old_reason_ends_terminal_and_a_rerun_after_clearing_sends_nothing[channel_not_in_grant]` in `test_sender_skips.py` | PASSES TODAY (not a failing test) |
@@ -47,14 +47,14 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | item 8 | `test_8_the_contact_check_finds_a_post_cutover_stop_and_logs_the_retrieval` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 9 | `test_9_a_stored_post_with_no_history_row_and_no_reason_is_reported` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 10 | `test_10_a_broken_history_prev_hash_fails_verification` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
-| item 11 | `test_11_a_post_cutover_stop_is_found_and_a_lift_is_written_to_the_history_lift_table` in `test_readers_python.py` | ADAPTER TO COMPLETE: a stop stored after cutover, then a later form consent of the same contact; lift_stops_for_post finds the stop in histo |
+| item 11 | `test_11_a_post_cutover_stop_is_found_and_a_lift_is_written_to_the_history_lift_table` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 12 | `test_12_the_proof_of_a_post_cutover_contact_lists_its_rows_and_logs_the_retrieval` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 13 | `test_13_a_post_cutover_contact_gets_a_record` in `test_readers_python.py` | E   AssertionError: [] |
 | item 14 | `test_14_a_post_cutover_row_is_sealed_into_the_history_seal_table` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
-| item 15 | `test_15_a_second_erasure_request_after_cutover_finds_the_first_stop` in `test_readers_python.py` |      +    where [] = sql(<contract_world.fixtures.Lazy object at 0x10aa6b0b0>, "SELECT 1 FROM consentvault.raw_post WHERE org_id = %s AND in |
-| item 16 | `test_16_a_post_cutover_contact_is_offboarded` in `test_readers_python.py` | ADAPTER TO COMPLETE: offboard.build_final_export lists a contact whose only rows are in history |
+| item 15 | `test_15_a_second_erasure_request_after_cutover_finds_the_first_stop` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
+| item 16 | `test_16_a_post_cutover_contact_is_offboarded` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 17 | `test_17_a_post_cutover_contact_shows_in_the_records_admin` in `test_readers_python.py` | E   AssertionError: [] |
-| item 18 | `test_18_a_post_cutover_contact_is_found_by_the_restore_job` in `test_readers_python.py` | ADAPTER TO COMPLETE: restore._replay_stop checks the contact exists in history, not in the event table |
+| item 18 | `test_18_a_post_cutover_contact_is_found_by_the_restore_job` in `test_readers_python.py` | E   assert (0 == 1) |
 | item 19 | `test_19_the_permission_view_is_rebuilt_over_history_and_the_contact_check_does_not_need_it` in `test_readers_sql_and_history.py` | E   AssertionError: assert ('post_history' in ' with exploded as (\n         select e.org_id,\n            e.contact_kind,\n            e.co |
 | item 19 | `test_19_with_the_derived_view_switched_off_the_sender_still_skips_on_the_stop_and_the_contact_check_answers` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 20 | `test_20_a_post_cutover_stop_advances_its_sync_state_and_the_person_state_reads_stopped` in `test_readers_sql_and_history.py` | E   assert 0 > 0 |
@@ -62,21 +62,21 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | item 22 | `test_22_a_post_cutover_grant_updates_its_record_index_without_the_event_table` in `test_readers_sql_and_history.py` | E   AssertionError: [] |
 | item 23 | `test_23_receipt_of_returns_the_receipt_of_a_post_cutover_post` in `test_readers_sql_and_history.py` |     assert 'post_history' in 'create or replace function consentvault.receipt_of(p_event_id uuid)\n returns table(seq bigint, row_hash text, |
 | item 24 | `test_24_the_record_doc_check_of_a_history_only_post_reads_its_completeness` in `test_readers_sql_and_history.py` | E   assert ('completeness' in "create or replace function consentvault.record_doc_check(p_event_id uuid, p_version integer, p_present text[] |
-| item 25 | `test_25_the_health_and_usage_counts_count_a_post_cutover_post` in `test_readers_sql_and_history.py` |      +      where {'org_id': '18f3d851-6782-43a1-b1c7-60f2144d69f7', 'contact_fp': '32310c5bd74170dee0b1ecc157b9990056fc05d0786be50537ab...7 |
+| item 25 | `test_25_the_health_and_usage_counts_count_a_post_cutover_post` in `test_readers_sql_and_history.py` |      +      where {'org_id': '0d526c97-9d45-4f1e-ac39-60d57bcb0d12', 'contact_fp': 'ef1773ce1b41feb970a726c54a9364fe67072b57cb77cb9d425c...c |
 | item 26 | `test_26_an_erasure_after_cutover_covers_the_contacts_history_rows` in `test_readers_sql_and_history.py` |                           ^ |
 | item 27 | `test_27_the_stop_lift_guard_moves_to_the_history_lift_table_with_a_key_to_history` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 28 | `test_28_each_table_that_cited_an_event_can_cite_a_history_event_and_loses_no_column[send_intent]` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 28 | `test_28_each_table_that_cited_an_event_can_cite_a_history_event_and_loses_no_column[reply]` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 28 | `test_28_each_table_that_cited_an_event_can_cite_a_history_event_and_loses_no_column[source_post]` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 29 | `test_29_a_sealed_history_row_re_verifies` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
-| item 29 | `test_29_a_history_row_changed_after_sealing_fails` in `test_readers_sql_and_history.py` | E   consentvault.integrity.IntegrityRunError: verify_seals could not complete 1 organisation(s): organisation 4bafe83d-59e6-46d7-93cc-ecdf8a |
+| item 29 | `test_29_a_history_row_changed_after_sealing_fails` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 29 | `test_29_adding_a_column_to_the_history_table_fails_no_existing_seal` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 30 | `test_30_the_history_chain_verifies_from_the_newest_anchor_after_an_erasure_with_the_key_gone` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 31 | `test_31_two_exports_a_minute_apart_log_the_same_payload_hash_and_each_log_row_hash_is_the_payload_sha256` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 31 | `test_31_a_read_whose_log_row_cannot_be_written_returns_nothing_and_raises` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 32 | `test_32_a_capture_post_missing_ip_page_and_form_version_projects_with_those_three_absent_and_the_rest_present` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
-| item 33 | `test_33_the_anchor_command_reads_history_head` in `test_readers_python.py` | ADAPTER TO COMPLETE: cmd_anchor.anchor_tenants anchors history_head() for an organisation whose only rows are history |
-| item 34 | `test_34_the_seal_command_seals_a_post_cutover_row` in `test_readers_python.py` | ADAPTER TO COMPLETE: cmd_seal reads unsealed_history and seals the row |
+| item 33 | `test_33_the_anchor_command_reads_history_head` in `test_readers_python.py` |       + afdb5aa31ef80784175990c78772686ee769604367bdd0e479405d763cff7254) |
+| item 34 | `test_34_the_seal_command_seals_a_post_cutover_row` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 35 | `test_35_integrity_reports_an_unsealed_post_cutover_row_and_its_head_equals_the_history_head` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 36 | `test_36_the_bundles_head_equals_the_history_head_and_the_derived_view_is_labelled` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 37 | `test_37_after_cutover_the_old_append_path_is_refused_by_name` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
@@ -100,7 +100,7 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | gate6 | `test_gate_6_a_year_of_clock_and_different_lookups_change_no_row_and_the_forged_post_is_recorded_not_refused` in `test_gates.py` | PASSES TODAY (not a failing test) |
 | gate7 | `test_gate_7_the_chain_verifies_from_the_newest_anchor_after_an_erasure_and_a_tamper_is_caught` in `test_gates.py` | PASSES TODAY (not a failing test) |
 | gate8 | `test_gate_8_completeness_names_the_source_of_every_element_and_a_missing_one_is_a_fact_not_a_refusal` in `test_gates.py` | PASSES TODAY (not a failing test) |
-| gate9 | `test_gate_9_matching_is_exact_on_the_normalised_contact_under_a_versioned_rule` in `test_gates.py` | E   KeyError: '8dd60f33-ed3f-44a1-973f-85e3626c5191' |
+| gate9 | `test_gate_9_matching_is_exact_on_the_normalised_contact_under_a_versioned_rule` in `test_gates.py` | PASSES TODAY (not a failing test) |
 
 ## Finding C1: refused posts derive no intent
 
@@ -108,9 +108,9 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 |---|---|---|
 | C1.grant_without_source | `test_a_grant_with_no_source_derives_pushes_as_today_and_no_confirmation` in `test_intents_c1.py` | PASSES TODAY (not a failing test) |
 | C1.invalid_signature | `test_a_forged_signature_derives_no_intent` in `test_intents_c1.py` | PASSES TODAY (not a failing test) |
-| C1.lookup_failed | `test_a_post_whose_site_key_lookup_failed_waits_for_the_lookup_and_then_projects` in `test_intents_c1.py` |      +  where False = all(<generator object test_a_post_whose_site_key_lookup_failed_waits_for_the_lookup_and_then_projects.<locals>.<genexp |
+| C1.lookup_failed | `test_a_post_whose_site_key_lookup_failed_waits_for_the_lookup_and_then_projects` in `test_intents_c1.py` | PASSES TODAY (not a failing test) |
 | C1.no_credential | `test_a_tenant_post_with_no_credential_derives_no_intent` in `test_intents_c1.py` | PASSES TODAY (not a failing test) |
-| C1.second_copy | `test_a_second_copy_of_a_counted_request_derives_no_intent` in `test_intents_c1.py` |      +      where FakeTwilio(auth_token='twilio-auth-token-secret', api_key_secret='twilio-api-key-secret', numbers=('+15555550100',), i...e |
+| C1.second_copy | `test_a_second_copy_of_a_counted_request_derives_no_intent` in `test_intents_c1.py` | PASSES TODAY (not a failing test) |
 | C1.soft_stop_positive | `test_a_stop_with_a_stale_timestamp_still_counts_and_derives_its_pushes` in `test_intents_c1.py` | PASSES TODAY (not a failing test) |
 | C1.stale_grant | `test_a_grant_with_a_stale_timestamp_derives_no_intent` in `test_intents_c1.py` | PASSES TODAY (not a failing test) |
 | C1.text | `test_a_text_or_an_unreadable_body_derives_no_intent[text]` in `test_intents_c1.py` | PASSES TODAY (not a failing test) |
@@ -130,12 +130,12 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | 0080.columns | `test_0080_adds_the_status_label_order_and_chain_columns_and_nothing_changes_shape` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0080.concurrent_writers_one_chain | `test_two_concurrent_fact_writers_on_one_post_leave_one_unbroken_chain` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0080.database_computes_the_chain | `test_the_database_stamps_order_time_and_hashes_and_each_fact_chains_from_the_one_before` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
-| 0080.pre_0080_arrival_credential | `test_a_post_stored_before_the_migration_projects_using_the_credential_its_arrival_facts_hold` in `test_migrations_facts_and_history.py` | E   AttributeError: 'Tenancy' object has no attribute 't' |
+| 0080.pre_0080_arrival_credential | `test_a_post_stored_before_the_migration_projects_using_the_credential_its_arrival_facts_hold` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0080.pre_0080_no_legacy_event | `test_a_post_stored_before_the_migration_with_no_legacy_event_projects_after_the_backfill` in `test_migrations_facts_and_history.py` | ADAPTER TO COMPLETE: a pre-migration post with no event and no lookup answer gets a backfill fact set (not_found) and projects; it never wai |
 | 0080.second_succeeded_row_is_lost_race | `test_a_second_succeeded_row_for_one_post_and_name_lands_as_lost_race` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0080.two_arrival_facts_of_one_name | `test_an_arrival_carrying_two_facts_of_one_name_stores_and_the_fold_reads_the_lowest_order` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0081.replay_stores_no_new_post | `test_replay_from_empty_of_a_rerouted_post_stores_no_new_post_and_places_the_copy_at_its_original_arrival` in `test_migrations_facts_and_history.py` | ADAPTER TO COMPLETE: load a store holding one rerouted post onto a fresh database, project, and expect zero new posts, one history row per s |
-| 0081.second_reroute_fails | `test_a_second_reroute_of_one_original_fails_on_the_primary_key` in `test_migrations_facts_and_history.py` | ADAPTER TO COMPLETE: store an original in the home organisation, reroute it once through the retry lane, then insert a second reroute row fo |
+| 0081.second_reroute_fails | `test_a_second_reroute_of_one_original_fails_on_the_primary_key` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0081.table | `test_0081_makes_the_append_only_reroute_table_with_a_key_on_the_original` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0082.append_only_no_truncate_hash_version | `test_the_history_is_append_only_refuses_truncate_and_pins_the_hash_version` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0082.as_sent.capture_time_a_year_ahead | `test_a_post_that_today_is_refused_projects_to_one_row_holding_each_value_as_sent[capture_time_a_year_ahead]` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
@@ -145,7 +145,7 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | 0082.as_sent.names_a_release | `test_a_post_that_today_is_refused_projects_to_one_row_holding_each_value_as_sent[names_a_release]` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0082.as_sent.otp_claimed_under_a_site_key | `test_a_post_that_today_is_refused_projects_to_one_row_holding_each_value_as_sent[otp_claimed_under_a_site_key]` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0082.as_sent.unregistered_wording | `test_a_post_that_today_is_refused_projects_to_one_row_holding_each_value_as_sent[unregistered_wording]` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
-| 0082.backfill_rows | `test_backfill_rows_copy_the_legacy_event_and_carry_their_own_versions` in `test_migrations_facts_and_history.py` | E   AttributeError: 'Tenancy' object has no attribute 't' |
+| 0082.backfill_rows | `test_backfill_rows_copy_the_legacy_event_and_carry_their_own_versions` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0082.columns | `test_0082_makes_the_history_table_with_the_as_sent_columns_and_no_value_check` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0082.concurrent_history_inserts | `test_two_concurrent_history_inserts_for_one_organisation_never_share_a_prev_hash` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0082.erased_contact_verifies | `test_an_erased_contacts_rows_verify_with_no_contact_key_row` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
@@ -159,11 +159,11 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | 0084.loader_recomputes_fact_chain | `test_in_loader_mode_a_stored_fact_whose_computed_columns_differ_is_refused` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | 0084.loading_post_setting_refused_for_app | `test_a_session_that_sets_the_loading_setting_cannot_insert_a_post_in_the_past_as_the_app_role` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | 0084.multi_mode_mark_refused | `test_in_multi_mode_with_a_post_in_a_non_home_organisation_the_mark_is_refused` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
-| 0084.ordinary_intake_succeeds_unmarked_and_marked | `test_an_ordinary_intake_insert_as_the_app_role_succeeds_on_an_unmarked_and_on_a_marked_database` in `test_loader_purity_erasure.py` | ADAPTER TO COMPLETE: on an empty marked database an ordinary intake insert as consentvault_app succeeds (the mark does not loosen or tighten |
+| 0084.ordinary_intake_succeeds_unmarked_and_marked | `test_an_ordinary_intake_insert_as_the_app_role_succeeds_on_an_unmarked_and_on_a_marked_database` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | 0084.out_of_seq_order_refused | `test_a_post_loaded_out_of_seq_order_is_refused` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | 0084.replay_target_insert_refused_by_grant | `test_an_insert_into_replay_target_by_the_app_role_is_refused_by_the_grant` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | 0084.store_of_record_refuses_load | `test_on_the_store_of_record_load_stored_post_is_refused` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
-| 0089.between_old_stop_and_new_intake | `test_posts_between_the_old_folds_stop_and_the_new_intake_get_their_effects` in `test_cutover_0089.py` | E   AttributeError: 'Tenancy' object has no attribute 't' |
+| 0089.between_old_stop_and_new_intake | `test_posts_between_the_old_folds_stop_and_the_new_intake_get_their_effects` in `test_cutover_0089.py` | E   assert ([]) |
 | 0089.intake_writes_above | `test_from_the_cutover_deploy_on_the_intake_writes_the_watermark_fact_above_at_arrival_through_the_http_door` in `test_cutover_0089.py` | PASSES TODAY (not a failing test) |
 | 0089.one_pending_intent_per_rule_and_target | `test_one_new_grant_gives_one_pending_intent_per_enabled_rule_and_target_and_projecting_again_gives_none` in `test_cutover_0089.py` | PASSES TODAY (not a failing test) |
 | 0089.queued_stop_push_delivered | `test_a_queued_stop_push_in_the_outbox_is_delivered_by_the_effects_layer_after_cutover` in `test_cutover_0089.py` |       Use -v to get more diff) |
@@ -171,7 +171,7 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | 0089.seed_equals_queues | `test_seeded_intents_equal_the_outbox_rows_plus_the_confirmation_intents_across_every_organisation` in `test_cutover_0089.py` | PASSES TODAY (not a failing test) |
 | 0089.seed_state_mapping | `test_every_old_queue_state_maps_to_its_intent_state` in `test_cutover_0089.py` | PASSES TODAY (not a failing test) |
 | 0089.send_set_is_the_queued_rows | `test_the_new_fold_watermark_job_and_effects_send_exactly_the_seeded_pending_intents_and_the_old_worker_is_refused` in `test_cutover_0089.py` | E   Failed: DID NOT RAISE Exception |
-| 0089.watermark_below_no_intent | `test_a_post_at_or_below_the_watermark_projects_to_history_and_derives_no_intent_while_a_post_above_it_does` in `test_cutover_0089.py` | E   AttributeError: 'Tenancy' object has no attribute 't' |
+| 0089.watermark_below_no_intent | `test_a_post_at_or_below_the_watermark_projects_to_history_and_derives_no_intent_while_a_post_above_it_does` in `test_cutover_0089.py` |      +    where Tenancy(operator_dsn='postgresql://cv_test_console@127.0.0.1:57952/t_240e0a388c6e', super_dsn='postgresql://postgres@1...D(' |
 | M6.catalog.effect_intent | `test_the_table_forces_row_security_with_one_tenant_policy[effect_intent]` in `test_row_security.py` | PASSES TODAY (not a failing test) |
 | M6.catalog.effect_watermark | `test_the_table_forces_row_security_with_one_tenant_policy[effect_watermark]` in `test_row_security.py` | PASSES TODAY (not a failing test) |
 | M6.catalog.history_stop_lift | `test_the_table_forces_row_security_with_one_tenant_policy[history_stop_lift]` in `test_row_security.py` | PASSES TODAY (not a failing test) |
@@ -198,8 +198,8 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | M6.read_scope.post_history_chain_head | `test_the_evidence_tables_also_carry_the_restrictive_read_scope_policy[post_history_chain_head]` in `test_row_security.py` | PASSES TODAY (not a failing test) |
 | M6.read_scope.post_history_seal | `test_the_evidence_tables_also_carry_the_restrictive_read_scope_policy[post_history_seal]` in `test_row_security.py` | PASSES TODAY (not a failing test) |
 | M6.read_scope.retrieval_log | `test_the_evidence_tables_also_carry_the_restrictive_read_scope_policy[retrieval_log]` in `test_row_security.py` | PASSES TODAY (not a failing test) |
-| erasure.replay_agrees | `test_replay_from_empty_of_a_database_holding_one_erased_contact_holds_its_erasure_stop` in `test_loader_purity_erasure.py` |     assert [] |
-| erasure.stop_is_a_post | `test_an_erasure_stores_its_stop_as_a_post_through_the_ordinary_writer_and_the_history_cites_it` in `test_loader_purity_erasure.py` |      +  where 0 = len([]) |
+| erasure.replay_agrees | `test_replay_from_empty_of_a_database_holding_one_erased_contact_holds_its_erasure_stop` in `test_loader_purity_erasure.py` |       Use -v to get more diff |
+| erasure.stop_is_a_post | `test_an_erasure_stores_its_stop_as_a_post_through_the_ordinary_writer_and_the_history_cites_it` in `test_loader_purity_erasure.py` | E   assert (None is not None) |
 | purity.content_fingerprints | `test_the_content_fingerprints_per_label_match_each_other_and_the_store` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | purity.evidence_reads_only | `test_the_evidence_stand_in_saw_only_reads_of_each_posts_own_object` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | purity.intent_keys | `test_the_intent_key_fingerprints_match` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
@@ -212,13 +212,6 @@ Each fails today at its precondition (MISSING FEATURE). Once the feature is buil
 because the design fixes the behaviour but not the call shape (the loader's argument list, the watermark job, the backfill job, the
 restore job). The builder completes the adapter in the same change that creates the call shape.
 
-- `test_loader_purity_erasure.py::test_an_ordinary_intake_insert_as_the_app_role_succeeds_on_an_unmarked_and_on_a_marked_database`: on an empty marked database an ordinary intake insert as consentvault_app succeeds (the mark does
 - `test_migrations_facts_and_history.py::test_a_post_stored_before_the_migration_with_no_legacy_event_projects_after_the_backfill`: a pre-migration post with no event and no lookup answer gets a backfill fact set (not_found) and
-- `test_migrations_facts_and_history.py::test_a_second_reroute_of_one_original_fails_on_the_primary_key`: store an original in the home organisation, reroute it once through the retry lane, then insert a
 - `test_migrations_facts_and_history.py::test_replay_from_empty_of_a_rerouted_post_stores_no_new_post_and_places_the_copy_at_its_original_arrival`: load a store holding one rerouted post onto a fresh database, project, and expect zero new posts, one
-- `test_readers_python.py::test_11_a_post_cutover_stop_is_found_and_a_lift_is_written_to_the_history_lift_table`: a stop stored after cutover, then a later form consent of the same contact; lift_stops_for_post
-- `test_readers_python.py::test_16_a_post_cutover_contact_is_offboarded`: offboard.build_final_export lists a contact whose only rows are in history", pytrace=False)
-- `test_readers_python.py::test_18_a_post_cutover_contact_is_found_by_the_restore_job`: restore._replay_stop checks the contact exists in history, not in the event table", pytrace=False)
-- `test_readers_python.py::test_33_the_anchor_command_reads_history_head`: cmd_anchor.anchor_tenants anchors history_head() for an organisation whose only rows are history", pytrace=False)
-- `test_readers_python.py::test_34_the_seal_command_seals_a_post_cutover_row`: cmd_seal reads unsealed_history and seals the row", pytrace=False)
 

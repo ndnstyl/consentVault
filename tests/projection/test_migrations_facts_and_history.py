@@ -1,6 +1,7 @@
 """Migrations 0080 (fact status, order and chain), 0081 (reroute), 0082 (the history table), 0083 (outcomes): the yes/no tests
 the design lists under each. Every test starts with the precondition that names the missing migration piece."""
 
+from .support import product_erase
 import threading
 import uuid
 
@@ -155,10 +156,48 @@ def test_0081_makes_the_append_only_reroute_table_with_a_key_on_the_original(clo
 
 
 @spec("0081.second_reroute_fails")
-def test_a_second_reroute_of_one_original_fails_on_the_primary_key(cloud):
+def test_a_second_reroute_of_one_original_fails_on_the_primary_key(hw, monkeypatch):
     need_table("raw_post_reroute")
-    pytest.fail("ADAPTER TO COMPLETE: store an original in the home organisation, reroute it once through the retry lane, then insert a "
-                "second reroute row for the same original and expect a unique violation", pytrace=False)
+    from consentvault import api
+    from isolation.test_door_site_key_state import _down, _orgs
+    from isolation.test_hardening_wave2 import _edge_body, _edge_post, _envelope, _site_key
+    a = hw.cloud.a
+    key = _site_key(hw, a)
+    with monkeypatch.context() as m:
+        _down(m)
+        _edge_post(hw, _envelope(key, _edge_body(a, key)))
+    api.rebuild_cloud(hw.cloud.settings, _orgs(hw))
+    (row,) = sql(hw, "SELECT * FROM consentvault.raw_post_reroute WHERE to_org = %s", (a.org.org_id,))
+    with hw.t.superuser() as su:
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            su.execute("INSERT INTO consentvault.raw_post_reroute (from_org, from_post, to_org, to_post) VALUES (%s, %s, %s, gen_random_uuid())",
+                       (row["from_org"], row["from_post"], row["to_org"]))
+
+
+@spec("0081.replay_stores_no_new_post")
+def test_replay_from_empty_of_a_rerouted_post_stores_no_new_post_and_places_the_copy_at_its_original_arrival(hw, monkeypatch):
+    need_table("raw_post_reroute")
+    need_function("load_stored_post")
+    import time
+    from consentvault import api
+    from isolation.test_door_site_key_state import _down, _orgs
+    from isolation.test_hardening_wave2 import _edge_body, _edge_post, _envelope, _site_key
+    from .support import load_into_fresh, store_snapshot
+    a = hw.cloud.a
+    key = _site_key(hw, a)
+    with monkeypatch.context() as m:
+        _down(m)
+        _edge_post(hw, _envelope(key, _edge_body(a, key)))
+    time.sleep(1.2)
+    api.rebuild_cloud(hw.cloud.settings, _orgs(hw))
+    (re,) = sql(hw, "SELECT r.*, p.received_at AS original FROM consentvault.raw_post_reroute r JOIN consentvault.raw_post p ON p.org_id = r.from_org"
+                    " AND p.post_id = r.from_post WHERE r.to_org = %s", (a.org.org_id,))
+    placed = sql(hw, "SELECT placed_at FROM consentvault.post_history WHERE org_id = %s AND post_id = %s", (a.org.org_id, re["to_post"]))
+    assert placed and placed[0]["placed_at"] == re["original"], "the copy sits at its original arrival"
+    store = store_snapshot(hw)
+    replay = load_into_fresh(hw.cloud)
+    assert len(replay.loaded["posts"]) == len(store.loaded["posts"]), "replay stores zero new posts"
+    assert replay.fingerprints == store.fingerprints
 
 
 @spec("0081.replay_stores_no_new_post")
@@ -234,7 +273,7 @@ def test_an_erased_contacts_rows_verify_with_no_contact_key_row(world):
     need_function("history_chain_breaks")
     o = world.a
     cut_grant(world, o, PHONE)
-    world.erase(o, PHONE)
+    product_erase(world, o.org_id, PHONE)
     assert sql(world, "SELECT 1 FROM consentvault.contact_key WHERE org_id = %s", (o.org_id,)) == []
     assert sql(world, "SELECT * FROM consentvault.history_chain_breaks()") == []
 

@@ -2,6 +2,7 @@
 the retrieval log (gate 4) and the completeness record (gate 8). SQL objects are proved by what their definition reads and, where
 the call shape is fixed by today's functions, by what they return for a post that exists only in history."""
 
+from .support import product_erase
 import hashlib
 import json
 
@@ -109,7 +110,7 @@ def test_26_an_erasure_after_cutover_covers_the_contacts_history_rows(world):
     need_cutover()
     o = world.a
     post = cut_grant(world, o, PHONE)
-    world.erase(o, PHONE)
+    product_erase(world, o.org_id, PHONE)
     cover = as_text(call_fn(world, o, "erasure_request_cover", **_vals(world, o, post)))
     assert cover and "[]" != cover, "the cover names the history rows of the erased contact"
     call_fn(world, o, "erasure_coverage_backfill", **_vals(world, o, post))
@@ -160,8 +161,9 @@ def test_29_a_history_row_changed_after_sealing_fails(world, request):
     with world.vault.superuser() as su, su.transaction():
         su.execute("SET LOCAL session_replication_role = replica")
         su.execute("UPDATE consentvault.post_history SET standing = 'changed' WHERE org_id = %s AND post_id = %s", (o.org_id, post))
-    result = integrity.verify_seals_every_org(integrity_conn(world))
-    assert post in json.dumps(result, default=str) or history_event_id(world, o, post) in json.dumps(result, default=str)
+    with pytest.raises(integrity.IntegrityRunError) as exc:
+        integrity.verify_seals_every_org(integrity_conn(world))
+    assert history_event_id(world, o, post) in str(exc.value), "the failed seal names the changed row"
 
 
 @spec("item29.new_column_fails_no_seal")
@@ -186,7 +188,7 @@ def test_30_the_history_chain_verifies_from_the_newest_anchor_after_an_erasure_w
     cut_grant(world, o, PHONE)
     cut_grant(world, o, PHONE2)
     integrity.anchor_every_org(integrity_conn(world), str(tmp_path / "anchors.jsonl"))
-    world.erase(o, PHONE)
+    product_erase(world, o.org_id, PHONE)
     assert sql(world, "SELECT 1 FROM consentvault.contact_key WHERE org_id = %s AND contact_fp = %s", (o.org_id, o.fp(PHONE))) == []
     assert sql(world, "SELECT * FROM consentvault.history_chain_breaks()") == []
 

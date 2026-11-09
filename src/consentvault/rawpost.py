@@ -416,16 +416,15 @@ class RawPostWriter:
             conn.execute("INSERT INTO consentvault.projection_outcome (org_id, post_id, outcome, detail, fold_code_version)"
                          " VALUES (%s, %s, %s, %s, %s)", (uuid.UUID(str(org_id)), uuid.UUID(str(post_id)), outcome, detail, code_version))
 
-    def read_fold_facts(self, conn: psycopg.Connection, org: uuid.UUID, post_id: uuid.UUID | str) -> dict[tuple[str, str], Any]:
+    def read_fold_facts(self, conn: psycopg.Connection, org: uuid.UUID, post_id: uuid.UUID | str,
+                        data_key: bytes | None = None) -> dict[tuple[str, str], Any]:
         """The facts the pure fold reads: per (source, name) the status-bearing row with the lowest ``fact_seq`` whose status is a
-        succeeded one. A row written before migration 0082 (no status) is never read here; the backfill writes its status-bearing copy."""
-        key = self.open_key(conn, org, post_id)
+        succeeded one (the definer ``fold_fact_rows`` reads them, so it works for the token that wrote the post). A row written before
+        migration 0082 (no status) is never read here; the backfill writes its status-bearing copy. ``data_key`` is the post's own key
+        when the caller holds it (the intake just made it); otherwise it is opened through the key provider."""
+        key = data_key if data_key is not None else self.open_key(conn, org, post_id)
         out: dict[tuple[str, str], Any] = {}
-        for r in conn.execute("SELECT source, name, value_ct FROM consentvault.raw_post_fact WHERE org_id = %s AND post_id = %s"
-                              " AND status IN ('value', 'not_found', 'not_applicable', 'unparseable') ORDER BY fact_seq",
-                              (org, uuid.UUID(str(post_id)))).fetchall():
-            if (r["source"], r["name"]) in out:
-                continue
+        for r in conn.execute("SELECT source, name, value_ct FROM consentvault.fold_fact_rows(%s)", (uuid.UUID(str(post_id)),)).fetchall():
             blob = bytes(r["value_ct"])
             if key is not None:
                 from .tenancy import crypto as tc

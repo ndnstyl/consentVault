@@ -65,13 +65,10 @@ def write_row(conn, ctx: Callable, *, org_id: str, post_id: str, fields: Mapping
         if conn.execute("SELECT 1 FROM consentvault.post_history WHERE org_id = %s AND post_id = %s",
                         (uuid.UUID(org_id), uuid.UUID(post_id))).fetchone():
             return False
-        post = conn.execute(
-            "SELECT rp.seq, rp.received_at, LEAST(rp.received_at, coalesce(oa.arrived_at, rp.received_at)) AS placed"
-            " FROM consentvault.raw_post rp LEFT JOIN consentvault.raw_post_original_arrival oa"
-            "   ON oa.org_id = rp.org_id AND oa.post_id = rp.post_id WHERE rp.org_id = %s AND rp.post_id = %s",
-            (uuid.UUID(org_id), uuid.UUID(post_id))).fetchone()
+        post = conn.execute("SELECT post_seq AS seq, received_at, placed_at AS placed FROM consentvault.fold_post_place(%s)",
+                            (uuid.UUID(post_id),)).fetchone()
         if post is None:
-            raise LookupError("the post cannot be read in this context (a capture token writes but cannot read back)")
+            raise LookupError("the post is not stored in the entered organisation")
         conn.execute(
             "INSERT INTO consentvault.post_history (org_id, post_id, post_seq, placed_at, received_at, event_id, label,"
             " event_type_sent, channels_sent, purposes_sent, method_sent, origin_sent, contact_kind_sent, captured_at_sent,"

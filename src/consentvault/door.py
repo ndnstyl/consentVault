@@ -449,8 +449,9 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
                  field_map: Any = None, raise_errors: bool = False) -> Outcome:
     """The old fold, then the new one beside it (shadow: the history is written, nothing is read from it)."""
     outcome = _project_view_old(writer, conn, enter, backend, view, field_map=field_map, raise_errors=raise_errors)
-    if not (outcome.halts or outcome.retry) and outcome.reason not in (WAITING, WAITING_TO_RETRY, "no_writer_for_intake",
-                                                                        "awaiting_authentication"):
+    # The new fold waits on nothing but its own missing facts: whatever the old fold met (an invalid value it refuses, an error it
+    # retries) the post projects to a history row holding its values as sent.
+    if outcome.reason not in (WAITING, WAITING_TO_RETRY, "no_writer_for_intake", "awaiting_authentication"):
         _shadow_history(writer, conn, enter, view, field_map)
     return outcome
 
@@ -462,19 +463,16 @@ def _shadow_history(writer, conn, enter, view: PostView, field_map: Any) -> bool
 
     try:
         with _ctx(conn, enter):
-            facts = writer.read_fold_facts(conn, uuid.UUID(view.org_id), view.post_id)
+            facts = writer.read_fold_facts(conn, uuid.UUID(view.org_id), view.post_id, view.facts.get(("__key__", "data_key")))
         pure = replace(view, facts=facts)
         reading = read_post(pure.body, field_map, CODE_VERSION, intake=pure.intake, context=_view_context(pure))
         fields = reading.payload if reading.kind == "event" else history.raw_fields(view.body)
         auth = auth_from_facts(facts)
+        if auth.pending:   # the intake could not finish its lookup: this post waits alone, for the lookup answer fact
+            return False
         with _ctx(conn, enter):
-            earliest = True
-            if auth.key:
-                earliest = conn.execute(
-                    "SELECT NOT EXISTS (SELECT 1 FROM consentvault.raw_post_request q JOIN consentvault.raw_post p"
-                    "   ON p.org_id = q.org_id AND p.post_id = q.post_id WHERE q.org_id = %s AND q.request_key = %s"
-                    "   AND p.seq < (SELECT seq FROM consentvault.raw_post WHERE org_id = %s AND post_id = %s)) AS first",
-                    (uuid.UUID(view.org_id), auth.key, uuid.UUID(view.org_id), uuid.UUID(view.post_id))).fetchone()["first"]
+            earliest = conn.execute("SELECT consentvault.fold_earliest_copy(%s, %s) AS first",
+                                    (uuid.UUID(view.post_id), auth.key)).fetchone()["first"]
         reason = decide(reading, replace(auth, org_id=view.org_id), lambda _k: not earliest)
         facts_read = sorted([s, n] for (s, n) in facts)
         return history.write_row(conn, lambda: _ctx(conn, enter), org_id=view.org_id, post_id=view.post_id, fields=fields,

@@ -184,7 +184,12 @@ def test_the_0067_down_migration_leaves_nothing_behind_on_an_empty_vault(dsn, su
     down_0083 = (MIGRATIONS / "down" / "0083_reroute_is_an_intake_action.sql").read_text()  # the reroute rows point at two posts
     down_0084 = (MIGRATIONS / "down" / "0084_post_history.sql").read_text()  # the history rows cite the posts
     down_0085 = (MIGRATIONS / "down" / "0085_projection_outcome.sql").read_text()  # the recorded outcomes cite the posts
+    later = [(MIGRATIONS / "down" / n).read_text() for n in (  # the pure-projection tables cite the posts; newest first
+        "0090_history_readers.sql", "0089_history_links_and_stop_lift.sql", "0088_retrieval_log.sql", "0087_history_seal_and_anchor.sql",
+        "0086_loading_at_stored_arrival.sql")]
     with psycopg.connect(super_dsn, autocommit=True) as su:
+        for text in later:
+            su.execute(text)
         su.execute(down_0085)
         su.execute(down_0084)
         su.execute(down_0083)

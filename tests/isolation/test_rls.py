@@ -60,7 +60,9 @@ def test_every_tenant_table_forces_row_level_security_bound_to_the_verified_tena
                           # the arrival a post stored again in its owner's organisation had the first time (migration 0079)
                           "raw_post_original_arrival",
                           # the history of a person, one row per stored post (migration 0084)
-                          "post_history"}
+                          "post_history",
+                          # the seals and anchors of the history chain, the retrieval log and the lifts of history stops (migrations 0087 to 0089)
+                          "post_history_seal", "post_history_chain_head", "retrieval_log", "history_stop_lift"}
         audit = {p["tablename"] for p in policies if p["policyname"].endswith("_read_scope")
                  and p["permissive"] == "RESTRICTIVE" and p["cmd"] == "SELECT" and "may_read_audit" in p["qual"]}
         assert audit == {"audit_event"}

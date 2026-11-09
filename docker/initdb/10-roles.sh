@@ -54,6 +54,10 @@ SELECT NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_console'
 \if :make_console
 CREATE ROLE consentvault_console NOLOGIN;
 \endif
+SELECT NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_loader') AS make_loader \gset
+\if :make_loader
+CREATE ROLE consentvault_loader NOLOGIN;
+\endif
 CREATE ROLE consentvault_owner NOLOGIN;
 GRANT consentvault_operator TO consentvault_owner;
 CREATE ROLE consentvault_migrator LOGIN PASSWORD :'migrator_pw' IN ROLE consentvault_owner;

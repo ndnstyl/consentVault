@@ -787,7 +787,8 @@ def rebuild(conn: psycopg.Connection, *, backend: Any = None, writer: RawPostWri
     return out
 
 
-def history_catch_up(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, field_map: Any = None) -> int:
+def history_catch_up(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, field_map: Any = None, *,
+                     every_post: bool = False) -> int:
     """Write the history row of every stored post that has none, from a context that can read its posts (the live path may run
     under a capture token, which writes but cannot read back, and then leaves the row for this). Returns the rows written."""
     with _ctx(conn, enter):
@@ -795,10 +796,10 @@ def history_catch_up(writer: RawPostWriter, conn: psycopg.Connection, enter: Cal
             "SELECT p.org_id::text AS org, p.post_id::text AS post_id, p.seq, p.intake, p.method, p.path,"
             " EXTRACT(EPOCH FROM p.received_at)::float8 AS arrived FROM consentvault.raw_post p"
             " WHERE p.org_id = (SELECT consentvault.current_org()) AND p.kind = 'post'"
-            "   AND (p.intake = 'erasure' OR EXISTS (SELECT 1 FROM consentvault.projection_outcome o WHERE o.org_id = p.org_id AND o.post_id = p.post_id)"
+            "   AND (%s OR p.intake = 'erasure' OR EXISTS (SELECT 1 FROM consentvault.projection_outcome o WHERE o.org_id = p.org_id AND o.post_id = p.post_id)"
             "        OR EXISTS (SELECT 1 FROM consentvault.event_source_post s WHERE s.org_id = p.org_id AND s.post_id = p.post_id))"
             "   AND NOT EXISTS (SELECT 1 FROM consentvault.post_history h WHERE h.org_id = p.org_id AND h.post_id = p.post_id)"
-            " ORDER BY p.seq").fetchall()
+            " ORDER BY p.seq", (every_post,)).fetchall()
     n = 0
     for r in rows:
         with _ctx(conn, enter):

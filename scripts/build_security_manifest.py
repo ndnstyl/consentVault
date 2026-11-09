@@ -52,6 +52,7 @@ def clean_apply_surface(port: int) -> dict:
             " IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_records_jobs') THEN CREATE ROLE consentvault_records_jobs NOLOGIN; END IF;"
             " IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_isolation_self_test') THEN CREATE ROLE consentvault_isolation_self_test NOLOGIN; END IF;"
             " IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_restore_drill') THEN CREATE ROLE consentvault_restore_drill NOLOGIN; END IF;"
+            " IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_loader') THEN CREATE ROLE consentvault_loader NOLOGIN; END IF;"
             f" IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{OWNER}') THEN CREATE ROLE {OWNER} NOLOGIN IN ROLE consentvault_operator; END IF;"
             f" IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{MIGRATOR}') THEN CREATE ROLE {MIGRATOR} LOGIN IN ROLE {OWNER};"
             f"   ALTER ROLE {MIGRATOR} SET role = '{OWNER}'; END IF;"

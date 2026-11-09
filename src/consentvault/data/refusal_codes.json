@@ -1514,6 +1514,15 @@
    "defined_in": "0044_records.sql"
   },
   {
+   "code": "db_refuse_change_except_key_digest_hzqqty",
+   "function": "consentvault.refuse_change_except_key_digest",
+   "signature": "",
+   "line": 8,
+   "template": "consentvault.% is append-only: % refused",
+   "meaning": "consentvault.% is append-only: % refused",
+   "defined_in": "0080_request_keys_as_digests.sql"
+  },
+  {
    "code": "db_refuse_change_rtpyst",
    "function": "consentvault.refuse_change",
    "signature": "",

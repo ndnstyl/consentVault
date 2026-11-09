@@ -212,8 +212,21 @@ OPERATOR_COLUMNS = {
     # owns a verified link host, which organizations have a message waiting; ids and status only, never a secret or a message
     "sending_account": {"org_id", "account_id", "inbound_key"},
     "confirmation_link_host": {"org_id", "host", "status"},
-    "confirmation_send_intent": {"org_id", "status"},
-    "event": {"org_id", "event_id", "received_at", "seq", "source_id"},
+    "confirmation_send_intent": {"org_id", "status", "send_id", "contact_fp", "channel"},   # + the seed of effect intents from the queue (0091)
+    "event": {"org_id", "event_id", "received_at", "seq", "source_id", "row_hash"},   # + the receipt of an event (0103)
+    # the pure-projection lane: the seed reads the old push queue, the receipt and the stop reader read the history, and the reroute check
+    # reads the stored posts it compares (0091, 0093, 0103, 0108); ids, hashes, times and flags, never a contact or a payload
+    "outbox": {"org_id", "outbox_id", "system_id", "contact_fp", "channel", "status"},
+    "post_history": {"org_id", "event_id", "post_id", "history_seq", "row_hash", "received_at", "contact_fp", "event_type_sent", "standing",
+                     "earliest_copy", "channels_sent", "origin_sent", "method_sent", "source_id_sent", "label"},
+    "post_history_seal": {"org_id", "history_seq"},
+    "post_history_event_index": {"org_id", "event_id", "seq", "received_at", "source_id"},
+    "event_source_post": {"org_id", "post_id", "role"},
+    "post_history_receipts": {"org_id", "event_id", "chain_seq", "row_hash", "received_at", "frozen"},
+    "history_stop_lift": {"org_id", "stop_event_id"},
+    "effect_watermark": {"org_id"},
+    "raw_post_original_arrival": {"org_id", "post_id", "arrived_at"},
+    "raw_post": {"org_id", "post_id", "received_at", "body_sha256"},
     # an offboarding org leaves the evidence jobs once its final export is taken (0014)
     "offboarding_request": {"org_id", "state", "final_export_at"},
     # pending invitees' addresses: accepted 2026-10-29 (staff addresses, not consumers; the invitation lookup needs them)

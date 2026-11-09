@@ -47,7 +47,8 @@ def test_the_projection_role_holds_everything_the_app_holds_except_the_configura
         funcs = su.execute(
             "SELECT p.oid::regprocedure::text AS f FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'consentvault'"
             " AND p.prokind IN ('f','p') AND has_function_privilege('consentvault_app', p.oid, 'EXECUTE')"
-            " AND NOT has_function_privilege('consentvault_projection', p.oid, 'EXECUTE')").fetchall()
+            " AND NOT has_function_privilege('consentvault_projection', p.oid, 'EXECUTE')"
+            " AND (NOT p.prosecdef OR p.proname = ANY(%s))", (sorted(ALLOWED_DEFINERS),)).fetchall()
     assert tables == [] and funcs == [], (tables, funcs)
 
 
@@ -166,3 +167,32 @@ def test_the_trigger_functions_on_every_table_the_projection_writes_are_pinned_b
             " JOIN pg_proc p ON p.oid = g.tgfoid JOIN pg_namespace ns ON ns.oid = c.relnamespace"
             " WHERE ns.nspname = 'consentvault' AND NOT g.tgisinternal AND c.relname = ANY(%s)", (list(PROJECTION_TABLES),)).fetchall()
     assert {r["f"]: hashlib.sha256(r["d"].encode()).hexdigest()[:16] for r in rows} == PINNED_TRIGGER_FUNCTIONS
+
+
+# The security-definer functions the projection role may execute: its own plumbing and the identity lookups. Everything else that
+# runs with its owner's rights (resolve_credential, the billing, connector and audit functions, ...) is out of its reach.
+ALLOWED_DEFINERS = {"current_org", "home_org", "enter_org", "current_token_scopes", "current_token_claims", "may_read_evidence",
+                    "ledger_lock_key", "raw_post_lock_key", "raw_post_head", "ledger_head", "contact_key_of", "receipt_of",
+                    "request_counted", "arrival_at", "arrival_key", "arrival_place", "arrival_post_seq", "sync_targets",
+                    "sync_echo_targets", "sync_advance_state", "sync_enqueue", "sync_enqueue_refresh", "confirmation_enqueue",
+                    "record_upsert", "record_index_refresh", "record_display_write", "resolve_site_key", "resolve_site_key_times"}
+
+
+def test_the_projection_role_executes_only_the_listed_definer_functions(hw):
+    with hw.t.superuser() as su:
+        got = {r["f"] for r in su.execute(
+            "SELECT p.proname AS f FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'consentvault'"
+            " AND p.prosecdef AND p.prokind IN ('f','p') AND has_function_privilege('consentvault_projection', p.oid, 'EXECUTE')"
+            " AND NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgfoid = p.oid)").fetchall()}
+    assert got <= ALLOWED_DEFINERS, sorted(got - ALLOWED_DEFINERS)
+
+
+@pytest.mark.parametrize("call", [
+    "SELECT * FROM consentvault.resolve_credential(gen_random_uuid())",
+    "SELECT * FROM consentvault.invite_lookup('x')",
+    "SELECT * FROM consentvault.billing_resolve_org('x', gen_random_uuid())",
+    "SELECT * FROM consentvault.confirmation_host_lookup('x')",
+])
+def test_a_planted_call_of_another_definer_function_raises_under_the_projection_login(hw, monkeypatch, call):
+    added, attempts = _plant(hw, monkeypatch, lambda c: c.execute(call).fetchall())
+    assert added == 0 and "InsufficientPrivilege" in attempts, (call, added, attempts)

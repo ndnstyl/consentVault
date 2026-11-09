@@ -38,6 +38,12 @@ CREATE FUNCTION consentvault.sync_projection_grants() RETURNS void
     LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
     unreadable text[] := ARRAY['capture_source', 'brand', 'disclosure', 'channel', 'purpose', 'credential', 'tenancy_setting'];
+    definers text[] := ARRAY['current_org', 'home_org', 'enter_org', 'current_token_scopes', 'current_token_claims', 'may_read_evidence',
+                             'ledger_lock_key', 'raw_post_lock_key', 'raw_post_head', 'ledger_head', 'contact_key_of', 'receipt_of',
+                             'request_counted', 'arrival_at', 'arrival_key', 'arrival_place', 'arrival_post_seq',
+                             'sync_targets', 'sync_echo_targets', 'sync_advance_state', 'sync_enqueue', 'sync_enqueue_refresh',
+                             'confirmation_enqueue', 'record_upsert', 'record_index_refresh', 'record_display_write',
+                             'resolve_site_key', 'resolve_site_key_times'];
     r record;
     c record;
     p text;
@@ -68,10 +74,17 @@ BEGIN
             EXECUTE format('GRANT USAGE ON SEQUENCE consentvault.%I TO consentvault_projection', r.relname);
         END IF;
     END LOOP;
-    FOR r IN SELECT pr.oid, pr.oid::regprocedure::text AS sig FROM pg_proc pr JOIN pg_namespace n ON n.oid = pr.pronamespace
+    -- A security-definer function runs with its owner's rights and so is not bound by this role's missing reads: the role may call
+    -- only the named few below (the projection's own plumbing and the identity lookups), every one pinned by body hash in
+    -- tests/isolation/test_projection_login.py. Every ordinary (invoker) function the app may call is bound by this role's rights
+    -- and is granted as the app has it.
+    FOR r IN SELECT pr.oid, pr.proname, pr.prosecdef, pr.oid::regprocedure::text AS sig FROM pg_proc pr
+               JOIN pg_namespace n ON n.oid = pr.pronamespace
               WHERE n.nspname = 'consentvault' AND pr.prokind IN ('f', 'p') LOOP
-        IF has_function_privilege('consentvault_app', r.oid, 'EXECUTE') THEN
+        IF has_function_privilege('consentvault_app', r.oid, 'EXECUTE') AND (NOT r.prosecdef OR r.proname = ANY (definers)) THEN
             EXECUTE format('GRANT EXECUTE ON ROUTINE %s TO consentvault_projection', r.sig);
+        ELSE
+            EXECUTE format('REVOKE EXECUTE ON ROUTINE %s FROM consentvault_projection', r.sig);
         END IF;
     END LOOP;
 END;

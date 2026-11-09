@@ -148,7 +148,8 @@ class Library:
                 answer = self.send(kind, person, ref)
             except ConsentVaultError:
                 return
-            assert isinstance(answer, door.StoredWaiting), answer
+            # behind an unfinished earlier post a stop is recorded at once and anything else is stored and waiting
+            assert isinstance(answer, door.StoredWaiting) or (kind == "stop" and hasattr(answer, "event_id")), answer
             return
         if kind == "stop":
             return revoke(self.conn, method="keyword", origin="consumer", **common)
@@ -189,15 +190,21 @@ class Cli:
         except SystemExit as exc:  # loud-failure-exempt: the exit code is the answer under test
             code = exc.code
         if kind == "start" or fail:   # an error exit, or stored-and-waiting behind an unfinished earlier post (exit 0, answered by name)
-            assert code in (0, None) and '"waiting": true' in self.capsys.readouterr().out or code not in (0, None), (argv, code)
+            printed = self.capsys.readouterr().out
+            recorded_at_once = kind == "stop" and '"event_id"' in printed   # a stop is never held behind an unfinished earlier post
+            assert code in (0, None) and ('"waiting": true' in printed or recorded_at_once) or code not in (0, None), (argv, code)
         else:
             assert code == 0, (argv, code)
 
 
 def history(conn) -> dict[int, list[str]]:
     out: dict[int, list[str]] = {i: [] for i in range(len(CONTACTS))}
-    for r in conn.execute("SELECT contact_norm, event_type FROM consentvault.event"
-                          " WHERE event_type IN ('grant', 'revoke', 'suppress') ORDER BY seq").fetchall():
+    # in the order the requests arrived (the place of the post that made each event), not the order the projection wrote them: a stop
+    # is projected at once even when an earlier post is waiting for a retry
+    for r in conn.execute("SELECT e.contact_norm, e.event_type FROM consentvault.event e"
+                          " WHERE e.event_type IN ('grant', 'revoke', 'suppress')"
+                          " ORDER BY consentvault.arrival_at(e.org_id, e.event_id, e.received_at),"
+                          " coalesce(consentvault.arrival_post_seq(e.org_id, e.event_id), 0), e.seq").fetchall():
         out[CONTACTS.index(r["contact_norm"])].append("revoke" if r["event_type"] in ("revoke", "suppress") else "grant")
     return out
 

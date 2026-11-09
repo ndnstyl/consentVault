@@ -38,7 +38,8 @@ def test_every_tenant_table_forces_row_level_security_bound_to_the_verified_tena
         policies = owner.execute("SELECT tablename, policyname, permissive, cmd, qual, with_check FROM pg_policies"
                                  " WHERE schemaname = 'consentvault'").fetchall()
         tenant = [p for p in policies if p["policyname"].endswith("_tenant")]
-        assert {p["tablename"] for p in tenant} == set(tables)
+        # the reroute table (migration 0083) has no org_id: its tenant policy compares from_org, the original's organisation
+        assert {p["tablename"] for p in tenant} - {"raw_post_reroute"} == set(tables)
         for p in tenant:
             assert p["permissive"] == "PERMISSIVE" and p["cmd"] == "ALL", p
             assert "current_org()" in p["qual"] and "current_org()" in p["with_check"], p

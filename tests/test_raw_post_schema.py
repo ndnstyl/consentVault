@@ -181,7 +181,9 @@ def test_the_0067_down_migration_leaves_nothing_behind_on_an_empty_vault(dsn, su
     down_0077 = (MIGRATIONS / "down" / "0077_projection_attempts.sql").read_text()  # the recorded attempts depend on it too
     down_0079 = (MIGRATIONS / "down" / "0079_restored_copy_original_arrival.sql").read_text()  # the original arrivals depend on it
     down_0078 = (MIGRATIONS / "down" / "0078_request_key_on_the_post.sql").read_text()  # the request keys beside the posts depend on it
+    down_0083 = (MIGRATIONS / "down" / "0083_reroute_is_an_intake_action.sql").read_text()  # the reroute rows point at two posts
     with psycopg.connect(super_dsn, autocommit=True) as su:
+        su.execute(down_0083)
         su.execute(down_0079)
         su.execute(down_0078)
         su.execute(down_0077)

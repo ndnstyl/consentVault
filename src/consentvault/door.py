@@ -318,19 +318,29 @@ class TenantBackend:
         return {"req": req, "credential_id": uuid.UUID(str(cred.get("credential_id"))), "credential": dict(cred), "org_id": auth.org_id,
                 "settings": self.settings}
 
-    def reroute(self, writer, conn, view: "PostView", owner, found: Mapping[tuple[str, str], Any]):
-        """Store the post again in the organisation the site key belongs to, with everything known about it (the original facts,
-        the repeated lookup's answer, and where it was first stored); returns the new post's view and the entry to use for it."""
+    def reroute(self, writer, conn, view: "PostView", owner, found: Mapping[tuple[str, str], Any], from_enter: Callable | None = None):
+        """The site-key retry lane's intake action: store the post again in the organisation the site key belongs to, with everything
+        known about it (the original facts, the repeated lookup's answer, where it was first stored, the original arrival as a fact),
+        then record, in the original's organisation, the reroute row and the ``stored_again_to`` fact. The fold reads only these facts.
+        Returns the new post's view and the entry to use for it."""
         cred = {"credential_id": str(owner.credential_id), "scopes": ["capture"]}
         enter = self.enter_for_credential(str(owner.org_id), cred)
         facts = {k: v for k, v in view.facts.items() if k[0] != "__key__"}
         facts.update(found)
         facts[("vault", "stored_again_from")] = {"org_id": view.org_id, "post_id": view.post_id}
+        original_arrival = datetime.fromtimestamp(view.arrived_epoch, tz=timezone.utc) if view.arrived_epoch is not None else None
+        if original_arrival is not None:
+            facts[("vault", "original_arrival")] = original_arrival.isoformat()
         req = RawRequest(intake=view.intake, method=view.method, path=view.path, query="",
                          headers=(("content-type", "application/json"),), body=view.body, headers_presented_by="rebuild",
                          facts=tuple(Fact(s, n, v) for (s, n), v in facts.items()),
-                         original_arrival=datetime.fromtimestamp(view.arrived_epoch, tz=timezone.utc) if view.arrived_epoch is not None else None)
+                         original_arrival=original_arrival)
         stored = writer.write(conn, enter, req)
+        with (from_enter(conn) if from_enter is not None else conn.transaction()):
+            conn.execute("INSERT INTO consentvault.raw_post_reroute (from_org, from_post, to_org, to_post) VALUES (%s, %s, %s, %s)",
+                         (uuid.UUID(view.org_id), uuid.UUID(view.post_id), uuid.UUID(stored.org_id), uuid.UUID(stored.post_id)))
+            writer._insert_fact(conn, uuid.UUID(view.org_id), uuid.UUID(view.post_id), view.facts.get(("__key__", "data_key")),
+                                Fact("vault", "stored_again_to", {"org_id": stored.org_id, "post_id": stored.post_id}))
         newview = PostView(stored.org_id, stored.post_id, stored.seq, view.intake, view.body,
                            {**facts, ("__key__", "data_key"): stored.data_key}, view.method, view.path,
                            stored.received_at.timestamp())
@@ -560,7 +570,11 @@ def _resolve_site_key(writer, conn, enter, backend, view: PostView, *, field_map
     backend_for = _backend_for(backend, view.intake)
     if not hasattr(backend_for, "reroute"):
         return replace(view, facts={**view.facts, **found})
-    newview, new_enter = backend_for.reroute(writer, conn, view, owner, found)
+    with _ctx(conn, enter):
+        done = conn.execute("SELECT 1 FROM consentvault.raw_post_reroute WHERE from_post = %s", (uuid.UUID(view.post_id),)).fetchone()
+    if done:   # the lane wrote this reroute already: the copy is projected in its own organisation, the original is finished
+        return _record(writer, conn, enter, view, Outcome(view.post_id, reason="stored_again_in_owner_organisation"))
+    newview, new_enter = backend_for.reroute(writer, conn, view, owner, found, enter)
     inner = project_view(writer, conn, new_enter, backend, newview, field_map=field_map, raise_errors=raise_errors)
     _record(writer, conn, enter, view, Outcome(view.post_id, reason="stored_again_in_owner_organisation"))
     return Outcome(view.post_id, event_id=inner.event_id, reason=inner.reason or "stored_again_in_owner_organisation",

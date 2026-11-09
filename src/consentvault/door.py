@@ -795,7 +795,7 @@ def history_catch_up(writer: RawPostWriter, conn: psycopg.Connection, enter: Cal
             "SELECT p.org_id::text AS org, p.post_id::text AS post_id, p.seq, p.intake, p.method, p.path,"
             " EXTRACT(EPOCH FROM p.received_at)::float8 AS arrived FROM consentvault.raw_post p"
             " WHERE p.org_id = (SELECT consentvault.current_org()) AND p.kind = 'post'"
-            "   AND (EXISTS (SELECT 1 FROM consentvault.projection_outcome o WHERE o.org_id = p.org_id AND o.post_id = p.post_id)"
+            "   AND (p.intake = 'erasure' OR EXISTS (SELECT 1 FROM consentvault.projection_outcome o WHERE o.org_id = p.org_id AND o.post_id = p.post_id)"
             "        OR EXISTS (SELECT 1 FROM consentvault.event_source_post s WHERE s.org_id = p.org_id AND s.post_id = p.post_id))"
             "   AND NOT EXISTS (SELECT 1 FROM consentvault.post_history h WHERE h.org_id = p.org_id AND h.post_id = p.post_id)"
             " ORDER BY p.seq").fetchall()
@@ -889,6 +889,28 @@ def write_system_event(conn: psycopg.Connection, crypto: Any, **fields) -> Event
     """An event the vault writes with no post of its own because the post would hold the very data it is erasing (an erasure's
     stop). The one use; every other event cites its post."""
     return record_tenant_event(conn, crypto, **fields)
+
+
+def store_erasure_stop_post(conn: psycopg.Connection, crypto: Any, *, erasure_id: Any, contact_fp: str, channels, marker: str,
+                            source: str) -> StoredPost:
+    """The erasure's stop as a post (intake ``erasure``), stored through the ordinary writer BEFORE the contact key is deleted, and
+    projected into the history. Its body is the canonical JSON of the erasure id, the contact fingerprint, the channels and the
+    marker: no personal data, so storing it contradicts nothing the erasure removes."""
+    from .rawpost import canonical_dumps
+
+    body = canonical_dumps({"event_type": "suppress", "channels": list(channels), "purposes": ["*"], "method": "written",
+                            "origin": "consumer", "source": source, "recorded_by": marker, "erasure_id": str(erasure_id),
+                            "contact_fp": contact_fp}).encode("utf-8")
+    writer = RawPostWriter(crypto=crypto)
+    facts = (Fact("vault", "request_signature", "valid"), Fact("vault", "replay", "fresh"),
+             Fact("vault", "authenticated_by", "system"), Fact("vault", "request_key", f"erasure:{erasure_id}:{marker}"))
+    req = RawRequest(intake="erasure", method="POST", path="/v1/events", query="", headers=(("content-type", "application/json"),),
+                     body=body, headers_presented_by="local-process", facts=facts)
+    enter = lambda c: c.transaction()  # noqa: E731  (the caller's connection is already entered as the organisation)
+    stored = writer.write(conn, enter, req)
+    view = PostView(stored.org_id, stored.post_id, stored.seq, "erasure", body, {}, arrived_epoch=stored.received_at.timestamp())
+    _shadow_history(writer, conn, enter, view, None)
+    return stored
 
 
 def authenticate_text(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, stored: StoredPost,

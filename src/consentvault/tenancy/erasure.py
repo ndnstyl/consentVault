@@ -356,6 +356,8 @@ def record_erasure_stop(conn, crypto, *, fp: str, erasure_id, ledger: Optional[L
     marker = erasure_stop_marker(erasure_id, stop_seq or 0, unconfirmed=unconfirmed)
     data_key = crypto.open_contact_key(org, WrappedKey(bytes(held["wrapped_key"]), held["key_version"]))
     norm = tc.decrypt_text(data_key, org, str(last["event_id"]), "contact_norm", bytes(last["contact_ct"]))
+    door.store_erasure_stop_post(conn, crypto, erasure_id=erasure_id, contact_fp=fp, channels=channels, marker=marker,
+                                 source=ERASURE_SOURCE)
     ev = door.write_system_event(conn, crypto, contact=norm, contact_kind=last["contact_kind"], event_type="suppress",
                                  channels=channels, purposes=["*"], method="written", origin="consumer",
                                  source=ERASURE_SOURCE, recorded_by=marker)

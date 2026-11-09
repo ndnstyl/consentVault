@@ -177,6 +177,8 @@ async function forwardCapture(request: Request, env: GatewayEnv, deps: GatewayDe
   }
 }
 
+const TOKEN_ENDPOINT_PATH = "/v1/oauth/token";
+
 export async function handleGateway(request: Request, env: GatewayEnv, deps: GatewayDeps): Promise<Response> {
   try {
     const url = new URL(request.url);
@@ -199,9 +201,10 @@ export async function handleGateway(request: Request, env: GatewayEnv, deps: Gat
     const cookieHeader = request.headers.get("cookie");
     const downloadLink = request.method === "GET" && (DOWNLOAD_RE.test(url.pathname) || INVITE_VIEW_RE.test(url.pathname));
     const twentyWebhook = request.method === "POST" && (TWENTY_WEBHOOK_RE.test(url.pathname) || url.pathname === STRIPE_WEBHOOK_PATH);
-    const portalMode = !auth && !downloadLink && !twentyWebhook && !!env.SESSIONS && !!cookieValue(cookieHeader, SESSION_COOKIE);
-    if (!auth && !portalMode && !downloadLink && !twentyWebhook) throw new Refusal(401, "bearer_missing", "an Authorization: Bearer token is required");
-    if (auth && !twentyWebhook) {
+    const tokenEndpoint = request.method === "POST" && url.pathname === TOKEN_ENDPOINT_PATH; // the client proves itself with a signed assertion in the form, not a bearer
+    const portalMode = !auth && !downloadLink && !twentyWebhook && !tokenEndpoint && !!env.SESSIONS && !!cookieValue(cookieHeader, SESSION_COOKIE);
+    if (!auth && !portalMode && !downloadLink && !twentyWebhook && !tokenEndpoint) throw new Refusal(401, "bearer_missing", "an Authorization: Bearer token is required");
+    if (auth && !twentyWebhook && !tokenEndpoint) {
       if (!BEARER_RE.test(auth)) throw new Refusal(401, "bearer_malformed", "Authorization header is not a well-formed bearer token");
       if (auth.slice(7).startsWith("cv_site_")) throw new Refusal(401, "site_key_not_accepted", "site keys are accepted only at the capture endpoint");
     }
@@ -227,7 +230,7 @@ export async function handleGateway(request: Request, env: GatewayEnv, deps: Gat
     headers.set("cf-access-client-secret", env.ACCESS_CLIENT_SECRET);
     headers.delete("x-cv-org");
     headers.delete(ASSERTION_HEADER); // only the edge's own signature may speak for how someone signed in
-    if (downloadLink || twentyWebhook) headers.delete("authorization");
+    if (downloadLink || twentyWebhook || tokenEndpoint) headers.delete("authorization");
 
     let portal: Portal | null = null;
     let store: SessionStore | null = null;

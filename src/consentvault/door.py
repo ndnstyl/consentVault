@@ -329,6 +329,13 @@ class TenantBackend:
         return {"req": req, "credential_id": uuid.UUID(str(cred.get("credential_id"))), "credential": dict(cred), "org_id": auth.org_id,
                 "settings": self.settings}
 
+    def check_wording(self, conn, fields: dict) -> None:
+        """The wording checks (the registered wording exists, and names the brands the post names), from the hash the post carries."""
+        from .tenancy.pipeline import _check_disclosure
+
+        with self.enter_for_credential(fields["org_id"], fields["credential"])(conn):
+            _check_disclosure(conn, dict(fields["req"].fields))
+
     def late_settings(self, conn, owner) -> dict:
         """The settings of a post whose site key could not be read when it arrived: read once, when the key is first read, and
         stored beside the post as a fact, so every later projection of it decides from the same stored answer."""
@@ -504,6 +511,15 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
                     _log.error("a stored post produces no event; the reason is stored beside it", error=reason_of(skew))
                     _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason_of(skew)))
                     raise _FinalReading from skew
+            if isinstance(fields, dict) and hasattr(backend, "check_wording"):
+                from .tenancy.admin_base import ApiError
+
+                try:
+                    backend.check_wording(conn, fields)   # wording is immutable, looked up by its hash: the answer never changes
+                except ApiError as exc:
+                    _log.error("a stored post produces no event; the reason is stored beside it", error=reason_of(exc))
+                    _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason_of(exc)))
+                    raise _FinalReading from exc
             if reason is not None or isinstance(fields, str):
                 outcome = Outcome(view.post_id, reason=reason or fields)
             else:

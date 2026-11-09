@@ -283,7 +283,12 @@ class TenantGate:
         except psycopg.Error:
             facts = unavailable("database")
         decision_id = self._record(fp, channel, purpose, facts, batch_id)
-        return (200 if facts.read else 503), _answer(facts, decision_id, evaluated_at)
+        answer = _answer(facts, decision_id, evaluated_at)
+        if facts.read:   # gate 4: a check that hands the history over is logged first; a log row that cannot be written raises and answers nothing
+            from .retrieval import log_retrieval
+
+            log_retrieval(self.conn, answer, what=sorted({str(e) for e in facts.event_ids}) or [decision_id])
+        return (200 if facts.read else 503), answer
 
     def _record(self, fp: str, channel: str, purpose: str, facts: ContactFacts, batch_id: str | None) -> str:
         import uuid as _uuid

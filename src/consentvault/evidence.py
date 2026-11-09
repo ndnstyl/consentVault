@@ -796,6 +796,16 @@ def contact_has_records(conn: psycopg.Connection, crypto, fp: str) -> bool:
 
 
 def gather_tenant(conn: psycopg.Connection, crypto, contact_fp: str) -> tuple[dict, dict[str, bytes]]:
+    """The tenant's evidence for one contact fingerprint, logged in the retrieval log before it is returned (gate 4): a read whose log
+    row cannot be written raises and returns nothing. The logged payload is the result without the envelope the export adds."""
+    from .retrieval import log_retrieval
+
+    result, tokens = _gather_tenant(conn, crypto, contact_fp)
+    log_retrieval(conn, result)
+    return result, tokens
+
+
+def _gather_tenant(conn: psycopg.Connection, crypto, contact_fp: str) -> tuple[dict, dict[str, bytes]]:
     """Everything this organisation holds for one contact fingerprint, in the clear for that person only.
 
     Runs inside an entered tenant with a read scope (``proof_read`` or ``admin``). Returns (evidence structure, {seal

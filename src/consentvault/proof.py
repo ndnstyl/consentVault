@@ -232,7 +232,17 @@ def _page_args(page: Any) -> tuple[str | None, str | None, int]:
     return page["section"], cursor, limit
 
 
-def tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None, page: Any = None, region: str | None = None,
+def tenant_lookup(conn: psycopg.Connection, crypto, **kw) -> dict:
+    """The proof answer for one contact, logged in the retrieval log before it is returned (gate 4): a read whose log row cannot be
+    written raises and returns nothing."""
+    from .retrieval import log_retrieval
+
+    answer = _tenant_lookup(conn, crypto, **kw)
+    log_retrieval(conn, answer)
+    return answer
+
+
+def _tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None, page: Any = None, region: str | None = None,
                   cursor_key: bytes, now: float | None = None, contact_fp: str | None = None,
                   contact_kind: str | None = None) -> dict:
     """The proof answer (contracts/proof-export.md) for one contact in the entered organisation.

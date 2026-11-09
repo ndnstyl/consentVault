@@ -1,6 +1,7 @@
-"""A post whose site-key lookup failed at intake is not held: the rebuild repeats the lookup, stores the answer, and the stop
-counts in the organisation the key belongs to. While the lookup is still down the post stays pending and is the only thing the
-command reports as unfinished."""
+"""A post whose site-key lookup failed at intake is not held: the rebuild repeats the lookup. The post arrived without its settings,
+so once the lookup answers it has the final reason settings_missing_at_arrival and no event (one-door review round 8: nothing of
+the key's live configuration is taken in afterwards). While the lookup is still down the post stays pending and is the only thing
+the command reports as unfinished."""
 
 import psycopg
 import pytest
@@ -25,7 +26,7 @@ def _home(hw):
         return su.execute("SELECT consentvault.home_org() AS h").fetchone()["h"]
 
 
-def test_a_stop_whose_site_key_lookup_failed_counts_after_the_rebuild_repeats_the_lookup(hw, monkeypatch):
+def test_a_post_whose_site_key_lookup_failed_is_final_without_settings_after_the_rebuild_repeats_the_lookup(hw, monkeypatch):
     a, b = hw.cloud.a, hw.cloud.b
     key = _site_key(hw, a)
     before = len(_events_of(hw, a.org))
@@ -42,9 +43,10 @@ def test_a_stop_whose_site_key_lookup_failed_counts_after_the_rebuild_repeats_th
         assert [o.reason for o in outcomes if o.retry] == ["SiteKeyLookupError"]
         assert len(_events_of(hw, a.org)) == before
     outcomes = []
-    api.rebuild_cloud(hw.cloud.settings, orgs, outcomes=outcomes)   # the lookup answers: the stop counts
+    api.rebuild_cloud(hw.cloud.settings, orgs, outcomes=outcomes)   # the lookup answers: the post is final, with no live settings read
     assert not [o for o in outcomes if o.retry]
-    assert len(_events_of(hw, a.org)) == before + 1
+    assert "settings_missing_at_arrival" in {o.reason for o in outcomes}
+    assert len(_events_of(hw, a.org)) == before
     again: list = []
     api.rebuild_cloud(hw.cloud.settings, orgs, outcomes=again)       # and a second run changes nothing
-    assert not [o for o in again if o.event_id] and len(_events_of(hw, a.org)) == before + 1
+    assert not [o for o in again if o.event_id or o.retry] and len(_events_of(hw, a.org)) == before

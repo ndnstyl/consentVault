@@ -182,6 +182,13 @@ class SyncWorker:
         """
         report = RunReport()
         try:
+            retired = conn.execute("SELECT consentvault.any_organisation_cut_over() AS c").fetchone()["c"]
+        except psycopg.Error as exc:
+            raise WorkerError(f"the worker could not read whether the cutover has happened: {describe(exc)}") from exc
+        if retired:
+            raise WorkerError("the outbox worker is retired after the cutover: the effects layer sends the queued pushes, as effect intents",
+                              code="outbox_worker_retired")
+        try:
             restoring = conn.execute("SELECT consentvault.restore_pending() AS p").fetchone()["p"]
         except psycopg.Error as exc:
             raise WorkerError(f"the worker could not read whether a restore is pending: {describe(exc)}") from exc

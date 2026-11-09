@@ -56,6 +56,13 @@ def _one_org(conn, token_key, crypto, org) -> dict[str, int]:
             conn.execute("INSERT INTO consentvault.effect_watermark (org_id, head_seq) VALUES (consentvault.current_org(), %s)", (head,))
         else:
             head = row["head_seq"]
+    # the watermark is fixed before anything below can add a link or an outcome; then the shadow start brings every earlier post under the
+    # fold (idempotent: a post it has already handled is skipped), and the facts follow
+    from .history_backfill import shadow_start
+
+    with org_transaction(conn, token):
+        shadow_start(writer, conn, enter)
+    with org_transaction(conn, token):
         posts = conn.execute("SELECT post_id::text AS post_id, seq FROM consentvault.raw_post WHERE org_id = consentvault.current_org()"
                              " AND kind = 'post' ORDER BY seq").fetchall()
     out = {"below": 0, "above": 0}

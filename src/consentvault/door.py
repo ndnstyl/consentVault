@@ -782,6 +782,8 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
         if outcome.halts:   # a faulted post: nothing later is projected ahead of this post, the next run repeats it first
             out.extend(Outcome(w["post_id"], reason=WAITING, retry=True) for w in rows[n + 1:])
             break
+    if _is_cut(conn, enter):   # a post the old fold finished has no history row yet: the new fold gives it one
+        history_catch_up(writer, conn, enter)
     return out
 
 

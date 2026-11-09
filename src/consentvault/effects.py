@@ -17,7 +17,6 @@ from .errors import ConsentVaultError
 from .safelog import describe
 from .sync.connectors import webhook
 from .sync.systems import open_credentials
-from .sync.worker import LoggingAlarmSink, SyncWorker
 from .tenancy import crypto as tc
 from .tenancy.keys_protocol import WrappedKey
 from .tenancy.tokens import org_transaction
@@ -70,6 +69,38 @@ def _push_one(conn, token, org_id, intent: dict, crypto, custody, transport) -> 
     return _finish(conn, token, intent, "sent" if outcome.kind == "acknowledged" else "failed:" + (outcome.error_class or outcome.kind))
 
 
+def _legacy_push_one(conn, token, org_id, intent: dict, crypto, custody, transport) -> str:
+    """Send one push that was queued in the outbox before the cutover and seeded as an intent, by the intent's id."""
+    from .sync.outbox import decrypt_payload
+
+    with org_transaction(conn, token):
+        conn.execute("SELECT consentvault.effect_intent_move(%s, 'claimed')", (intent["intent_id"],))
+        m = conn.execute("SELECT * FROM consentvault.effect_legacy_push_material(%s)", (intent["intent_id"],)).fetchone()
+    if m is None:
+        return _finish(conn, token, intent, "failed:no_target")
+    if m["system_status"] != "active":
+        return _finish(conn, token, intent, "failed:system_paused")
+    try:
+        data_key = crypto.open_contact_key(org_id, WrappedKey(bytes(m["wrapped_key"]), m["key_version"]))
+        body = decrypt_payload(data_key, org_id, m["outbox_id"], bytes(m["payload_ct"]))
+        secret = open_credentials(custody, org_id, m["system_id"], m["credentials_ct"])
+    except Exception as exc:  # loud-failure-exempt: the intent ends failed with the cause class named; nothing is sent for it
+        log.error("a queued push could not be prepared", error=type(exc).__name__)
+        return _finish(conn, token, intent, "failed:prepare")
+    request = webhook.PushRequest(m["endpoint"], body, {
+        webhook.HEADER_SIGNATURE: webhook.sign_body(m["signature"], secret, body), webhook.HEADER_DELIVERY: str(intent["intent_id"]),
+        webhook.HEADER_IDEMPOTENCY: str(intent["intent_id"]), "Content-Type": "application/json"})
+    try:
+        result = transport.send(request)
+    except Exception as exc:  # loud-failure-exempt: the intent is marked unknown (a person resolves it) and the cause class is logged
+        log.error("a queued push met a transport error; the intent is unknown", error=type(exc).__name__)
+        return _finish(conn, token, intent, "unknown")
+    outcome = webhook.classify(result)
+    if outcome.kind == "retry":
+        return _finish(conn, token, intent, "pending")
+    return _finish(conn, token, intent, "sent" if outcome.kind == "acknowledged" else "failed:" + (outcome.error_class or outcome.kind))
+
+
 def _finish(conn, token, intent: dict, state: str) -> str:
     state = state if state in ("sent", "unknown", "pending") else "failed:" + "".join(c if c.isalnum() or c == "_" else "_" for c in state[7:])[:40].lower()
     with org_transaction(conn, token):
@@ -88,16 +119,16 @@ def run_once(conn: psycopg.Connection, *, crypto, custody, transport, senders=No
         token = conn.execute("SELECT consentvault.dispatch_org_token('sync', %s) AS t", (org_id,)).fetchone()["t"]
         with org_transaction(conn, token):
             due = conn.execute("SELECT intent_id FROM consentvault.effect_intent WHERE org_id = consentvault.current_org()"
-                               " AND effect = 'push' AND state = 'pending' AND post_id IS NOT NULL ORDER BY state_at, intent_id LIMIT %s",
+                               " AND effect = 'push' AND state = 'pending' ORDER BY state_at, intent_id LIMIT %s",
                                (BATCH,)).fetchall()
+            due = [dict(r, legacy=bool(conn.execute("SELECT legacy_ref IS NOT NULL AS l FROM consentvault.effect_intent WHERE org_id ="
+                                                    " consentvault.current_org() AND intent_id = %s", (r["intent_id"],)).fetchone()["l"]))
+                   for r in due]
         for intent in due:
             token = conn.execute("SELECT consentvault.dispatch_org_token('sync', %s) AS t", (org_id,)).fetchone()["t"]
             try:
-                _push_one(conn, token, org_id, intent, crypto, custody, transport)
+                (_legacy_push_one if intent["legacy"] else _push_one)(conn, token, org_id, intent, crypto, custody, transport)
                 sent += 1
             except psycopg.Error as exc:
                 raise ConsentVaultError(f"a derived push could not be recorded: {describe(exc)}") from exc
-    worker = SyncWorker(crypto, custody, transport, LoggingAlarmSink(), clock=clock) if clock is not None else SyncWorker(
-        crypto, custody, transport, LoggingAlarmSink())
-    report = worker.run_once(conn)
-    return {"derived_pushes": sent, "outbox": report}
+    return {"derived_pushes": sent}

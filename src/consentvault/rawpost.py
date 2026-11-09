@@ -61,6 +61,8 @@ class Fact:
     source: str
     name: str
     value: Any
+    status: str = "value"
+    label: str = "retry"
 
 
 _log = safelog.get("consentvault.rawpost")
@@ -334,7 +336,7 @@ class RawPostWriter:
                                  " VALUES (%s, %s, %s, %s)", (org, post_id, wrapped.ciphertext, wrapped.key_version))
                 for i, source, name, value_ct in fact_rows:
                     conn.execute("INSERT INTO consentvault.raw_post_fact (org_id, post_id, fact_id, source, name, value_ct,"
-                                 " arrival_ordinal) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                                 " arrival_ordinal, status, label) VALUES (%s, %s, %s, %s, %s, %s, %s, 'value', 'arrival')",
                                  (org, post_id, uuid.uuid4(), source, name, value_ct, i))
                 for fact in req.facts:
                     if is_request_key(fact):
@@ -354,10 +356,10 @@ class RawPostWriter:
 
     def _insert_fact(self, conn: psycopg.Connection, org: uuid.UUID, post_id: uuid.UUID, key: bytes | None, fact: Fact) -> None:
         raw = canonical_dumps(fact.value).encode("utf-8")
-        conn.execute("INSERT INTO consentvault.raw_post_fact (org_id, post_id, fact_id, source, name, value_ct)"
-                     " VALUES (%s, %s, %s, %s, %s, %s)",
+        conn.execute("INSERT INTO consentvault.raw_post_fact (org_id, post_id, fact_id, source, name, value_ct, status, label)"
+                     " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                      (org, post_id, uuid.uuid4(), _db_text(fact.source), _db_text(fact.name),
-                      self._seal(key, org, post_id, COL_FACT, raw)))
+                      self._seal(key, org, post_id, COL_FACT, raw), fact.status, fact.label))
         if is_request_key(fact):
             self.record_request_key(conn, org, post_id, fact.value)
 

@@ -14,7 +14,7 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | item 1 | `test_1_the_anchor_command_anchors_the_history_head` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 2 | `test_2_a_confirmation_for_a_post_cutover_grant_resolves_its_contact` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 3 | `test_3_the_page_of_a_post_cutover_grant_shows_its_channels` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
-| item 4 | `test_4_a_reply_from_a_post_cutover_grants_contact_is_found` in `test_readers_python.py` | E   AssertionError: [] |
+| item 4 | `test_4_a_reply_from_a_post_cutover_grants_contact_is_found` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 5 | `test_a_pending_intent_skips_with_the_old_reason_ends_terminal_and_a_rerun_after_clearing_sends_nothing[rule_off_no_row]` in `test_sender_skips.py` | PASSES TODAY (not a failing test) |
 | item 5 | `test_a_pending_intent_skips_with_the_old_reason_ends_terminal_and_a_rerun_after_clearing_sends_nothing[contact_erased]` in `test_sender_skips.py` | PASSES TODAY (not a failing test) |
 | item 5 | `test_a_pending_intent_skips_with_the_old_reason_ends_terminal_and_a_rerun_after_clearing_sends_nothing[channel_not_in_grant]` in `test_sender_skips.py` | PASSES TODAY (not a failing test) |
@@ -49,20 +49,20 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | item 10 | `test_10_a_broken_history_prev_hash_fails_verification` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 11 | `test_11_a_post_cutover_stop_is_found_and_a_lift_is_written_to_the_history_lift_table` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 12 | `test_12_the_proof_of_a_post_cutover_contact_lists_its_rows_and_logs_the_retrieval` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
-| item 13 | `test_13_a_post_cutover_contact_gets_a_record` in `test_readers_python.py` | E   AssertionError: [] |
+| item 13 | `test_13_a_post_cutover_contact_gets_a_record` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 14 | `test_14_a_post_cutover_row_is_sealed_into_the_history_seal_table` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 15 | `test_15_a_second_erasure_request_after_cutover_finds_the_first_stop` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 16 | `test_16_a_post_cutover_contact_is_offboarded` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
-| item 17 | `test_17_a_post_cutover_contact_shows_in_the_records_admin` in `test_readers_python.py` | E   AssertionError: [] |
-| item 18 | `test_18_a_post_cutover_contact_is_found_by_the_restore_job` in `test_readers_python.py` | E   assert (0 == 1) |
-| item 19 | `test_19_the_permission_view_is_rebuilt_over_history_and_the_contact_check_does_not_need_it` in `test_readers_sql_and_history.py` | E   AssertionError: assert ('post_history' in ' with exploded as (\n         select e.org_id,\n            e.contact_kind,\n            e.co |
+| item 17 | `test_17_a_post_cutover_contact_shows_in_the_records_admin` in `test_readers_python.py` | E   AssertionError: ('GET', '/v1/records/93785f0d-c856-44ed-9add-408852f326ec', 404, {'error': 'not_found', 'detail': 'no such endpoint', 'r |
+| item 18 | `test_18_a_post_cutover_contact_is_found_by_the_restore_job` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
+| item 19 | `test_19_the_permission_view_is_rebuilt_over_history_and_the_contact_check_does_not_need_it` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 19 | `test_19_with_the_derived_view_switched_off_the_sender_still_skips_on_the_stop_and_the_contact_check_answers` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
-| item 20 | `test_20_a_post_cutover_stop_advances_its_sync_state_and_the_person_state_reads_stopped` in `test_readers_sql_and_history.py` | E   assert 0 > 0 |
+| item 20 | `test_20_a_post_cutover_stop_advances_its_sync_state_and_the_person_state_reads_stopped` in `test_readers_sql_and_history.py` | E   AssertionError: TEST ADAPTER: consentvault.sync_person_state takes ['system_id', 'contact_fps'] and the test supplies no value for it |
 | item 21 | `test_confirmation_enqueue_is_refused_by_name_only_after_the_cutover` in `test_cutover_0089.py` | PASSES TODAY (not a failing test) |
-| item 22 | `test_22_a_post_cutover_grant_updates_its_record_index_without_the_event_table` in `test_readers_sql_and_history.py` | E   AssertionError: [] |
-| item 23 | `test_23_receipt_of_returns_the_receipt_of_a_post_cutover_post` in `test_readers_sql_and_history.py` |     assert 'post_history' in 'create or replace function consentvault.receipt_of(p_event_id uuid)\n returns table(seq bigint, row_hash text, |
-| item 24 | `test_24_the_record_doc_check_of_a_history_only_post_reads_its_completeness` in `test_readers_sql_and_history.py` | E   assert ('completeness' in "create or replace function consentvault.record_doc_check(p_event_id uuid, p_version integer, p_present text[] |
-| item 25 | `test_25_the_health_and_usage_counts_count_a_post_cutover_post` in `test_readers_sql_and_history.py` |      +      where {'org_id': '0d526c97-9d45-4f1e-ac39-60d57bcb0d12', 'contact_fp': 'ef1773ce1b41feb970a726c54a9364fe67072b57cb77cb9d425c...c |
+| item 22 | `test_22_a_post_cutover_grant_updates_its_record_index_without_the_event_table` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
+| item 23 | `test_23_receipt_of_returns_the_receipt_of_a_post_cutover_post` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
+| item 24 | `test_24_the_record_doc_check_of_a_history_only_post_reads_its_completeness` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
+| item 25 | `test_25_the_health_and_usage_counts_count_a_post_cutover_post` in `test_readers_sql_and_history.py` |     PL/pgSQL function consentvault.usage_events_for_day(date) line 3 during statement block local variable initialization |
 | item 26 | `test_26_an_erasure_after_cutover_covers_the_contacts_history_rows` in `test_readers_sql_and_history.py` |                           ^ |
 | item 27 | `test_27_the_stop_lift_guard_moves_to_the_history_lift_table_with_a_key_to_history` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 28 | `test_28_each_table_that_cited_an_event_can_cite_a_history_event_and_loses_no_column[send_intent]` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
@@ -75,13 +75,13 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | item 31 | `test_31_two_exports_a_minute_apart_log_the_same_payload_hash_and_each_log_row_hash_is_the_payload_sha256` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 31 | `test_31_a_read_whose_log_row_cannot_be_written_returns_nothing_and_raises` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 32 | `test_32_a_capture_post_missing_ip_page_and_form_version_projects_with_those_three_absent_and_the_rest_present` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
-| item 33 | `test_33_the_anchor_command_reads_history_head` in `test_readers_python.py` |       + afdb5aa31ef80784175990c78772686ee769604367bdd0e479405d763cff7254) |
+| item 33 | `test_33_the_anchor_command_reads_history_head` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 34 | `test_34_the_seal_command_seals_a_post_cutover_row` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 35 | `test_35_integrity_reports_an_unsealed_post_cutover_row_and_its_head_equals_the_history_head` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 36 | `test_36_the_bundles_head_equals_the_history_head_and_the_derived_view_is_labelled` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 37 | `test_37_after_cutover_the_old_append_path_is_refused_by_name` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 38 | `test_38_the_proof_of_a_post_cutover_stop_shows_it_under_the_derived_label` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
-| item 39 | `test_a_valid_grant_a_counted_stop_then_a_forged_grant_the_sender_skips_and_the_forged_row_does_not_count` in `test_readers_sql_and_history.py` |     CONTEXT:  PL/pgSQL function consentvault.history_stop_on_record(uuid,text,text) line 4 at RAISE |
+| item 39 | `test_a_valid_grant_a_counted_stop_then_a_forged_grant_the_sender_skips_and_the_forged_row_does_not_count` in `test_readers_sql_and_history.py` | E   AssertionError: TEST ADAPTER: consentvault.sync_person_state takes ['system_id', 'contact_fps'] and the test supplies no value for it |
 | item 39 | `test_a_pending_intent_skips_with_the_old_reason_ends_terminal_and_a_rerun_after_clearing_sends_nothing[stop_on_record]` in `test_sender_skips.py` | PASSES TODAY (not a failing test) |
 | item 40 | `test_40_history_head_returns_the_newest_history_row` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 41 | `test_41_a_broken_history_link_is_listed` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
@@ -94,7 +94,7 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 |---|---|---|
 | gate1 | `test_gate_1_stored_whole_sent_sha_equals_stored_sha_equals_loaded_sha_with_the_chain_and_arrival_rows` in `test_gates.py` | PASSES TODAY (not a failing test) |
 | gate2 | `test_gate_2_every_stored_post_is_in_history_and_a_planted_missing_row_is_reported` in `test_gates.py` | PASSES TODAY (not a failing test) |
-| gate3 | `test_gate_3_a_mixed_store_replays_to_the_same_history_per_label` in `test_gates.py` |       Use -v to get more diff |
+| gate3 | `test_gate_3_a_mixed_store_replays_to_the_same_history_per_label` in `test_gates.py` | PASSES TODAY (not a failing test) |
 | gate4 | `test_gate_4_the_retrieval_log_names_who_and_what_recomputes_to_the_payload_and_a_failed_log_returns_nothing` in `test_gates.py` | PASSES TODAY (not a failing test) |
 | gate5 | `test_gate_5_every_row_carries_exactly_the_versions_the_running_code_declares` in `test_gates.py` | PASSES TODAY (not a failing test) |
 | gate6 | `test_gate_6_a_year_of_clock_and_different_lookups_change_no_row_and_the_forged_post_is_recorded_not_refused` in `test_gates.py` | PASSES TODAY (not a failing test) |
@@ -163,15 +163,15 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | 0084.out_of_seq_order_refused | `test_a_post_loaded_out_of_seq_order_is_refused` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | 0084.replay_target_insert_refused_by_grant | `test_an_insert_into_replay_target_by_the_app_role_is_refused_by_the_grant` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | 0084.store_of_record_refuses_load | `test_on_the_store_of_record_load_stored_post_is_refused` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
-| 0089.between_old_stop_and_new_intake | `test_posts_between_the_old_folds_stop_and_the_new_intake_get_their_effects` in `test_cutover_0089.py` | E   assert ([]) |
+| 0089.between_old_stop_and_new_intake | `test_posts_between_the_old_folds_stop_and_the_new_intake_get_their_effects` in `test_cutover_0089.py` | PASSES TODAY (not a failing test) |
 | 0089.intake_writes_above | `test_from_the_cutover_deploy_on_the_intake_writes_the_watermark_fact_above_at_arrival_through_the_http_door` in `test_cutover_0089.py` | PASSES TODAY (not a failing test) |
 | 0089.one_pending_intent_per_rule_and_target | `test_one_new_grant_gives_one_pending_intent_per_enabled_rule_and_target_and_projecting_again_gives_none` in `test_cutover_0089.py` | PASSES TODAY (not a failing test) |
-| 0089.queued_stop_push_delivered | `test_a_queued_stop_push_in_the_outbox_is_delivered_by_the_effects_layer_after_cutover` in `test_cutover_0089.py` |       Use -v to get more diff) |
+| 0089.queued_stop_push_delivered | `test_a_queued_stop_push_in_the_outbox_is_delivered_by_the_effects_layer_after_cutover` in `test_cutover_0089.py` | PASSES TODAY (not a failing test) |
 | 0089.replay_database_refuses_effects | `test_the_effects_layer_started_on_a_marked_database_exits_by_name_and_sends_nothing` in `test_cutover_0089.py` | PASSES TODAY (not a failing test) |
 | 0089.seed_equals_queues | `test_seeded_intents_equal_the_outbox_rows_plus_the_confirmation_intents_across_every_organisation` in `test_cutover_0089.py` | PASSES TODAY (not a failing test) |
 | 0089.seed_state_mapping | `test_every_old_queue_state_maps_to_its_intent_state` in `test_cutover_0089.py` | PASSES TODAY (not a failing test) |
-| 0089.send_set_is_the_queued_rows | `test_the_new_fold_watermark_job_and_effects_send_exactly_the_seeded_pending_intents_and_the_old_worker_is_refused` in `test_cutover_0089.py` | E   Failed: DID NOT RAISE Exception |
-| 0089.watermark_below_no_intent | `test_a_post_at_or_below_the_watermark_projects_to_history_and_derives_no_intent_while_a_post_above_it_does` in `test_cutover_0089.py` |      +    where Tenancy(operator_dsn='postgresql://cv_test_console@127.0.0.1:57952/t_240e0a388c6e', super_dsn='postgresql://postgres@1...D(' |
+| 0089.send_set_is_the_queued_rows | `test_the_new_fold_watermark_job_and_effects_send_exactly_the_seeded_pending_intents_and_the_old_worker_is_refused` in `test_cutover_0089.py` |      +  where False = all(<generator object test_the_new_fold_watermark_job_and_effects_send_exactly_the_seeded_pending_intents_and_the_old_ |
+| 0089.watermark_below_no_intent | `test_a_post_at_or_below_the_watermark_projects_to_history_and_derives_no_intent_while_a_post_above_it_does` in `test_cutover_0089.py` | PASSES TODAY (not a failing test) |
 | M6.catalog.effect_intent | `test_the_table_forces_row_security_with_one_tenant_policy[effect_intent]` in `test_row_security.py` | PASSES TODAY (not a failing test) |
 | M6.catalog.effect_watermark | `test_the_table_forces_row_security_with_one_tenant_policy[effect_watermark]` in `test_row_security.py` | PASSES TODAY (not a failing test) |
 | M6.catalog.history_stop_lift | `test_the_table_forces_row_security_with_one_tenant_policy[history_stop_lift]` in `test_row_security.py` | PASSES TODAY (not a failing test) |
@@ -198,8 +198,8 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | M6.read_scope.post_history_chain_head | `test_the_evidence_tables_also_carry_the_restrictive_read_scope_policy[post_history_chain_head]` in `test_row_security.py` | PASSES TODAY (not a failing test) |
 | M6.read_scope.post_history_seal | `test_the_evidence_tables_also_carry_the_restrictive_read_scope_policy[post_history_seal]` in `test_row_security.py` | PASSES TODAY (not a failing test) |
 | M6.read_scope.retrieval_log | `test_the_evidence_tables_also_carry_the_restrictive_read_scope_policy[retrieval_log]` in `test_row_security.py` | PASSES TODAY (not a failing test) |
-| erasure.replay_agrees | `test_replay_from_empty_of_a_database_holding_one_erased_contact_holds_its_erasure_stop` in `test_loader_purity_erasure.py` |       Use -v to get more diff |
-| erasure.stop_is_a_post | `test_an_erasure_stores_its_stop_as_a_post_through_the_ordinary_writer_and_the_history_cites_it` in `test_loader_purity_erasure.py` | E   assert (None is not None) |
+| erasure.replay_agrees | `test_replay_from_empty_of_a_database_holding_one_erased_contact_holds_its_erasure_stop` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
+| erasure.stop_is_a_post | `test_an_erasure_stores_its_stop_as_a_post_through_the_ordinary_writer_and_the_history_cites_it` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | purity.content_fingerprints | `test_the_content_fingerprints_per_label_match_each_other_and_the_store` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | purity.evidence_reads_only | `test_the_evidence_stand_in_saw_only_reads_of_each_posts_own_object` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | purity.intent_keys | `test_the_intent_key_fingerprints_match` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |

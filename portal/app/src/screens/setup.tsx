@@ -56,7 +56,7 @@ export function Setup() {
     navigate(`/setup?step=${s}`, { replace: true });
   };
 
-  const first = user?.display_name.split(' ')[0] ?? '';
+  const first = firstNameOf(user);
   const a: SetupAnswer | null = res.status === 'ok' ? res.data : null;
   const steps = a?.steps ?? [];
   const byName = (n: SetupStepName) => steps.find((s) => s.step === n);
@@ -147,7 +147,7 @@ function Complete({ a }: { a: SetupAnswer }) {
   const conf = a.steps.find((s) => s.step === 'confirmations');
   return (
     <>
-      <p>{fe?.evidence ? `Your first event was recorded and sealed on ${fmtDateTime(fe.evidence.at)}.` : ''}{pol?.evidence ? ` Policy version ${pol.evidence.id} is in force.` : ''}</p>
+      <p>{fe?.evidence ? `Your first event was recorded and sealed on ${fmtDateTime(fe.evidence.at)}.` : ''}{pol?.evidence?.id ? ` Policy version ${pol.evidence.id} is in force.` : ''}</p>
       <ul className="stack card" style={{ listStyle: 'none' }}>
         {a.steps.map((s) => <li key={s.step}><Chip tone={s.status === 'done' ? 'st-success' : 'st-neutral'} icon={s.status === 'done' ? 'i-ok' : 'i-dash'}>{s.status === 'done' ? 'Done' : 'Skipped'}</Chip> {LABEL[s.step]}</li>)}
       </ul>
@@ -225,7 +225,9 @@ function Panel({ step, steps, a, refresh, setAnswer, go, welcomeBack, heading }:
   );
 }
 
-function SuccessLine({ step }: { step: SetupStep }) {
+export function firstNameOf(user: { display_name: string | null } | null): string { return (user?.display_name ?? '').split(' ')[0]; }
+
+export function SuccessLine({ step }: { step: SetupStep }) {
   const e = step.evidence;
   const word: Record<SetupStepName, string> = {
     brand: 'A brand is set up.', source: 'A capture source is set up.', wording: 'Your consent wording is registered.', credential: 'A capture credential is active.',

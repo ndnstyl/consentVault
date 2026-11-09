@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, allPages } from '../lib/api/client.ts';
-import type { ContactDelivery, ExportDetail, ExportItem, Proof, System } from '../lib/api/types.ts';
+import type { ContactDelivery, ExportDetail, ExportItem, Proof, ProofAnchor, ProofPermission, System } from '../lib/api/types.ts';
 import { CHANNEL_FALLBACK, EVENT_LABEL, GATE_NOTICE, NA, PACKAGE_COVER, PUSH_STATE_LABEL, causeLine } from '../lib/copy.ts';
 import { useAction, usePoll, useResource } from '../lib/hooks.ts';
 import { Link, useRouter } from '../lib/router.tsx';
@@ -9,7 +9,7 @@ import { useSession } from '../lib/session.tsx';
 import { checkContact, fmtDateTime, maskContact, prettyContact } from '../lib/format.ts';
 import { useToast } from '../lib/toast.tsx';
 import { ConfirmDialog } from '../components/Dialog.tsx';
-import { Banner, Btn, Chip, CopyButton, DataTable, DeliveryChip, ErrorBlock, EvidenceChip, Icon, KV, LinkBtn, NotAvailable, PageHead, PolicyChip, SealChip, Skeleton, StateBlock, SuccessBanner, TextField, Time } from '../components/ui.tsx';
+import { Banner, Btn, Chip, CopyButton, DataTable, DeliveryChip, ErrorBlock, EvidenceChip, Icon, KV, LinkBtn, NotAvailable, PageHead, SealChip, Skeleton, StateBlock, SuccessBanner, TextField, Time } from '../components/ui.tsx';
 
 function ContactInput({ onSubmit, busy, label = 'Look up records', busyLabel = 'Looking up', error, hint }: { onSubmit: (contact: string) => void; busy: boolean; label?: string; busyLabel?: string; error?: React.ReactNode; hint?: string }) {
   const [v, setV] = useState('');
@@ -24,6 +24,25 @@ function ContactInput({ onSubmit, busy, label = 'Look up records', busyLabel = '
       {error}
     </form>
   );
+}
+
+export function PermissionsTable({ permissions }: { permissions: ProofPermission[] }) {
+  return (
+    <DataTable caption="Evidence status by channel and purpose" rows={permissions} rowKey={(p) => `${p.channel}:${p.purpose}`}
+      columns={[
+        { key: 'c', header: 'Channel', render: (p) => CHANNEL_FALLBACK[p.channel] ?? p.channel, primary: true },
+        { key: 'p', header: 'Purpose', render: (p) => p.purpose },
+        { key: 'e', header: 'Evidence status', render: (p) => <EvidenceChip status={statusOf(p)} /> },
+      ]} />
+  );
+}
+export const statusOf = (p: ProofPermission): string => p.status ?? p.evidence_status ?? '';
+export function chainLine(chain: NonNullable<Proof['chain']>): React.ReactNode {
+  const last: ProofAnchor | undefined = chain.anchors[chain.anchors.length - 1];
+  if (!last) return 'No outside anchor yet';
+  const when = last.anchored_at ?? last.at;
+  if (last.ok === false) return 'An anchor check failed. The operator has been told.';
+  return <>{last.ok === true ? 'Verified to anchor ' : 'Last outside anchor '}{when ? <Time iso={when} /> : NA}</>;
 }
 
 function invalidContactText(c: string): string {
@@ -128,19 +147,13 @@ export function EvidenceLookup() {
           {suspended && <p className="hint mb4">{`Evidence packages are paused while ${orgName} is suspended. Resolve billing to build packages.`}</p>}
           {build.error && <ErrorBlock title="The package was not built" err={build.error} next="Try again. Nothing was changed." />}
           {eraseDone && <SuccessBanner>Erasure request sent. The operator confirms every erasure before it runs, and your records stay readable until then.</SuccessBanner>}
-          <p className="hint">Chain integrity: {proof.chain ? (proof.chain.anchors.length ? (proof.chain.anchors[proof.chain.anchors.length - 1].ok ? <>Verified to anchor <Time iso={proof.chain.anchors[proof.chain.anchors.length - 1].at} /></> : 'An anchor check failed. The operator has been told.') : 'No outside anchor yet') : NA}</p>
+          <p className="hint">Chain integrity: {proof.chain ? chainLine(proof.chain) : NA}</p>
           {(proof.partial?.length ?? 0) > 0 && <Banner kind="warning" title="Some sections did not load">{`${proof.partial!.map((p) => p.replace(/_/g, ' ')).join(', ')} did not load. The sections below are complete.`}</Banner>}
           {unsealed.length > 0 && <Banner kind="warning" title="Seal pending">{`${unsealed.length} event${unsealed.length === 1 ? ' is' : 's are'} not sealed yet. Outside timestamps are usually added within an hour. Packages built now mark ${unsealed.length === 1 ? 'it' : 'them'} as unsealed.`}</Banner>}
-          {review.length > 0 && <Banner kind="info" title="A later grant did not lift a stop">{`A later grant arrived after a stop on ${proof.permissions.find((p) => p.evidence_status === 'stop_on_record') ? chLabel(proof.permissions.find((p) => p.evidence_status === 'stop_on_record')!.channel) : 'a channel'}. The person's control of the contact point was not verified (contact_control_unverified), so the stop stays on record. It is listed for review.`}</Banner>}
+          {review.length > 0 && <Banner kind="info" title="A later grant did not lift a stop">{`A later grant arrived after a stop on ${proof.permissions.find((p) => statusOf(p) === 'stop_on_record') ? chLabel(proof.permissions.find((p) => statusOf(p) === 'stop_on_record')!.channel) : 'a channel'}. The person's control of the contact point was not verified (contact_control_unverified), so the stop stays on record. It is listed for review.`}</Banner>}
 
           <h3 className="sec mt5">Evidence status now</h3>
-          <DataTable caption="Evidence status by channel and purpose" rows={proof.permissions} rowKey={(p) => `${p.channel}:${p.purpose}`}
-            columns={[
-              { key: 'c', header: 'Channel', render: (p) => chLabel(p.channel), primary: true },
-              { key: 'p', header: 'Purpose', render: (p) => p.purpose },
-              { key: 'e', header: 'Evidence status', render: (p) => <EvidenceChip status={p.evidence_status} /> },
-              { key: 'a', header: 'Your policy', render: (p) => <PolicyChip action={p.policy_action} version={p.policy_version} /> },
-            ]} />
+          <PermissionsTable permissions={proof.permissions} />
           <p className="notice">{proof.notice || GATE_NOTICE}</p>
 
           <h3 className="sec mt5">Timeline (arrival order)</h3>
@@ -154,7 +167,7 @@ export function EvidenceLookup() {
                   <li key={e.event_id}>
                     <Icon name={e.event_type === 'grant' ? 'i-found' : 'i-stop'} />
                     <div className="hd"><b>{EVENT_LABEL[e.event_type] ?? e.event_type}</b><span className="when"><Time iso={e.at} /> · seq {e.seq}</span></div>
-                    <div className="body">{e.channels.map(chLabel).join(', ')} · {e.purposes.join(', ')} · Brand {e.brand_ids.map(name).join(', ')} · Source {name(e.source_id)}{w && <> · Wording <Link href={`/wording/${w.sha256}`}>{w.version_label}</Link></>}</div>
+                    <div className="body">{e.channels.map(chLabel).join(', ')} · {e.purposes.join(', ')} · Brand {e.brand_ids.map(name).join(', ')} · Source {name(e.source_id)}{w && <> · Wording <Link href={`/wording/${w.sha256}`}>{w.version_label ?? w.label}</Link></>}</div>
                     <div className="gap-row"><SealChip sealedAt={e.sealed ? e.sealed_at : null} />{e.recorded_during_trial && <Chip tone="st-info" icon="i-info">Recorded during trial</Chip>}</div>
                     {dc && <div className="body">{`Checklist v${dc.checklist_version}: ${dc.present.length} of ${dc.present.length + dc.missing.length} present${dc.missing.length ? `, missing ${dc.missing.map((m) => `"${names?.get(m) ?? m}"`).join(', ')}` : ''}. Documentation completeness, not a legal test.`}</div>}
                   </li>
@@ -171,8 +184,6 @@ export function EvidenceLookup() {
                 { key: 't', header: 'Checked', render: (g) => <Time iso={g.at} />, primary: true },
                 { key: 'c', header: 'Channel', render: (g) => chLabel(g.channel) },
                 { key: 'e', header: 'Evidence status', render: (g) => <EvidenceChip status={g.evidence_status} /> },
-                { key: 'a', header: 'Policy action', render: (g) => <PolicyChip action={g.policy_action} version={g.policy_version} /> },
-                { key: 'v', header: 'Policy version', render: (g) => (g.policy_version === null ? <NotAvailable /> : <span className="num">{g.policy_version}</span>) },
               ]} />
           )}
           {proof.gate_decisions?.next_cursor && <Btn size="sm" busy={more === 'gate_decisions'} busyLabel="Loading" onClick={() => loadMore('gate_decisions', proof.gate_decisions!.next_cursor)}>Load more gate checks</Btn>}

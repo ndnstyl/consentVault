@@ -433,7 +433,7 @@ export function Records() {
               {summary.status === 'loading' && <Skeleton what="the channel shares" rows={1} />}
               {(summary.status === 'error' || (sum && sum.by_channel === null)) && <p className="na">{NA}</p>}
               {sum && sum.by_channel && <><ShareBars by={sum.by_channel} call={sum.call} />
-                <p className="hint mt4">Each record counts once per channel, under its most protective status for any purpose: a stop first, then found, then no record. Whether a record is complete against your documentation checklist depends on your policy, and shows on each contact's evidence lookup page, not here. A record is one phone number or one email address, so an email record reads No record for Text and Call, and a phone record reads No record for Email. A stop from a text reply covers texts and calls.</p></>}
+                <p className="hint mt4">Each record counts once per channel, under its most protective status for any purpose: a stop first, then found, then no record. Whether a record is complete against your documentation checklist depends on your policy, and shows on each contact's evidence lookup page, not here. A record is one phone number or one email address, so an email record reads No record for Text and Call, and a phone record reads No record for Email. A stop is recorded on the channel it arrived on. How far a stop reaches is set by the rule-set in use, which your counsel may replace. This portal does not name the rule-set yet; each contact's evidence lookup page lists the stop with the channel it arrived on.</p></>}
             </div>
           </div>
 

@@ -413,7 +413,7 @@ async function flows() {
   const urlBefore = page.url();
   await page.getByLabel('Phone number or email').fill('(555) 555-0100'); await page.getByRole('button', { name: 'Look up records' }).click(); await settle(page);
   ok('13-1 URL unchanged after search', page.url() === urlBefore);
-  ok('13-3 status chips carry visible text', (await text()).includes('Stop on record') && (await text()).includes('No record') && (await text()).includes('Your policy: hold'));
+  ok('13-3 status chips carry visible text', (await text()).includes('Stop on record') && (await text()).includes('No record') && !(await text()).includes('Your policy'));
   const notice = "Evidence status and the outcome of your organization's approved policy. Not a legal determination.";
   ok('13-4 notice appears exactly once', (await text()).split(notice).length - 1 === 1);
   ok('13 heading names the contact and org', (await text()).includes('Records for (555) 555-0100 in Acme Lending'));
@@ -563,7 +563,7 @@ async function recordsScreen() {
   ok('23 default: the total is shown and 50 rows are on the page', /Showing 1 to 50 of 312/.test(t) && (await page.locator('.tw tbody tr').count()) === 50, t.slice(0, 200));
   ok('23 default: every contact is masked and no full number is on the page', /\(555\) \*\*\*-\d{4}/.test(t) && !FULL.test(t));
   ok('23 default: Name and Company columns exist and a name shows', /Name/i.test(t) && /Company/i.test(t) && /Kim Osei/.test(t));
-  ok('23 default: the notice sentence is exact', t.includes('Evidence status describes the records held. Your policy outcome for a contact is on its evidence lookup page.'));
+  ok('23 default: the notice sentence is exact', t.includes('Evidence status describes the records held. Each contact\'s evidence lookup page shows the recorded facts and history.'));
   ok('23-11 the chart is an image with a label and a table twin', (await page.locator('[role=img][aria-label^="New records per day"]').count()) === 1 && (await page.locator('details summary', { hasText: 'Show the chart as a table' }).count()) === 1);
   const bars = await page.locator('[role=img][aria-label^="Email:"], [role=img][aria-label^="Text:"], [role=img][aria-label^="Call:"]').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
   ok('23-11 three share bars each name found, stop and no record', bars.length === 3 && bars.every((b) => /Consent record found \d+%/.test(b) && /Stop on record \d+%/.test(b) && /No record \d+%/.test(b)), bars.join(' | '));

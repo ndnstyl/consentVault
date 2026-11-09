@@ -5,9 +5,11 @@
 # 2026-10-30) and every Python package is installed from a hash-locked file (pip --require-hashes).
 FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
 
+# The packages the scan flagged are pinned to the fixed versions, so two builds of one commit hold the same bytes. A pin the
+# archive has since dropped fails the build by name: bump the base image digest and these versions together.
 RUN apt-get update \
-    && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends openssl \
+    && apt-get install -y --no-install-recommends apt=3.0.4 libapt-pkg7.0=3.0.4 zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+       openssl=3.5.7-1~deb13u3 \
     && apt-get clean
 
 WORKDIR /app

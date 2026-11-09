@@ -158,7 +158,7 @@ READS = {
 
 # A reader of live configuration may be called only from its named caller(s): (file, function).
 ARRIVAL_ONLY = {
-    "projection_settings": {("api.py", "_capture")},
+    "projection_settings": {("api.py", "_capture"), ("api.py", "_projection_settings_selfcheck")},   # intake, and the start-up self-check of it
     "org_region": {("tenancy/pipeline.py", "projection_settings")},
     "org_channels": {("tenancy/pipeline.py", "projection_settings")},
     "org_purposes": {("tenancy/pipeline.py", "projection_settings")},

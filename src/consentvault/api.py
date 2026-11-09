@@ -18,6 +18,7 @@ import os
 import re
 import threading
 import time
+import uuid
 import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -1343,6 +1344,22 @@ def rebuild_cloud(settings: CloudApiSettings, org_ids, outcomes: list | None = N
     return done
 
 
+def _projection_settings_selfcheck(settings: CloudApiSettings, pipeline) -> None:
+    """Run, at start, the settings read every tenant post is stored with (against a credential that does not exist, inside the home
+    organisation), so a schema or grant change that breaks it fails the deploy here and not every post at intake."""
+    from .tenancy.tokens import mint_org_token, org_transaction
+
+    try:
+        with connect(settings.dsn) as conn:
+            home = conn.execute("SELECT consentvault.home_org() AS h").fetchone()["h"]
+            token = mint_org_token(settings.token_key, home, ("capture",), credential_id=None, ttl_seconds=60)
+            with org_transaction(conn, token):
+                pipeline.projection_settings(conn, uuid.uuid4())
+    except (ConsentVaultError, psycopg.Error) as exc:
+        raise StartupRefusedError(f"the multi-tenant API will not serve this database: the settings read every post is stored with "
+                                  f"fails ({describe(exc)})", code="startup_projection_settings_refused") from exc
+
+
 def make_cloud_server(settings: CloudApiSettings, host: str = "127.0.0.1", port: int = 8080) -> ThreadingHTTPServer:
     """Build (not start) the multi-tenant server. Refuses (``StartupRefusedError``) unless ``startup_check`` passes."""
     from .tenancy.pipeline import CapturePipeline
@@ -1356,5 +1373,6 @@ def make_cloud_server(settings: CloudApiSettings, host: str = "127.0.0.1", port:
     route_modules()  # an existing lane module that fails to import refuses the start, loudly
     _logscrub.install(_log.logger)  # the backstop sits on the standard logger the safe logger writes through
     pipeline, writer = _cloud_parts(settings)
+    _projection_settings_selfcheck(settings, pipeline)
     handler = type("ConsentVaultCloudHandler", (_CloudHandler,), {"settings": settings, "pipeline": pipeline, "writer": writer})
     return SafeHTTPServer((host, port), handler)

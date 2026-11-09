@@ -174,7 +174,7 @@ class SenderMixin:
         return conn.execute("SELECT 1 FROM consentvault.contact_key_of(%s)", (fp,)).fetchone() is not None
 
     def _stop_on_record(self, conn, org, fp: str, channel: str) -> bool:
-        if conn.execute("SELECT 1 FROM consentvault.history_stop_on_record(%s, %s, %s)", (org, fp, channel)).fetchone() is not None:
+        if conn.execute("SELECT consentvault.history_stop_on_record(%s, %s, %s) AS s", (org, fp, channel)).fetchone()["s"]:
             return True
         return conn.execute("SELECT 1 FROM consentvault.current_permission WHERE org_id = %s AND contact_fp = %s AND channel = %s"
                             " AND NOT allowed AND reason LIKE 'stopped:%%' LIMIT 1", (org, fp, channel)).fetchone() is not None

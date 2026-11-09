@@ -533,8 +533,8 @@ def _contact_of(ctx: Ctx, org, fp: str) -> str:
     from .keys_protocol import WrappedKey
 
     key = ctx.conn.execute("SELECT * FROM consentvault.contact_key_of(%s)", (fp,)).fetchone()
-    last = ctx.conn.execute("SELECT event_id, contact_ct FROM consentvault.event WHERE org_id ="
-                            " (SELECT consentvault.current_org()) AND contact_fp = %s ORDER BY seq DESC LIMIT 1",
+    last = ctx.conn.execute("SELECT event_id, contact_ct FROM consentvault.post_history_all_events WHERE org_id ="
+                            " (SELECT consentvault.current_org()) AND contact_fp = %s AND contact_ct IS NOT NULL ORDER BY seq DESC LIMIT 1",
                             (fp,)).fetchone()
     if key is None or last is None:
         raise KeyProviderError("no contact key or event is held for that fingerprint")

@@ -39,6 +39,7 @@ import psycopg
 import psycopg.sql
 
 from .. import dbclock, history, safelog
+from ..ledger import record_tenant_event
 from ..safelog import constraint_name, db_refusal_id, describe
 from .admin_base import ROLE_ADMIN, ApiError, Ctx, body_dict, iso, need_text, to_uuid
 from .errors import TenancyError
@@ -299,7 +300,17 @@ def erasure_stop_present(conn, fp: str, erasure_id, stop_seq: int) -> Optional[s
                        " AND contact_fp = %s AND source = %s AND recorded_by = ANY(%s) ORDER BY seq DESC LIMIT 1",
                        (fp, ERASURE_SOURCE, [erasure_stop_marker(erasure_id, stop_seq),
                                              erasure_stop_marker(erasure_id, stop_seq, unconfirmed=True)])).fetchone()
-    return None if row is None else str(row["event_id"])
+    if row is not None:
+        return str(row["event_id"])
+    # a stop that exists only in history (after the organisation's cutover): the history row of an erasure post of this contact that no
+    # later counted grant has contradicted
+    held = conn.execute(
+        "SELECT h.event_id FROM consentvault.post_history h JOIN consentvault.raw_post p ON p.org_id = h.org_id AND p.post_id = h.post_id"
+        " WHERE h.org_id = (SELECT consentvault.current_org()) AND h.contact_fp = %s AND p.intake = 'erasure'"
+        " AND NOT EXISTS (SELECT 1 FROM consentvault.post_history g WHERE g.org_id = h.org_id AND g.contact_fp = h.contact_fp"
+        "                  AND g.event_type_sent = 'grant' AND g.standing = 'counts' AND g.placed_at > h.placed_at)"
+        " ORDER BY h.history_seq DESC LIMIT 1", (fp,)).fetchone()
+    return None if held is None else str(held["event_id"])
 
 
 def record_erasure_stop(conn, crypto, *, fp: str, erasure_id, ledger: Optional[LifecycleLedger] = None,
@@ -369,7 +380,7 @@ def record_erasure_stop(conn, crypto, *, fp: str, erasure_id, ledger: Optional[L
         stored = door.store_erasure_stop_post(conn, crypto, erasure_id=erasure_id, contact_fp=fp, channels=channels, marker=marker,
                                               source=ERASURE_SOURCE)
         return history.event_id_of(stored.post_id)
-    ev = door.write_system_event(conn, crypto, contact=norm, contact_kind=last["contact_kind"], event_type="suppress",
+    ev = record_tenant_event(conn, crypto, contact=norm, contact_kind=last["contact_kind"], event_type="suppress",
                                  channels=channels, purposes=["*"], method="written", origin="consumer",
                                  source=ERASURE_SOURCE, recorded_by=marker)
     try:   # the stop as a post is the history's copy of the stop: it is written in its own savepoint, so a failure here never undoes the stop event

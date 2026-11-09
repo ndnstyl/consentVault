@@ -571,7 +571,7 @@ def record_doc_checks(ctx: Ctx, body: Any) -> dict:
             raise invalid(**{f"results[{i}].present": "names an element that is not on the checklist"})
         missing = [e["element_id"] for e in elements if e.get("required", True) and e["element_id"] not in shown]
         try:
-            check_id = ctx.conn.execute("SELECT consentvault.record_doc_check(%s, %s, %s, %s, %s) AS id",
+            check_id = ctx.conn.execute("SELECT consentvault.record_doc_check_stored(%s, %s, %s, %s, %s) AS id",
                                         (event_id, v, shown, missing, ctx.actor.member_uuid)).fetchone()["id"]
         except psycopg.errors.NoDataFound:
             raise ApiError("not_found", "no such record in this organization") from None

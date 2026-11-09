@@ -408,10 +408,11 @@ def _tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None
     def permissions():
         facts = tenant_facts(conn, kind, fp)
         pairs = conn.execute(
-            "SELECT DISTINCT channel, purpose FROM consentvault.current_permission"
+            "SELECT DISTINCT ON (channel, purpose) channel, purpose, allowed, reason, rule_set_version FROM consentvault.current_permission"
             " WHERE org_id = consentvault.current_org() AND contact_kind = %s AND contact_fp = ANY(%s)"
-            " ORDER BY channel, purpose", (kind, fps)).fetchall()
-        out = [{"channel": p["channel"], "purpose": p["purpose"], "status": facts.status,
+            " ORDER BY channel, purpose, allowed", (kind, fps)).fetchall()
+        out = [{"channel": p["channel"], "purpose": p["purpose"], "status": facts.status, "allowed": p["allowed"], "reason": p["reason"],
+                "rule_set_version": p["rule_set_version"],
                 "basis_event_ids": [line["event_id"] for line in facts.history
                                     if p["channel"] in line["channels"] and (p["purpose"] in line["purposes"]
                                                                              or "*" in line["purposes"])]}

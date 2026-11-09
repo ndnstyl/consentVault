@@ -512,15 +512,20 @@ def _shadow_history(writer, conn, enter, view: PostView, field_map: Any) -> bool
         cut = _is_cut(conn, enter)
         contact = (history.contact_of(fields, (_stored_settings(facts) or {}).get("region"), view.org_id, getattr(writer, "crypto", None))
                    if reason is None else (None, None, None))   # only a post that counts is fingerprinted: no reader acts on a refused post's contact
+        if view.intake == "erasure":   # the erasure stop names its contact by fingerprint, never by the contact
+            named = history.raw_fields(view.body).get("contact_fp")
+            if isinstance(named, str):
+                contact = (None, named, None)
         event_id = history.event_id_of(view.post_id)
         sealed = (history.seal_contact(conn, lambda: _ctx(conn, enter), writer.crypto, view.org_id, event_id, contact[1], contact[2])
-                  if cut and contact[1] else None)
+                  if cut and contact[1] and contact[2] else None)
         return history.write_row(conn, lambda: _ctx(conn, enter), org_id=view.org_id, post_id=view.post_id, fields=fields,
                                  reason=reason, earliest_copy=earliest, facts_read=facts_read,
                                  intake_code_version=facts.get(("vault", "code_version")) or CODE_VERSION,
                                  intents=history.intents_of(org_id=view.org_id, post_id=view.post_id, fields=fields, reason=reason,
                                                             earliest_copy=earliest, facts=facts),
-                                 contact=contact, contact_ct=sealed)
+                                 contact=contact, contact_ct=sealed, advance_state=bool(cut and reason is None and earliest),
+                                 records_crypto=writer.crypto if (cut and reason is None and earliest) else None)
     except Exception as exc:  # loud-failure-exempt: logged by name; the old fold's outcome stands and the missing row is reported by the completeness check
         _log.error("the history row of a stored post could not be written; the next rebuild writes it", error=type(exc).__name__)
     return False
@@ -929,12 +934,6 @@ def write_tenant_event(conn: psycopg.Connection, crypto, *, contact: str, event_
         payload=payload, **fields)
 
 
-def write_system_event(conn: psycopg.Connection, crypto: Any, **fields) -> Event:
-    """An event the vault writes with no post of its own because the post would hold the very data it is erasing (an erasure's
-    stop). The one use; every other event cites its post."""
-    return record_tenant_event(conn, crypto, **fields)
-
-
 def store_erasure_stop_post(conn: psycopg.Connection, crypto: Any, *, erasure_id: Any, contact_fp: str, channels, marker: str,
                             source: str) -> StoredPost:
     """The erasure's stop as a post (intake ``erasure``), stored through the ordinary writer BEFORE the contact key is deleted, and
@@ -953,6 +952,9 @@ def store_erasure_stop_post(conn: psycopg.Connection, crypto: Any, *, erasure_id
     enter = lambda c: c.transaction()  # noqa: E731  (the caller's connection is already entered as the organisation)
     stored = writer.write(conn, enter, req)
     view = PostView(stored.org_id, stored.post_id, stored.seq, "erasure", body, {}, arrived_epoch=stored.received_at.timestamp())
+    # the erased-label facts: the mark that this post is the stop of an erasure, written beside the post (no personal data), before it is projected
+    writer.append_facts(conn, enter, stored.org_id, stored.post_id, stored.data_key,
+                        [Fact("vault", "erased", {"erasure_id": str(erasure_id), "marker": marker}, status="value", label="erased")])
     _shadow_history(writer, conn, enter, view, None)
     return stored
 

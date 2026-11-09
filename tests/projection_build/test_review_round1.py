@@ -120,7 +120,7 @@ def test_r8_the_history_stop_reader_refuses_a_session_with_no_organisation(world
     cut = door_post(world, o, stop_fields(o, PHONE))
     (h,) = sql(world, "SELECT contact_fp FROM consentvault.post_history WHERE org_id=%s AND post_id=%s", (o.org_id, cut))
     with org_enter(world, o) as c:
-        assert c.execute("SELECT * FROM consentvault.history_stop_on_record(%s,%s,'sms')", (o.org_id, h["contact_fp"])).fetchone()["stopped"]
+        assert c.execute("SELECT consentvault.history_stop_on_record(%s,%s,'sms') AS s", (o.org_id, h["contact_fp"])).fetchone()["s"]
     with pytest.raises(psycopg.Error):
         with world.vault.appconn() as c:
             c.execute("SELECT * FROM consentvault.history_stop_on_record(%s,%s,'sms')", (o.org_id, h["contact_fp"])).fetchall()

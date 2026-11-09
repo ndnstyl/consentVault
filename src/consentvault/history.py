@@ -113,7 +113,8 @@ def intents_of(*, org_id: str, post_id: str, fields: Mapping[str, Any], reason: 
 
 def write_row(conn, ctx: Callable, *, org_id: str, post_id: str, fields: Mapping[str, Any], reason: str | None,
               earliest_copy: bool, facts_read: list, intake_code_version: str | None,
-              contact: tuple = (None, None, None), contact_ct: bytes | None = None, intents: list | None = None) -> bool:
+              contact: tuple = (None, None, None), contact_ct: bytes | None = None, intents: list | None = None, advance_state: bool = False,
+              records_crypto: Any = None) -> bool:
     """Write the history row of one stored post unless it has one. Returns True when a row was written."""
     with ctx():
         if conn.execute("SELECT 1 FROM consentvault.post_history WHERE org_id = %s AND post_id = %s",
@@ -136,6 +137,13 @@ def write_row(conn, ctx: Callable, *, org_id: str, post_id: str, fields: Mapping
              _text(fields.get("source_id")), _as_list(fields.get("brand_ids")), standing_of(reason), earliest_copy,
              Jsonb(completeness(fields)), Jsonb(facts_read), RULE_SET_VERSION, intake_code_version, FOLD_CODE_VERSION,
              contact[1], contact[1], contact_ct))
+        if advance_state and contact[1]:   # the sync state of the person moves with the row, in the row's own transaction (item 20)
+            conn.execute("SELECT * FROM consentvault.sync_advance_state(%s, %s)", (uuid.UUID(event_id_of(post_id)), contact[1])).fetchall()
+        if records_crypto is not None and contact[1] and contact[2]:   # the contact's record and its index, in the row's transaction (items 13, 17)
+            from .records import write_event_records
+
+            write_event_records(conn, records_crypto, org=uuid.UUID(org_id), event_id=event_id_of(post_id), contact_fp=contact[1],
+                                contact_kind=contact[0], contact_norm=contact[2])
         for effect, target, channel, extra in intents or []:   # in the history row's own transaction; the unique key makes a second projection add none
             conn.execute("INSERT INTO consentvault.effect_intent (org_id, intent_id, post_id, effect, target, contact_fp, channel)"
                          " VALUES (%s, consentvault.effect_intent_id(%s, %s), %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",

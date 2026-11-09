@@ -75,7 +75,7 @@ def _backfill_org(conn, token_key, custody, crypto, org) -> dict[str, int]:
             out["display_keys"] += 1
     with org_transaction(conn, token):
         first = conn.execute(
-            "SELECT DISTINCT ON (e.contact_fp) e.event_id, e.contact_fp, e.contact_kind, e.contact_ct FROM consentvault.event e"
+            "SELECT DISTINCT ON (e.contact_fp) e.event_id, e.contact_fp, e.contact_kind, e.contact_ct FROM consentvault.post_history_all_events e"
             " WHERE e.org_id = (SELECT consentvault.current_org()) AND NOT EXISTS (SELECT 1 FROM consentvault.record r"
             " WHERE r.org_id = e.org_id AND r.contact_fp = e.contact_fp) ORDER BY e.contact_fp, e.seq").fetchall()
     for ev in first:
@@ -93,7 +93,7 @@ def _relink(conn, crypto, org, row: dict, out: dict) -> None:
     """An index written before migration 0058 has no default subject fingerprint, so its link may follow an unkeyed event.
     Re-derive it with the default, which re-reads the link from the newest keyed event."""
     fp = row["contact_fp"]
-    ev = conn.execute("SELECT event_id, contact_ct FROM consentvault.event WHERE org_id = (SELECT consentvault.current_org())"
+    ev = conn.execute("SELECT event_id, contact_ct FROM consentvault.post_history_all_events WHERE org_id = (SELECT consentvault.current_org())"
                       " AND event_id = %s", (row["event_id"],)).fetchone()
     held = conn.execute("SELECT * FROM consentvault.contact_key_of(%s)", (fp,)).fetchone()
     if held is None:

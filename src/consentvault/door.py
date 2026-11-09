@@ -368,6 +368,7 @@ class Outcome:
 
 
 WAITING = "waiting_for_an_earlier_post"
+WAITING_TO_RETRY = "waiting_for_its_next_attempt"
 
 
 @dataclass(frozen=True)
@@ -601,7 +602,7 @@ def project_post(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
     changes which of two copies of one request counts or the order of a person's history."""
     if catch_up:
         earlier = project_pending(writer, conn, None if catch_up is True else catch_up, backend, through_seq=view.seq - 1,
-                                  intakes=intakes)
+                                  intakes=intakes, retry_interval_s=LIVE_RETRY_INTERVAL_SECONDS)
         if any(o.halts for o in earlier):   # an earlier post could not be projected yet: this one waits behind it, in arrival order
             return Outcome(view.post_id, reason=WAITING, retry=True)
     return project_view(writer, conn, enter, backend, view, field_map=field_map, raise_errors=raise_errors)
@@ -615,21 +616,27 @@ def read_view(writer: RawPostWriter, conn: psycopg.Connection, org: str, post_id
 
 
 HALT_CAP_SECONDS = 900
+LIVE_RETRY_INTERVAL_SECONDS = 60.0
 
 
 def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, backend: Any, *,
-                    through_seq: int | None = None, intakes: tuple[str, ...] | None = None) -> list[Outcome]:
+                    through_seq: int | None = None, intakes: tuple[str, ...] | None = None,
+                    retry_interval_s: float | None = None) -> list[Outcome]:
     """Run the projection for every stored post that has no outcome yet, in arrival order. Safe to run any number of times. A
     post's own error is that post's outcome and never the queue's. A faulted post halts the posts behind it only until
     ``HALT_CAP_SECONDS`` have passed since its first recorded attempt (not since it arrived): after that the posts behind it go
     ahead, the faulted post is tried again on every run, and no post blocks the others for long. The posts held behind it are
-    returned as unfinished, named, never skipped silently."""
+    returned as unfinished, named, never skipped silently. The live path (``retry_interval_s``) does not try a post again
+    while its last attempt is younger than the interval: it stays unfinished and halts as before, and the rebuild (no interval)
+    tries it every run."""
     with _ctx(conn, enter):
         rows = conn.execute(
             "SELECT p.org_id::text AS org, p.post_id::text AS post_id, p.seq, p.intake, p.method, p.path,"
             " EXTRACT(EPOCH FROM p.received_at)::float8 AS arrived,"
             " (SELECT EXTRACT(EPOCH FROM (clock_timestamp() - min(a.attempted_at)))::float8 FROM consentvault.projection_attempt a"
-            "   WHERE a.org_id = p.org_id AND a.post_id = p.post_id) AS attempt_age_s FROM consentvault.raw_post p"
+            "   WHERE a.org_id = p.org_id AND a.post_id = p.post_id) AS attempt_age_s,"
+            " (SELECT EXTRACT(EPOCH FROM (clock_timestamp() - max(a.attempted_at)))::float8 FROM consentvault.projection_attempt a"
+            "   WHERE a.org_id = p.org_id AND a.post_id = p.post_id) AS last_attempt_age_s FROM consentvault.raw_post p"
             " WHERE p.org_id = (SELECT consentvault.current_org()) AND p.kind = 'post'"
             "   AND (%s::bigint IS NULL OR p.seq <= %s) AND (%s::text[] IS NULL OR p.intake = ANY(%s))"
             "   AND NOT EXISTS (SELECT 1 FROM consentvault.event_source_post s WHERE s.org_id = p.org_id"
@@ -640,13 +647,16 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
     rows = [r for r in rows if _backend_for(backend, r["intake"]) is not None]
     out: list[Outcome] = []
     for n, r in enumerate(rows):
-        try:
-            with _ctx(conn, enter):
-                view = read_view(writer, conn, r["org"], r["post_id"], r["seq"], r["intake"], r["method"], r["path"], r["arrived"])
-        except Exception as exc:  # loud-failure-exempt: logged and handed on as the post's outcome; no error is final
-            outcome = _unreadable_post(conn, enter, r, exc)
+        if retry_interval_s is not None and r["last_attempt_age_s"] is not None and r["last_attempt_age_s"] < retry_interval_s:
+            outcome = Outcome(r["post_id"], reason=WAITING_TO_RETRY, retry=True, halts=True)   # tried a moment ago: the rebuild retries it
         else:
-            outcome = project_view(writer, conn, enter, backend, view)
+            try:
+                with _ctx(conn, enter):
+                    view = read_view(writer, conn, r["org"], r["post_id"], r["seq"], r["intake"], r["method"], r["path"], r["arrived"])
+            except Exception as exc:  # loud-failure-exempt: logged and handed on as the post's outcome; no error is final
+                outcome = _unreadable_post(conn, enter, r, exc)
+            else:
+                outcome = project_view(writer, conn, enter, backend, view)
         elapsed = r["attempt_age_s"] if r["attempt_age_s"] is not None else 0.0   # this run's attempt is the first one recorded
         if outcome.halts and elapsed >= HALT_CAP_SECONDS:
             _log.error("a stored post has not been projectable for a long time; the posts behind it go ahead", elapsed_s=int(elapsed))

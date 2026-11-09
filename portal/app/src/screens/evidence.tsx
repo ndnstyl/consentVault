@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, allPages } from '../lib/api/client.ts';
-import type { ContactDelivery, ExportDetail, ExportItem, Proof, ProofAnchor, ProofPermission, System } from '../lib/api/types.ts';
+import type { ContactDelivery, ContactRecord, ExportDetail, ExportItem, Proof, ProofAnchor, ProofPermission, System } from '../lib/api/types.ts';
 import { CHANNEL_FALLBACK, EVENT_LABEL, GATE_NOTICE, NA, PACKAGE_COVER, PUSH_STATE_LABEL, causeLine } from '../lib/copy.ts';
 import { useAction, usePoll, useResource } from '../lib/hooks.ts';
 import { Link, useRouter } from '../lib/router.tsx';
 import { canDo } from '../lib/roles.ts';
 import { useSession } from '../lib/session.tsx';
 import { checkContact, fmtDateTime, maskContact, prettyContact } from '../lib/format.ts';
+import { eventOrigin, purposeWords } from '../lib/labels.ts';
 import { useToast } from '../lib/toast.tsx';
 import { ConfirmDialog } from '../components/Dialog.tsx';
 import { Banner, Btn, Chip, CopyButton, DataTable, DeliveryChip, ErrorBlock, EvidenceChip, Icon, KV, LinkBtn, NotAvailable, PageHead, SealChip, Skeleton, StateBlock, SuccessBanner, TextField, Time } from '../components/ui.tsx';
@@ -31,10 +32,16 @@ export function PermissionsTable({ permissions }: { permissions: ProofPermission
     <DataTable caption="Evidence status by channel and purpose" rows={permissions} rowKey={(p) => `${p.channel}:${p.purpose}`}
       columns={[
         { key: 'c', header: 'Channel', render: (p) => CHANNEL_FALLBACK[p.channel] ?? p.channel, primary: true },
-        { key: 'p', header: 'Purpose', render: (p) => p.purpose },
+        { key: 'p', header: 'Purpose', render: (p) => purposeWords(p.purpose) },
         { key: 'e', header: 'Evidence status', render: (p) => <EvidenceChip status={statusOf(p)} /> },
       ]} />
   );
+}
+/** The same per-channel statuses the Records page shows, as lookup rows. */
+export function permissionsFromRecord(rec: Pick<ContactRecord, 'channels'>): ProofPermission[] {
+  const order = ['sms', 'voice', 'artificial_voice', 'email'];
+  const keys = [...order.filter((k) => rec.channels?.[k]), ...Object.keys(rec.channels ?? {}).filter((k) => !order.includes(k))];
+  return keys.flatMap((k) => (rec.channels[k].purposes ?? []).map((p) => ({ channel: k, purpose: p.purpose, status: p.evidence_status, basis_event_ids: [] })));
 }
 export const statusOf = (p: ProofPermission): string => p.status ?? p.evidence_status ?? '';
 export function chainLine(chain: NonNullable<Proof['chain']>): React.ReactNode {
@@ -67,12 +74,15 @@ export function EvidenceLookup() {
   const [eraseDone, setEraseDone] = useState(false);
   const [more, setMore] = useState<string | null>(null);
   const [invalid, setInvalid] = useState<string | null>(null);
+  const [recordRows, setRecordRows] = useState<ProofPermission[] | null>(null);
+  const [masked, setMasked] = useState<string | null>(null);
+  const openedFor = useRef<string | null>(null);
   const lookup = useAction((c: string) => api.evidence.lookup(c));
   const build = useAction((c: string) => api.exports.create(c));
   const heading = useRef<HTMLHeadingElement>(null);
   const suspended = status === 'suspended';
   const run = async (c: string) => {
-    setContact(c); setProof(null); setEraseDone(false); setInvalid(null);
+    setContact(c); setProof(null); setEraseDone(false); setInvalid(null); setRecordRows(null);
     const r = await lookup.run(c);
     if (r.ok) {
       setProof(r.value);
@@ -80,6 +90,7 @@ export function EvidenceLookup() {
       const checklists = new Map<number, Map<string, string>>();
       let systems: System[] | null = null;
       await Promise.all([
+        api.records.search(c).then((x) => { const rec = x.items[0]; setRecordRows(rec ? permissionsFromRecord(rec) : null); }).catch(() => setRecordRows(null)),
         allPages((x) => api.brandNames({ cursor: x })).then((b) => b.forEach((y) => names.set(y.brand_id, y.display_name))).catch(() => undefined),
         allPages((x) => api.sourceNames({ cursor: x })).then((s) => s.forEach((y) => names.set(y.source_id, y.name))).catch(() => undefined),
         allPages((x) => api.systems.list({ cursor: x })).then((s) => { systems = s; }).catch(() => { systems = null; }),
@@ -89,6 +100,13 @@ export function EvidenceLookup() {
     }
   };
   useEffect(() => { if (proof) heading.current?.focus(); }, [proof]);
+  const openRecord = async (id: string) => {
+    const r = await revealRecord.run(id);
+    const it = r.ok ? r.value.items[0] : null;
+    if (it && it.contact) { setMasked(maskContact(it.contact)); await run(it.contact); }
+    else if (it) setUnreadable(it.cause === 'erased' ? 'This record is erased. Its contact point can no longer be read, so there is nothing to look up. The stop written by the erasure request is kept.' : "Your organization's encryption key did not answer. Try again in a minute.");
+  };
+  useEffect(() => { if (recordId && openedFor.current !== recordId) { openedFor.current = recordId; void openRecord(recordId); } }, [recordId]);
   const loadMore = async (section: 'timeline' | 'gate_decisions', cursor: string | null) => {
     if (!contact || !cursor) return;
     setMore(section);
@@ -105,19 +123,14 @@ export function EvidenceLookup() {
   const wording = (sha: string | null) => (sha ? proof?.disclosures?.find((d) => d.sha256 === sha) : undefined);
   const chLabel = (c: string) => CHANNEL_FALLBACK[c] ?? c;
   const lookupErr = lookup.error;
-  const shown = contact ? prettyContact(contact) : '';
+  const shown = masked ?? (contact ? prettyContact(contact) : '');
   return (
     <>
       <PageHead title="Evidence lookup" lede={`Everything ${orgName}'s records hold for one phone number or email address.`} />
       {recordId && !proof && (
         <Banner kind="info" title="Opened from Records"
-          action={<Btn variant="primary" busy={revealRecord.busy} busyLabel="Showing" onClick={async () => {
-            const r = await revealRecord.run(recordId);
-            const it = r.ok ? r.value.items[0] : null;
-            if (it && it.contact) await run(it.contact);
-            else if (it) setUnreadable(it.cause === 'erased' ? 'This record is erased. Its contact point can no longer be read, and its stop is kept.' : "Your organization's encryption key did not answer. Try again in a minute.");
-          }}>Show full contact point</Btn>}>
-          This page opens by record, so the contact point stays masked until you ask for it. Showing it is recorded in the audit log with your name.
+          action={revealRecord.error ? <Btn variant="primary" onClick={() => void openRecord(recordId)}>Try again</Btn> : undefined}>
+          {revealRecord.busy || lookup.busy ? 'Loading this record.' : revealRecord.error || unreadable ? 'This record did not load.' : 'The contact point was read once to load this record and is shown masked. That read is recorded in the audit log with your name.'}
         </Banner>
       )}
       {unreadable && <Banner kind="warning" title="The contact point was not shown">{unreadable}</Banner>}
@@ -150,10 +163,10 @@ export function EvidenceLookup() {
           <p className="hint">Chain integrity: {proof.chain ? chainLine(proof.chain) : NA}</p>
           {(proof.partial?.length ?? 0) > 0 && <Banner kind="warning" title="Some sections did not load">{`${proof.partial!.map((p) => p.replace(/_/g, ' ')).join(', ')} did not load. The sections below are complete.`}</Banner>}
           {unsealed.length > 0 && <Banner kind="warning" title="Seal pending">{`${unsealed.length} event${unsealed.length === 1 ? ' is' : 's are'} not sealed yet. Outside timestamps are usually added within an hour. Packages built now mark ${unsealed.length === 1 ? 'it' : 'them'} as unsealed.`}</Banner>}
-          {review.length > 0 && <Banner kind="info" title="A later grant did not lift a stop">{`A later grant arrived after a stop on ${proof.permissions.find((p) => statusOf(p) === 'stop_on_record') ? chLabel(proof.permissions.find((p) => statusOf(p) === 'stop_on_record')!.channel) : 'a channel'}. The person's control of the contact point was not verified (contact_control_unverified), so the stop stays on record. It is listed for review.`}</Banner>}
+          {review.length > 0 && <Banner kind="info" title="A later grant is recorded after a stop">{`A later grant was recorded after a stop on ${proof.permissions.find((p) => statusOf(p) === 'stop_on_record') ? chLabel(proof.permissions.find((p) => statusOf(p) === 'stop_on_record')!.channel) : 'a channel'}. The person's control of the contact point was not verified (contact_control_unverified), It is listed for review. Whether the grant changes how far the stop reaches is set by the rule-set in use.`}</Banner>}
 
           <h3 className="sec mt5">Evidence status now</h3>
-          <PermissionsTable permissions={proof.permissions} />
+          <PermissionsTable permissions={recordRows ?? proof.permissions} />
           <p className="notice">{proof.notice || GATE_NOTICE}</p>
 
           <h3 className="sec mt5">Timeline (arrival order)</h3>
@@ -167,7 +180,7 @@ export function EvidenceLookup() {
                   <li key={e.event_id}>
                     <Icon name={e.event_type === 'grant' ? 'i-found' : 'i-stop'} />
                     <div className="hd"><b>{EVENT_LABEL[e.event_type] ?? e.event_type}</b><span className="when"><Time iso={e.at} /> · seq {e.seq}</span></div>
-                    <div className="body">{e.channels.map(chLabel).join(', ')} · {e.purposes.join(', ')} · Brand {e.brand_ids.map(name).join(', ')} · Source {name(e.source_id)}{w && <> · Wording <Link href={`/wording/${w.sha256}`}>{w.version_label ?? w.label}</Link></>}</div>
+                    <div className="body">{e.channels.map(chLabel).join(', ')} · {e.purposes.map(purposeWords).join(', ')} · Brand {eventOrigin(e, name).brand} · Source {eventOrigin(e, name).source}{w && <> · Wording <Link href={`/wording/${w.sha256}`}>{w.version_label ?? w.label}</Link></>}</div>
                     <div className="gap-row"><SealChip sealedAt={e.sealed ? e.sealed_at : null} />{e.recorded_during_trial && <Chip tone="st-info" icon="i-info">Recorded during trial</Chip>}</div>
                     {dc && <div className="body">{`Checklist v${dc.checklist_version}: ${dc.present.length} of ${dc.present.length + dc.missing.length} present${dc.missing.length ? `, missing ${dc.missing.map((m) => `"${names?.get(m) ?? m}"`).join(', ')}` : ''}. Documentation completeness, not a legal test.`}</div>}
                   </li>
@@ -183,7 +196,7 @@ export function EvidenceLookup() {
               columns={[
                 { key: 't', header: 'Checked', render: (g) => <Time iso={g.at} />, primary: true },
                 { key: 'c', header: 'Channel', render: (g) => chLabel(g.channel) },
-                { key: 'e', header: 'Evidence status', render: (g) => <EvidenceChip status={g.evidence_status} /> },
+                { key: 'e', header: 'Evidence status', render: (g) => <EvidenceChip status={g.evidence_status ?? g.status ?? ''} /> },
               ]} />
           )}
           {proof.gate_decisions?.next_cursor && <Btn size="sm" busy={more === 'gate_decisions'} busyLabel="Loading" onClick={() => loadMore('gate_decisions', proof.gate_decisions!.next_cursor)}>Load more gate checks</Btn>}
@@ -194,7 +207,7 @@ export function EvidenceLookup() {
       )}
       {erase && contact && (
         <ConfirmDialog title={`Request erasure for ${shown}?`} destructive confirmLabel="Send erasure request" busyLabel="Sending" reasonLabel="Reason (recorded in the audit log)" reasonRequired
-          body={<><p>What happens: this person&apos;s contact details become unreadable. Their fingerprint and stop records are kept so their opt-out keeps being honored. Your chain still verifies. This cannot be undone.</p><p>The operator confirms every erasure before it runs. A legal hold on this contact blocks it.</p></>}
+          body={<><p>What happens: this person&apos;s contact details become unreadable. Their fingerprint and stop records are kept, with the channels each stop was recorded on. How far a stop reaches is set by the rule-set in use. Your chain still verifies. This cannot be undone.</p><p>The operator confirms every erasure before it runs. A legal hold on this contact blocks it.</p></>}
           failTitle="The erasure was not requested" failNext="Nothing was queued."
           onClose={() => setErase(false)}
           onConfirm={async (reason) => { try { await api.erasure.request(contact, reason); setEraseDone(true); toast('Erasure request sent. Recorded in the audit log.'); return null; } catch (e) { return e as ApiError; } }} />

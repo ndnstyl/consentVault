@@ -414,7 +414,7 @@ async function flows() {
   await page.getByLabel('Phone number or email').fill('(555) 555-0100'); await page.getByRole('button', { name: 'Look up records' }).click(); await settle(page);
   ok('13-1 URL unchanged after search', page.url() === urlBefore);
   ok('13-3 status chips carry visible text', (await text()).includes('Stop on record') && (await text()).includes('No record') && !(await text()).includes('Your policy'));
-  const notice = "Evidence status and the outcome of your organization's approved policy. Not a legal determination.";
+  const notice = "The records held for this contact point, as recorded. ConsentVault records consent and does not decide.";
   ok('13-4 notice appears exactly once', (await text()).split(notice).length - 1 === 1);
   ok('13 heading names the contact and org', (await text()).includes('Records for (555) 555-0100 in Acme Lending'));
   ok('13 deliveries section', (await text()).includes('Stops sent to your connected systems') && (await text()).includes('Undelivered (dead)'));
@@ -446,7 +446,7 @@ async function flows() {
   ok('13 seal pending banner', (await text()).includes('1 event is not sealed yet'));
   await go('/evidence', {});
   await page.getByLabel('Phone number or email').fill('(555) 555-0102'); await page.getByRole('button', { name: 'Look up records' }).click(); await settle(page);
-  ok('13 later grant did not lift a stop', (await text()).includes('A later grant did not lift a stop'));
+  ok('13 later grant did not lift a stop', (await text()).includes('A later grant is recorded after a stop'));
   // 14: exports
   await go('/exports', { exportMode: 'normal' });
   await page.getByLabel('Phone number or email').fill('(555) 555-0100'); await page.getByRole('button', { name: 'Build evidence package' }).click();
@@ -577,7 +577,7 @@ async function recordsScreen() {
   ok('23 default: source names come from the names read; the full source list is not asked', (await reqs(/^\/v1\/source-names/)).length >= 1 && (await reqs(/^\/v1\/sources(\?|$)/)).length === 0);
   ok('23 confirmation column: a failed send reads Failed, never refused or retrying', /(Text|Email) failed/.test(t) && !/refused by the provider/.test(t) && !/Retrying/.test(t));
   ok('23-11 Record incomplete is nowhere on the screen', !/Record incomplete/i.test(await page.locator('body').innerText()));
-  ok('23 default: the rule for counting a record once per channel is stated', /counts once per channel, under its most protective status/.test(t));
+  ok('23 default: the rule for counting a record once per channel is stated', /counts once per channel, as the records show it/.test(t));
   const hrefs = await page.locator('tbody a[href^="/evidence"]').evaluateAll((a) => a.map((x) => x.getAttribute('href')));
   ok('23-8 a row link goes to evidence lookup by record id', hrefs.length === 50 && hrefs.every((h) => /^\/evidence\?record=[A-Za-z0-9_-]+$/.test(h)), hrefs[0]);
 
@@ -745,12 +745,11 @@ async function recordsScreen() {
   const rowHref = await page.locator('.tw tbody a[href^="/evidence"]').first().getAttribute('href');
   await page.goto(base + rowHref); await settle(page);
   t = await text();
-  ok('13 opened by record id: says so, shows no contact point and offers to show it', /Opened from Records/.test(t) && !FULL.test(t) && (await page.getByRole('button', { name: 'Show full contact point' }).count()) === 1 && !/@|\d{7}/.test(page.url().replace(/record=[A-Za-z0-9_-]+/, '')));
-  await page.getByRole('button', { name: 'Show full contact point' }).click(); await settle(page);
   await page.getByText(/^Records for /).first().waitFor({ timeout: 6000 }).catch(() => undefined);
   const rid = rowHref.split('record=')[1];
   const rvr = await reqs(/records:reveal/);
-  ok('13 opened by record id: one reveal for that id, then the evidence lookup runs', rvr.length === 1 && rvr[0].body.record_ids.length === 1 && rvr[0].body.record_ids[0] === rid && /Records for \(555\) 555-0100/.test(await text()));
+  ok('13 opened by record id: the lookup loads at once with the contact point masked on the page and the URL', /Records for \(555\) \*\*\*-0100/.test(t = await text()) && !FULL.test(t) && !/@|\d{7}/.test(page.url().replace(/record=[A-Za-z0-9_-]+/, '')));
+  ok('13 opened by record id: one reveal for that id, then the evidence lookup runs', rvr.length === 1 && rvr[0].body.record_ids.length === 1 && rvr[0].body.record_ids[0] === rid);
 
   // suspended: exports pause with a visible reason, reading and search stay
   await go('/records', { orgStatus: 'suspended' });
@@ -1207,7 +1206,7 @@ async function confirmationsScreen() {
   const fx2 = (await (await fetch(`${base}/v1/confirmations/settings`)).json()).fixed_texts.items;
   ok('25-9 the opt-out, HELP and START replies shown are the fixed texts the service returned, unedited', fx2.filter((i) => i.kind !== 'confirmation').every((i) => t.includes(i.text)), t.slice(0, 300));
   ok('25 text page: characters and segments are shown', /\d+ characters, \d+ text segments?/.test(t));
-  ok('25 text page: the stop, HELP and START words are explained in full', /Any reply containing a stop word/.test(t) && /START asks the release rule to turn texts back on; calls stay stopped\./.test(t) && /'bus stop' or 'don't stop' is not a stop/.test(t));
+  ok('25 text page: the stop, HELP and START words are explained in full', /Any reply containing a stop word/.test(t) && /A START or any other text is recorded as a text and lifts nothing/.test(t) && /'bus stop' or 'don't stop' is not a stop/.test(t));
   const swE = page.getByRole('switch', { name: /^Send text confirmations for/ });
   ok('25 text page: the on switch is aria-disabled with the reason when registration is not marked', (await swE.getAttribute('aria-disabled')) === 'true' && /Off until texting registration is marked complete/.test(t));
   await go('/confirmations/src_sf/email', { confirmations: 'link_unset' });

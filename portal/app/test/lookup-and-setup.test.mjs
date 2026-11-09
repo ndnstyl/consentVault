@@ -59,3 +59,55 @@ test('a session user with a null display name falls back to the address, so Setu
   assert.equal(firstNameOf(u), 'admin@example.com');
   assert.equal(firstNameOf(null), '');
 });
+
+// ---- reviewer round: wording, erased stop, lookup status table, audit names ----
+const { actorName, actionLabel, wordingName, eventOrigin, purposeWords, memberName } = await import('../src/lib/labels.ts');
+const { permissionsFromRecord } = await import('../src/screens/evidence.tsx');
+const { fmtDate } = await import('../src/lib/format.ts');
+
+const ADMIN = { id: '71a22cbf-3f56-4f4c-9494-c9daff93dd4c', display_name: null, email: 'admin@example.com' };
+const V2 = { label: 'estimate-form-v2', version_label: null, effective_from: '2026-01-01T00:00:00Z' };
+
+test('a wording version with a null version_label is named by its label, and midnight UTC reads as that calendar day', () => {
+  assert.equal(wordingName(V2), 'estimate-form-v2');
+  assert.equal(wordingName({ label: 'x', version_label: 'v9' }), 'v9');
+  assert.equal(fmtDate(V2.effective_from), 'Jan 1, 2026');
+});
+
+test('a member is shown by name or address, never by id', () => {
+  const members = new Map([[ADMIN.id, ADMIN]]);
+  assert.equal(memberName(ADMIN), 'admin@example.com');
+  assert.equal(actorName({ kind: 'member', id: ADMIN.id, display_name: null }, members), 'admin@example.com');
+  assert.equal(actorName({ kind: 'member', id: 'unknown', display_name: null }, members), null);
+  assert.equal(actorName({ kind: 'operator', id: 'o', display_name: null }, members), 'The platform operator');
+});
+
+test('an audit action reads as the service label, else as words, never the raw code', () => {
+  const labels = new Map([['brand.created', 'Brand added']]);
+  assert.equal(actionLabel('brand.created', labels), 'Brand added');
+  assert.equal(actionLabel('session.opened', labels), 'Session opened');
+});
+
+test('the lookup status table shows the stop the Records page shows, from the same record data', () => {
+  const rec = { channels: { sms: { counts: {}, purposes: [{ purpose: '*', evidence_status: 'stop_on_record' }] }, email: { counts: {}, purposes: [{ purpose: 'marketing', evidence_status: 'no_record' }] } } };
+  const html = renderToStaticMarkup(React.createElement(PermissionsTable, { permissions: permissionsFromRecord(rec) }));
+  assert.match(html, /Stop on record/);
+  assert.match(html, /All purposes/);
+  assert.match(html, /No record/);
+  assert.doesNotMatch(html, /Records found/);
+});
+
+test('an event with no brand and no source is an erasure request; a missing brand elsewhere reads Not recorded', () => {
+  const name = (id) => id;
+  assert.deepEqual(eventOrigin({ brand_ids: [], source_id: null }, name), { brand: 'erasure request', source: 'erasure request' });
+  assert.deepEqual(eventOrigin({ brand_ids: [], source_id: 'estimate-form' }, name), { brand: 'Not recorded', source: 'estimate-form' });
+  assert.equal(purposeWords('*'), 'All purposes');
+});
+
+test('no reading of a rule-set is written as a fact in the portal copy', async () => {
+  const { readFileSync } = await import('node:fs');
+  for (const f of ['../src/screens/records.tsx', '../src/screens/evidence.tsx', '../src/screens/confirmations.tsx']) {
+    const t = readFileSync(new URL(f, import.meta.url), 'utf8');
+    assert.doesNotMatch(t, /most protective status|keeps being honored|did not lift a stop|covers texts and calls|never when a stop is on record/, f);
+  }
+});

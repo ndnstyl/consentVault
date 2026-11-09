@@ -99,7 +99,7 @@ export interface AuditRow {
 export interface Channel { channel: string; label: string }
 export interface Purpose { purpose: string; label: string; description: string }
 export interface Disclosure {
-  sha256: string; label: string; version_label: string; channels: string[]; purposes: string[]; brand_ids: string[];
+  sha256: string; label: string; version_label: string | null; channels: string[]; purposes: string[]; brand_ids: string[];
   supersedes_sha256: string | null; superseded_by_sha256: string | null; effective_from: string; registered_by: string; registered_at: string;
   body?: string;
 }
@@ -145,7 +145,7 @@ export interface TimelineEvent {
   event_id: string; seq: number; event_type: 'grant' | 'revoke' | 'suppress' | 'release'; at: string; channels: string[]; purposes: string[];
   source_id: string; brand_ids: string[]; disclosure_sha256: string | null; sealed: boolean; sealed_at: string | null; recorded_during_trial: boolean;
 }
-export interface GateDecision { decision_id: string; at: string; channel: string; purpose: string; evidence_status: string }
+export interface GateDecision { decision_id: string; at: string; channel: string; purpose: string; evidence_status?: string; status?: string }
 export interface Proof {
   found: boolean; evaluated_at: string; notice: string;
   permissions: ProofPermission[];

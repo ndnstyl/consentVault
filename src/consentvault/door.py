@@ -313,11 +313,13 @@ class TenantBackend:
 
     def prepare(self, conn, payload: Mapping[str, Any], body: bytes, auth: Auth) -> dict | str:
         from .tenancy.admin_base import ApiError
-        from .tenancy.pipeline import parse_capture
+        from .tenancy.pipeline import check_source_from_settings, parse_capture
 
         cred = auth.credential or {}
         try:
             req = parse_capture(dict(payload), body, tuple(cred.get("scopes") or ()))
+            if self.settings is not None and "source_brand_ids" in self.settings:
+                check_source_from_settings(dict(req.fields), self.settings)   # decided from the source as it stood at arrival: final
         except ApiError as exc:
             return exc.name
         return {"req": req, "credential_id": uuid.UUID(str(cred.get("credential_id"))), "credential": dict(cred), "org_id": auth.org_id,
@@ -495,14 +497,6 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
                     outcome = Outcome(view.post_id, event_id=backend.apply(conn, enter, fields, link))
                 except psycopg.errors.UniqueViolation:
                     raise _AlreadyProjected() from None
-                except Exception as exc:
-                    from .tenancy.admin_base import ApiError
-
-                    if not (isinstance(exc, ApiError) and exc.name in FINAL_API_NAMES):
-                        raise
-                    _log.error("a stored post produces no event; the reason is stored beside it", error=reason_of(exc))
-                    _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason_of(exc)))
-                    raise _FinalReading from exc
         except _AlreadyProjected:
             outcome = _already(conn, enter, view)
             if outcome.event_id is not None:
@@ -649,7 +643,6 @@ def read_view(writer: RawPostWriter, conn: psycopg.Connection, org: str, post_id
 
 
 HALT_CAP_SECONDS = 900
-FINAL_API_NAMES = ("source_not_allowed", "brand_not_allowed")   # the post names a source or brand its credential does not hold: the same every time
 LIVE_RETRY_INTERVAL_SECONDS = 60.0
 
 

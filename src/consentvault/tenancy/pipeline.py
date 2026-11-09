@@ -272,8 +272,27 @@ def check_channel_purpose(conn: psycopg.Connection, channels: list[str], purpose
         raise ApiError("UnknownPurposeError", f"purpose(s) {bad} are not in this organization's configured list")
 
 
+def check_source_from_settings(f: dict, stored: Mapping[str, Any]) -> None:
+    """The source and brand checks, decided only from what the organisation's configuration said when the post arrived (the source
+    the credential holds, its status, and the brands it and the organisation both held), stored beside the post. Pure: no
+    database, so the answer is the same however late the post is projected and however the source has been edited since."""
+    held = stored.get("source_id")
+    wanted = f.get("source_id") or held
+    if held is None or wanted != held:
+        raise ApiError("source_not_allowed", "the source does not belong to the credential")
+    f["source_id"] = held
+    if stored.get("source_status") != "active":
+        raise ApiError("source_not_allowed", "the source does not belong to the credential or is retired")
+    allowed = {str(b) for b in (stored.get("source_brand_ids") or [])}
+    if any(b not in allowed for b in (f.get("brand_ids") or [])):
+        raise ApiError("brand_not_allowed", "a brand does not belong to this organization and source")
+
+
 def _check_source_and_brands(conn: psycopg.Connection, f: dict, credential_id: uuid.UUID,
                              stored: Mapping[str, Any] | None = None) -> None:
+    if stored is not None and "source_brand_ids" in stored:
+        check_source_from_settings(f, stored)
+        return
     cred = conn.execute("SELECT source_id FROM consentvault.credential WHERE org_id = consentvault.current_org()"
                         " AND credential_id = %s", (credential_id,)).fetchone()
     held = str(cred["source_id"]) if cred and cred["source_id"] else None
@@ -378,11 +397,16 @@ class CapturePipeline:
         the capture source's status. Stored beside the post, and the projection of that post reads these and never the live
         configuration, so a later change (a retired source, a removed channel) never changes what an earlier post produces.
         Call inside the organisation's entry."""
-        row = conn.execute("SELECT s.status AS status FROM consentvault.credential c JOIN consentvault.capture_source s"
+        row = conn.execute("SELECT s.source_id AS source_id, s.status AS status,"
+                           " ARRAY(SELECT b.brand_id::text FROM consentvault.brand b WHERE b.org_id = s.org_id"
+                           "        AND b.brand_id = ANY(coalesce(s.brand_ids, '{}'::uuid[])) ORDER BY b.brand_id) AS brands"
+                           " FROM consentvault.credential c JOIN consentvault.capture_source s"
                            " ON s.org_id = c.org_id AND s.source_id = c.source_id WHERE c.org_id = consentvault.current_org()"
                            " AND c.credential_id = %s", (credential_id,)).fetchone()
         return {"region": org_region(conn, self.region), "channels": sorted(org_channels(conn)),
-                "purposes": sorted(org_purposes(conn)), "source_status": row["status"] if row else None}
+                "purposes": sorted(org_purposes(conn)), "source_status": row["status"] if row else None,
+                "source_id": str(row["source_id"]) if row else None,
+                "source_brand_ids": list(row["brands"]) if row else []}
 
     def capture(self, conn: psycopg.Connection, enter: Callable, req: CaptureRequest, *,
                 credential_id: uuid.UUID, link: Callable | None = None, settings: Mapping[str, Any] | None = None,

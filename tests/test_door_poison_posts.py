@@ -32,15 +32,11 @@ def test_type_poison_is_the_readers_own_refusal_so_it_is_final_and_holds_nobody(
     door.rebuild(conn)
     assert _revokes(conn, "+12125550171") == 1
 
-def test_index_size_poison_holds_the_stop_behind_it_for_the_bound_from_its_first_attempt_and_then_the_stop_goes_ahead(app_dsn, conn, monkeypatch):
+def test_index_size_poison_is_unfinished_and_the_stop_behind_it_records_at_once(app_dsn, conn):
     poison = dict(STOP, contact="+12125550172", subject_key=secrets.token_hex(6000))
     _store_both(app_dsn, poison)
-    outs = door.rebuild(conn)   # the poison post fails at the database: no error is final, so it is unfinished and holds the stop
-    assert _revokes(conn, "+12125550171") == 0
-    assert [(o.retry, o.halts) for o in outs] == [(True, True), (True, False)]
-    monkeypatch.setattr(door, "HALT_CAP_SECONDS", 0)   # the bound since its first attempt has run out
-    outs = door.rebuild(conn)
+    outs = door.rebuild(conn)   # the poison post fails at the database: no error is final, so it is unfinished; a stop is never held
     assert _revokes(conn, "+12125550171") == 1
-    assert [o.retry for o in outs] == [True, False]
+    assert [(o.retry, o.halts) for o in outs] == [(True, True)]   # the stop was recorded live; only the poison post is left
     door.rebuild(conn)
     assert _revokes(conn, "+12125550171") == 1

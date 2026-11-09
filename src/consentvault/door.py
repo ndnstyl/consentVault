@@ -34,8 +34,10 @@ from typing import Any, Callable, Mapping
 import psycopg
 
 from . import edge_envelope, safelog, stopwords
-from .errors import (ConsentVaultError, EmptyConsentError, InvalidEventError, UncheckedConsentError)
+from .errors import (ClockSkewError, ConsentVaultError, EmptyConsentError, InvalidEventError, UncheckedConsentError)
+from . import ledger
 from .ledger import Event, record_event, record_tenant_event
+from .normalize import normalize_contact
 from .rawpost import Fact, RawPostWriter, RawRequest, StoredPost, request_key_digest
 
 _log = safelog.get("consentvault.door")
@@ -254,6 +256,7 @@ class SingleBackend:
                 return f"missing_field:{required}"
         if fields.get("contact_verification", "none") != "none" and not auth.verified_key:
             return "verification_key_required"
+        normalize_contact(fields["contact"], fields.get("contact_kind"), self.region)   # raises NormalizationError: the contact reads the same every time
         fields.setdefault("method", "checkbox")
         fields.setdefault("origin", "consumer")
         for name in ("captured_at", "edge_received_at"):
@@ -477,6 +480,12 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
                 raise _FinalReading from exc
             if isinstance(fields, dict) and getattr(backend, "takes_arrival", False) and view.arrived_epoch is not None:
                 fields["arrived_at"] = datetime.fromtimestamp(view.arrived_epoch, tz=timezone.utc)
+                claimed = fields.get("captured_at")
+                if isinstance(claimed, datetime) and claimed.tzinfo is not None and claimed > fields["arrived_at"] + ledger.MAX_CAPTURE_SKEW:
+                    skew = ClockSkewError("the claimed capture time is later than the post's arrival plus the skew bound")
+                    _log.error("a stored post produces no event; the reason is stored beside it", error=reason_of(skew))
+                    _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason_of(skew)))
+                    raise _FinalReading from skew
             if reason is not None or isinstance(fields, str):
                 outcome = Outcome(view.post_id, reason=reason or fields)
             else:
@@ -484,6 +493,14 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
                     outcome = Outcome(view.post_id, event_id=backend.apply(conn, enter, fields, link))
                 except psycopg.errors.UniqueViolation:
                     raise _AlreadyProjected() from None
+                except Exception as exc:
+                    from .tenancy.admin_base import ApiError
+
+                    if not (isinstance(exc, ApiError) and exc.name in FINAL_API_NAMES):
+                        raise
+                    _log.error("a stored post produces no event; the reason is stored beside it", error=reason_of(exc))
+                    _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason_of(exc)))
+                    raise _FinalReading from exc
         except _AlreadyProjected:
             outcome = _already(conn, enter, view)
             if outcome.event_id is not None:
@@ -617,8 +634,8 @@ def project_post(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
     if catch_up:
         earlier = project_pending(writer, conn, None if catch_up is True else catch_up, backend, through_seq=view.seq - 1,
                                   intakes=intakes, retry_interval_s=LIVE_RETRY_INTERVAL_SECONDS)
-        if any(o.halts for o in earlier):   # an earlier post could not be projected yet: this one waits behind it, in arrival order
-            return Outcome(view.post_id, reason=WAITING, retry=True)
+        if any(o.halts for o in earlier) and not _is_stop(view):   # an earlier post could not be projected yet: this one waits behind it
+            return Outcome(view.post_id, reason=WAITING, retry=True)   # (a stop never waits: its place in the history is its arrival)
     return project_view(writer, conn, enter, backend, view, field_map=field_map, raise_errors=raise_errors)
 
 
@@ -630,6 +647,7 @@ def read_view(writer: RawPostWriter, conn: psycopg.Connection, org: str, post_id
 
 
 HALT_CAP_SECONDS = 900
+FINAL_API_NAMES = ("source_not_allowed", "brand_not_allowed")   # the post names a source or brand its credential does not hold: the same every time
 LIVE_RETRY_INTERVAL_SECONDS = 60.0
 
 
@@ -680,10 +698,32 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
             _log.error("a stored post has not been projectable for a long time; the posts behind it go ahead", elapsed_s=int(elapsed))
             outcome = replace(outcome, halts=False)
         out.append(outcome)
-        if outcome.halts:   # a faulted post: nothing later is projected ahead of this post, the next run repeats it first
-            out.extend(Outcome(w["post_id"], reason=WAITING, retry=True) for w in rows[n + 1:])
+        if outcome.halts:   # a faulted post: nothing later but a stop is projected ahead of this post, the next run repeats it first
+            for w in rows[n + 1:]:
+                out.append(_project_if_stop(writer, conn, enter, backend, w))
             break
     return out
+
+
+def _is_stop(view: PostView) -> bool:
+    """True when the stored bytes read as a stop. A stop is never held behind another post: its place in a person's history is the
+    arrival of its post, so projecting it first changes nothing but how soon it counts."""
+    reading = read_post(view.body, None, CODE_VERSION, intake=view.intake, context=_view_context(view))
+    return reading.kind == "event" and reading.payload.get("event_type") in ("revoke", "suppress")
+
+
+def _project_if_stop(writer, conn, enter, backend, w) -> Outcome:
+    """A post behind a faulted one: projected now when it is a stop, else named as waiting."""
+    try:
+        with _ctx(conn, enter):
+            view = read_view(writer, conn, w["org"], w["post_id"], w["seq"], w["intake"], w["method"], w["path"], w["arrived"])
+        stop = _is_stop(view)
+    except Exception as exc:  # loud-failure-exempt: logged by name; the post waits as unfinished and is read again on the next run
+        _log.error("a post behind a faulted one could not be read to see whether it is a stop", error=reason_of(exc))
+        return Outcome(w["post_id"], reason=WAITING, retry=True)
+    if not stop:
+        return Outcome(w["post_id"], reason=WAITING, retry=True)
+    return project_view(writer, conn, enter, backend, view)
 
 
 def _first_attempt_age(conn, enter, row) -> float | None:
@@ -767,6 +807,7 @@ class TenantLedgerBackend:
                     fields[name] = datetime.fromisoformat(fields[name].replace("Z", "+00:00"))
                 except ValueError:  # loud-failure-exempt: returned as the stored reason bad_<field>
                     return f"bad_{name}"
+        normalize_contact(fields["contact"], fields.get("contact_kind"), self.region)   # raises NormalizationError: the contact reads the same every time
         fields.setdefault("method", "checkbox")
         fields.setdefault("origin", "consumer")
         if "payload_b64" in fields:   # the original bytes a restore re-ingests, carried whole inside the post

@@ -14,23 +14,31 @@ STOP = {"event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"], 
 BOUND = 1.0
 
 
-def _store_without_projecting(conn, monkeypatch, contact):
+def _payload(contact, disclosure):
+    # a post behind a faulted one waits only when it is not a stop: the post behind is a grant when a disclosure is given
+    if disclosure is None:
+        return dict(STOP, contact=contact)
+    return {"contact": contact, "event_type": "grant", "checked": True, "channels": ["sms"], "purposes": ["marketing"],
+            "method": "checkbox", "origin": "consumer", "disclosure_sha256": disclosure}
+
+
+def _store_without_projecting(conn, monkeypatch, contact, disclosure=None):
     def crash(*a, **k):
         raise RuntimeError("crash between the answer and the projection")
 
     with monkeypatch.context() as m:
         m.setattr(door, "project_post", crash)
         with pytest.raises(RuntimeError):
-            door.submit(conn, intake="library", region="US", allowed_purposes=["marketing"], payload=dict(STOP, contact=contact))
+            door.submit(conn, intake="library", region="US", allowed_purposes=["marketing"], payload=_payload(contact, disclosure))
     return conn.execute("SELECT post_id::text AS p FROM consentvault.raw_post ORDER BY seq DESC LIMIT 1").fetchone()["p"]
 
 
 def _n(conn, contact):
-    return conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE event_type='revoke' AND contact_norm=%s",
+    return conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE contact_norm=%s",
                         (contact,)).fetchone()["n"]
 
 
-def test_the_halt_counts_from_the_first_attempt_so_a_post_that_arrived_long_ago_still_holds_the_posts_behind_it_for_the_bound(conn, monkeypatch):
+def test_the_halt_counts_from_the_first_attempt_so_a_post_that_arrived_long_ago_still_holds_the_posts_behind_it_for_the_bound(conn, monkeypatch, disclosure):
     bad = set()
     real = door.read_view
 
@@ -43,7 +51,7 @@ def test_the_halt_counts_from_the_first_attempt_so_a_post_that_arrived_long_ago_
     a_post = _store_without_projecting(conn, monkeypatch, X)
     bad.add(a_post)
     time.sleep(BOUND + 0.3)   # the faulted post is older than the bound before anything has tried it
-    _store_without_projecting(conn, monkeypatch, Y)
+    _store_without_projecting(conn, monkeypatch, Y, disclosure)
     monkeypatch.setattr(door, "HALT_CAP_SECONDS", BOUND)
 
     first = door.rebuild(conn)   # the first attempt on the faulted post: the bound has not started to run out

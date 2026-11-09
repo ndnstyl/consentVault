@@ -23,9 +23,12 @@ from typing import Any, Callable
 
 import psycopg
 
-from .safelog import describe
+from . import safelog
 from .errors import ConsentVaultError
+from .safelog import describe
 from .tenancy.tokens import org_transaction
+
+_log = safelog.get("consentvault.integrity")
 
 INTEGRITY_GROUP = "consentvault_integrity"
 JOB_SEAL, JOB_VERIFY_SEALS, JOB_VERIFY_CHAIN, JOB_ANCHOR = "seal", "verify_seals", "verify_chain", "anchor"
@@ -197,10 +200,24 @@ def verify_chain_every_org(conn: psycopg.Connection, *, sink_file: str | None = 
             raise _OrgFailure(f"{len(breaks) + len(raw)} break(s): "
                               + "; ".join([f"seq {b.seq} {b.reason}" for b in breaks[:20]]
                                           + [f"raw post seq {b['seq']} {b['reason']}" for b in raw[:20]]))
-        return c.execute("SELECT count(*) AS n FROM consentvault.event WHERE org_id = consentvault.current_org()"
-                         ).fetchone()["n"] + c.execute("SELECT count(*) AS n FROM consentvault.raw_post WHERE org_id = "
-                                                       "consentvault.current_org()").fetchone()["n"]
+        count = c.execute("SELECT count(*) AS n FROM consentvault.event WHERE org_id = consentvault.current_org()"
+                          ).fetchone()["n"] + c.execute("SELECT count(*) AS n FROM consentvault.raw_post WHERE org_id = "
+                                                        "consentvault.current_org()").fetchone()["n"]
+        missing = posts_without_history(c)
+        if missing:   # gate 2: a stored post with no history row and no recorded reason is named, never counted past
+            _log.error("stored posts have no history row and no recorded reason")
+            return {"records": count, "posts_without_history": missing}
+        return count
     return _each_org(conn, JOB_VERIFY_CHAIN, one)
+
+
+def posts_without_history(c: psycopg.Connection) -> list[str]:
+    """Ids of the entered organisation's stored posts that have neither a history row nor a recorded reason (gate 2)."""
+    return [str(r["post_id"]) for r in c.execute(
+        "SELECT p.post_id FROM consentvault.raw_post p WHERE p.org_id = consentvault.current_org() AND p.kind = 'post'"
+        " AND NOT EXISTS (SELECT 1 FROM consentvault.post_history h WHERE h.org_id = p.org_id AND h.post_id = p.post_id)"
+        " AND NOT EXISTS (SELECT 1 FROM consentvault.projection_outcome o WHERE o.org_id = p.org_id AND o.post_id = p.post_id)"
+        " ORDER BY p.seq").fetchall()]
 
 
 def anchor_every_org(conn: psycopg.Connection, sink: str) -> dict:

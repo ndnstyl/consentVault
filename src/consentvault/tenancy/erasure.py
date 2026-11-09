@@ -38,11 +38,13 @@ from typing import Any, Callable, Iterator, Optional
 import psycopg
 import psycopg.sql
 
-from .. import dbclock
+from .. import dbclock, safelog
 from ..safelog import constraint_name, db_refusal_id, describe
 from .admin_base import ROLE_ADMIN, ApiError, Ctx, body_dict, iso, need_text, to_uuid
 from .errors import TenancyError
 from .tokens import TokenKey, mint_org_token, org_transaction
+
+_log = safelog.get("consentvault.tenancy.erasure")
 
 LEDGER_PREFIX = "lifecycle-ledger/"
 LEDGER_RETAIN_DAYS = 3650
@@ -356,11 +358,15 @@ def record_erasure_stop(conn, crypto, *, fp: str, erasure_id, ledger: Optional[L
     marker = erasure_stop_marker(erasure_id, stop_seq or 0, unconfirmed=unconfirmed)
     data_key = crypto.open_contact_key(org, WrappedKey(bytes(held["wrapped_key"]), held["key_version"]))
     norm = tc.decrypt_text(data_key, org, str(last["event_id"]), "contact_norm", bytes(last["contact_ct"]))
-    door.store_erasure_stop_post(conn, crypto, erasure_id=erasure_id, contact_fp=fp, channels=channels, marker=marker,
-                                 source=ERASURE_SOURCE)
     ev = door.write_system_event(conn, crypto, contact=norm, contact_kind=last["contact_kind"], event_type="suppress",
                                  channels=channels, purposes=["*"], method="written", origin="consumer",
                                  source=ERASURE_SOURCE, recorded_by=marker)
+    try:   # the stop as a post is the history's copy of the stop: it is written in its own savepoint, so a failure here never undoes the stop event
+        with conn.transaction():
+            door.store_erasure_stop_post(conn, crypto, erasure_id=erasure_id, contact_fp=fp, channels=channels, marker=marker,
+                                         source=ERASURE_SOURCE)
+    except Exception as exc:  # loud-failure-exempt: logged by name; the stop event above stands and the completeness check reports the erased contact with no stop post
+        _log.error("the erasure stop could not be stored as a post; the stop event stands", error=type(exc).__name__)
     return str(ev.event_id)
 
 

@@ -33,7 +33,7 @@ from typing import Any, Callable, Mapping
 
 import psycopg
 
-from . import edge_envelope, safelog, stopwords
+from . import edge_envelope, history, safelog, stopwords
 from .errors import (ConsentVaultError, EmptyConsentError, InvalidEventError, UncheckedConsentError)
 from .ledger import Event, record_event, record_tenant_event
 from .rawpost import Fact, RawPostWriter, RawRequest, StoredPost, request_key_digest
@@ -41,6 +41,8 @@ from .rawpost import Fact, RawPostWriter, RawRequest, StoredPost, request_key_di
 _log = safelog.get("consentvault.door")
 
 CODE_VERSION = "door-2"
+FOLD_CODE_VERSION = history.FOLD_CODE_VERSION
+RULE_SET_VERSION = history.RULE_SET_VERSION
 REASON_TEXT = "a_text_is_not_consent"
 EDGE_INTAKES = ("edge_single", "edge_site_key")
 TENANT_SETTINGS_FACT = "tenant_projection_settings"
@@ -337,8 +339,8 @@ class TenantBackend:
                          original_arrival=original_arrival)
         stored = writer.write(conn, enter, req)
         with (from_enter(conn) if from_enter is not None else conn.transaction()):
-            conn.execute("INSERT INTO consentvault.raw_post_reroute (from_org, from_post, to_org, to_post) VALUES (%s, %s, %s, %s)",
-                         (uuid.UUID(view.org_id), uuid.UUID(view.post_id), uuid.UUID(stored.org_id), uuid.UUID(stored.post_id)))
+            conn.execute("SELECT consentvault.record_reroute(%s, %s, %s)",
+                         (uuid.UUID(view.post_id), uuid.UUID(stored.org_id), uuid.UUID(stored.post_id)))
             writer._insert_fact(conn, uuid.UUID(view.org_id), uuid.UUID(view.post_id), view.facts.get(("__key__", "data_key")),
                                 Fact("vault", "stored_again_to", {"org_id": stored.org_id, "post_id": stored.post_id}))
         newview = PostView(stored.org_id, stored.post_id, stored.seq, view.intake, view.body,
@@ -464,6 +466,10 @@ def _shadow_history(writer, conn, enter, view: PostView, field_map: Any) -> bool
     try:
         with _ctx(conn, enter):
             facts = writer.read_fold_facts(conn, uuid.UUID(view.org_id), view.post_id, view.facts.get(("__key__", "data_key")))
+        if not facts:   # no status-bearing fact at all: a post stored before 0082 whose backfill has not run; it waits, it is never judged unsigned
+            return False
+        if view.intake in PROVIDER_INTAKES and ("vault", "request_signature") not in facts:   # awaiting its provider signature: not judged yet
+            return False
         pure = replace(view, facts=facts)
         reading = read_post(pure.body, field_map, CODE_VERSION, intake=pure.intake, context=_view_context(pure))
         fields = reading.payload if reading.kind == "event" else history.raw_fields(view.body)
@@ -477,7 +483,11 @@ def _shadow_history(writer, conn, enter, view: PostView, field_map: Any) -> bool
         facts_read = sorted([s, n] for (s, n) in facts)
         return history.write_row(conn, lambda: _ctx(conn, enter), org_id=view.org_id, post_id=view.post_id, fields=fields,
                                  reason=reason, earliest_copy=earliest, facts_read=facts_read,
-                                 intake_code_version=facts.get(("vault", "code_version")))
+                                 intake_code_version=facts.get(("vault", "code_version")) or CODE_VERSION,
+                                 # only a post that counts has its contact fingerprinted: a refused post (forged, unsigned, a second copy) is
+                                 # recorded as sent, no reader acts on its contact, and its organisation may hold no fingerprint secret to ask
+                                 contact=history.contact_of(fields, (_stored_settings(facts) or {}).get("region"), view.org_id,
+                                                            getattr(writer, "crypto", None)) if reason is None else (None, None))
     except Exception as exc:  # loud-failure-exempt: logged by name; the old fold's outcome stands and the missing row is reported by the completeness check
         _log.error("the history row of a stored post could not be written; the next rebuild writes it", error=type(exc).__name__)
     return False

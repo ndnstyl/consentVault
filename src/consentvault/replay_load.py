@@ -98,6 +98,9 @@ def project_all(target_dsn: str, *, crypto: Any, evidence: Any = None, senders: 
         total = 0
         writer = RawPostWriter(crypto=crypto)
         for org in orgs:
-            with org_transaction(tgt, mint_org_token(key, org, ["admin"], credential_id=None)):
+            # the token is stamped with the target database's own clock, never this process's: the fold reads no clock, and a replay run
+            # with its process clock moved must still be admitted by the database that checks the token against its own
+            now = tgt.execute("SELECT extract(epoch FROM clock_timestamp())::float8 AS now").fetchone()["now"]
+            with org_transaction(tgt, mint_org_token(key, org, ["admin"], credential_id=None, now=now)):
                 total += door.history_catch_up(writer, tgt, lambda _c: nullcontext(), every_post=True)
         return total

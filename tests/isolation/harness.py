@@ -96,6 +96,7 @@ class Tenancy:
     b: Org
     home: uuid.UUID
     migrator_dsn: str = ""
+    projection_dsn: str = ""   # a login that is a member of consentvault_projection only, never of the app group
 
     def token(self, org: Org, scopes=("capture", "gate_read"), **kw) -> str:
         return mint_org_token(self.key, org.org_id, scopes, credential_id=str(org.credential_id), **kw)
@@ -220,7 +221,9 @@ def build_tenancy(dsn: str, port: int) -> Tenancy:
         b = create_org(operator, key, provider, "bravo")
     app_dsn = make_login_role(port, dbname, "consentvault_app")
     super_dsn = f"postgresql://postgres@127.0.0.1:{port}/{dbname}"
-    t = Tenancy(operator_dsn, super_dsn, app_dsn, key, TenantCrypto(provider), provider, a, b, home, migrator_dsn=dsn)
+    projection_dsn = make_login_role(port, dbname, "consentvault_projection")
+    t = Tenancy(operator_dsn, super_dsn, app_dsn, key, TenantCrypto(provider), provider, a, b, home, migrator_dsn=dsn,
+                projection_dsn=projection_dsn)
     _populate(t, a)
     _populate(t, b)
     return t

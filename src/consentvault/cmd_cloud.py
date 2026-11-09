@@ -151,7 +151,7 @@ def build_cloud(cfg, env: Mapping[str, str]):
         mint_token=lambda o, sc: mint_org_token(token_key, o, sc, credential_id=None),
         transport=EgressTransport(_need(env, ENV_EGRESS_URL), _read(env, ENV_EGRESS_SECRET_FILE)), region=cfg.default_region)
     return api.CloudApiSettings(
-        dsn=cfg.require_dsn(), token_key=token_key, access_tokens=access, receipts=receipts, crypto=crypto,
+        dsn=cfg.require_dsn(), projection_dsn=_need(env, "CONSENTVAULT_PROJECTION_DSN"), token_key=token_key, access_tokens=access, receipts=receipts, crypto=crypto,
         evidence_store=store, token_endpoint_url=access_url, cursor_key=cursor_key, routes=routes,
         portal_caller=auth.billing_caller, region=cfg.default_region,
         raw_post_inline_limit_bytes=cfg.raw_post_inline_limit_bytes, raw_post_unusual_size_bytes=cfg.raw_post_unusual_size_bytes)

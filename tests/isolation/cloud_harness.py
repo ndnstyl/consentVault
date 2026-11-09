@@ -114,7 +114,7 @@ class Cloud:
         self.receipts = ReceiptSigner.generate(key_id="rcpt-test")
         self.store = LocalAppendOnlyEvidenceStore(evidence_dir)
         self.settings = api.CloudApiSettings(
-            dsn=t.app_dsn, token_key=t.key, access_tokens=self.access, receipts=self.receipts, crypto=t.crypto,
+            dsn=t.app_dsn, projection_dsn=t.projection_dsn, token_key=t.key, access_tokens=self.access, receipts=self.receipts, crypto=t.crypto,
             evidence_store=self.store, token_endpoint_url=TOKEN_URL, cursor_key=os.urandom(32),
             allowed_hosts=("127.0.0.1",), default_retain_years=7, region="US", **settings_extra)
         self.a = provision(t, t.a)

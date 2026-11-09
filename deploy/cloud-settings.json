@@ -981,6 +981,21 @@
       ]
     },
     {
+      "name": "CONSENTVAULT_PROJECTION_DSN",
+      "kind": "setting",
+      "required": "unless db_auth = iam",
+      "used_by": [
+        "vault",
+        "job:projection-rebuild"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "note": "the projection's login: a member of consentvault_projection and not of consentvault_app (migration 0093)"
+    },
+    {
       "name": "CONSENTVAULT_OWNER_DSN",
       "kind": "secret_value",
       "required": true,

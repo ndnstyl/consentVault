@@ -134,9 +134,9 @@ def test_a_planted_invoker_trigger_that_reads_configuration_raises_under_the_log
         su.execute("CREATE TRIGGER r9_plant2 BEFORE INSERT ON consentvault.raw_post_fact FOR EACH ROW EXECUTE FUNCTION consentvault.r9_plant()")
     try:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            with hw.t.app() as app:
-                from consentvault.tenancy.tokens import org_transaction
-                app.execute("SET ROLE consentvault_projection")
+            from consentvault import db
+            from consentvault.tenancy.tokens import org_transaction
+            with db.connect(hw.t.projection_dsn) as app:
                 with org_transaction(app, hw.t.token(hw.cloud.a.org)):
                     app.execute("INSERT INTO consentvault.projection_attempt (org_id, post_id, code_version, error_class)"
                                 " SELECT %s, post_id, 'x', 'x' FROM consentvault.raw_post LIMIT 1", (hw.cloud.a.org.org_id,))
@@ -196,3 +196,70 @@ def test_the_projection_role_executes_only_the_listed_definer_functions(hw):
 def test_a_planted_call_of_another_definer_function_raises_under_the_projection_login(hw, monkeypatch, call):
     added, attempts = _plant(hw, monkeypatch, lambda c: c.execute(call).fetchall())
     assert added == 0 and "InsufficientPrivilege" in attempts, (call, added, attempts)
+
+
+@pytest.mark.parametrize("name,statement", [
+    ("RESET ROLE", "RESET ROLE"),
+    ("SET ROLE to the app group", "SET ROLE consentvault_app"),
+    ("SET SESSION AUTHORIZATION", "SET SESSION AUTHORIZATION DEFAULT"),
+    ("SET SESSION AUTHORIZATION to the app login", "SET SESSION AUTHORIZATION CURRENT_USER"),
+])
+def test_a_role_switch_planted_in_the_projection_does_not_escape_it(hw, monkeypatch, name, statement):
+    """The projection is the connection's own login, so there is no role to switch back from and no group to switch to: whether
+    the switch itself is refused or does nothing, the read that follows it is still denied."""
+    def attempt(c):
+        try:
+            c.execute(statement)
+        except psycopg.Error:
+            pass   # refused, as it should be; the read below must be denied either way
+        c.execute("SELECT count(*) FROM consentvault.capture_source").fetchall()
+
+    added, attempts = _plant(hw, monkeypatch, attempt)
+    assert added == 0 and "InsufficientPrivilege" in attempts, (name, added, attempts)
+
+
+def test_the_projection_login_is_not_a_member_of_the_app_group(hw):
+    with hw.t.superuser() as su:
+        row = su.execute("SELECT pg_has_role(r.oid, 'consentvault_app', 'MEMBER') AS app, pg_has_role(r.oid, 'consentvault_projection', 'MEMBER') AS proj,"
+                         " r.rolsuper OR r.rolbypassrls AS powerful FROM pg_roles r WHERE r.rolname = split_part(split_part(%s, '//', 2), '@', 1)",
+                         (hw.t.projection_dsn,)).fetchone()
+    assert row == {"app": False, "proj": True, "powerful": False}
+
+
+def test_a_connection_that_is_the_app_login_cannot_run_the_cloud_projection(hw):
+    from consentvault.errors import ConsentVaultError
+
+    with api.connect(hw.cloud.settings.dsn) as conn:
+        with pytest.raises(ConsentVaultError):
+            door.project_pending(None, conn, None, api.cloud_backends(hw.cloud.settings, api._cloud_parts(hw.cloud.settings)[0]))
+
+
+def test_start_up_refuses_without_a_projection_login_or_with_the_app_login_as_one(hw):
+    import dataclasses
+
+    from consentvault.api import StartupRefusedError
+
+    with pytest.raises(StartupRefusedError) as missing:
+        api.make_cloud_server(dataclasses.replace(hw.cloud.settings, projection_dsn=None), "127.0.0.1", 0)
+    assert missing.value.code == "startup_projection_login_missing"
+    with pytest.raises(StartupRefusedError) as wrong:
+        api.make_cloud_server(dataclasses.replace(hw.cloud.settings, projection_dsn=hw.cloud.settings.dsn), "127.0.0.1", 0)
+    assert wrong.value.code == "startup_projection_login_refused"
+
+
+def test_no_scanned_module_switches_roles():
+    import ast
+    import re
+    from pathlib import Path
+
+    from tests.test_projection_reads_no_live_configuration import CALL_MODULES, SRC  # noqa: F401
+    pattern = re.compile(r"\b(RESET\s+ROLE|SET\s+(LOCAL\s+|SESSION\s+)?ROLE|SESSION\s+AUTHORIZATION)\b", re.I)
+    hits = []
+    for m in CALL_MODULES:
+        tree = ast.parse((Path(SRC) / m).read_text())
+        docs = {id(n.body[0].value) for n in ast.walk(tree) if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and n.body and isinstance(n.body[0], ast.Expr) and isinstance(getattr(n.body[0], "value", None), ast.Constant)}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docs and pattern.search(node.value):
+                hits.append(m)
+    assert not hits, f"role switching in the projection's modules: {hits}"

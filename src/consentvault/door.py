@@ -33,7 +33,6 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
 import psycopg
-import psycopg.sql
 
 from . import edge_envelope, safelog, stopwords
 from .errors import (ClockSkewError, ConsentVaultError, EmptyConsentError, InvalidEventError, UncheckedConsentError)
@@ -223,18 +222,19 @@ def _restricted(backend: Any) -> bool:
 
 
 def _under_projection_login(fn):
-    """Run the projection as ``consentvault_projection``: the app's grants minus any read of the configuration tables, so a read of
-    live configuration anywhere in the projection, however it is written, raises ``permission denied`` and is an attempt (migration
-    0093). Nested calls keep the role; the role is reset on every exit."""
+    """The cloud's projection must run on the projection login (a member of ``consentvault_projection`` and not of the app group,
+    migration 0093): that role cannot read the configuration tables, so a read of live configuration anywhere in the projection,
+    however it is written, raises ``permission denied`` and is an attempt. The login is the connection's own, so there is no role
+    to switch back from. A connection that is not that login is a misconfiguration and raises before anything is projected."""
     @functools.wraps(fn)
     def wrapper(writer, conn, enter, backend, *args, **kwargs):
-        if not _restricted(backend) or conn.execute("SELECT current_user = %s AS already", (PROJECTION_ROLE,)).fetchone()["already"]:
-            return fn(writer, conn, enter, backend, *args, **kwargs)
-        conn.execute(psycopg.sql.SQL("SET ROLE {}").format(psycopg.sql.Identifier(PROJECTION_ROLE)))
-        try:
-            return fn(writer, conn, enter, backend, *args, **kwargs)
-        finally:
-            conn.execute("RESET ROLE")
+        if _restricted(backend):
+            row = conn.execute("SELECT pg_has_role(current_user, %s, 'MEMBER') AS projection,"
+                               " pg_has_role(current_user, 'consentvault_app', 'MEMBER') AS app", (PROJECTION_ROLE,)).fetchone()
+            if not row["projection"] or row["app"]:
+                raise ConsentVaultError("the projection must run on the projection login (a member of consentvault_projection and "
+                                        "not of consentvault_app); this connection is not that login")
+        return fn(writer, conn, enter, backend, *args, **kwargs)
     return wrapper
 
 
@@ -330,11 +330,12 @@ class TenantBackend:
     the tenant's own checks). The pipeline puts the link in the transaction that writes the event."""
 
     takes_arrival = True
-    restricted_login = True   # projected under consentvault_projection (migration 0093)
 
     def __init__(self, pipeline: Any, enter_for_credential: Callable[[str, Mapping[str, Any]], Callable],
-                 settings: Mapping[str, Any] | None = None, wording: Mapping[str, Any] | None = None) -> None:
+                 settings: Mapping[str, Any] | None = None, wording: Mapping[str, Any] | None = None,
+                 restricted_login: bool = False) -> None:
         self.pipeline, self.enter_for_credential, self.settings, self.wording = pipeline, enter_for_credential, settings, wording
+        self.restricted_login = restricted_login   # True only for the cloud's projection, which runs on the projection login
 
     def for_post(self, facts: Mapping[tuple[str, str], Any]) -> "TenantBackend":
         """The projection of a post reads the organisation's configuration as it stood when the post arrived (stored beside it
@@ -342,7 +343,7 @@ class TenantBackend:
         stored = facts.get(("vault", TENANT_SETTINGS_FACT))
         wording = facts.get(("vault", WORDING_FACT))
         return TenantBackend(self.pipeline, self.enter_for_credential, stored if isinstance(stored, dict) else None,
-                             wording if isinstance(wording, dict) else None)
+                             wording if isinstance(wording, dict) else None, restricted_login=self.restricted_login)
 
     def prepare(self, conn, payload: Mapping[str, Any], body: bytes, auth: Auth) -> dict | str:
         from .tenancy.admin_base import ApiError
@@ -825,19 +826,21 @@ class TenantLedgerBackend:
     the stops and the system events whose evidence is the post itself). ``defaults`` fill fields the post does not carry."""
 
     takes_arrival = True
-    restricted_login = True
 
     def __init__(self, crypto: Any, *, defaults: Mapping[str, Any] | None = None, region: str | None = None,
-                 allowed_purposes=None, enter_for_org: Callable[[str], Callable] | None = None) -> None:
+                 allowed_purposes=None, enter_for_org: Callable[[str], Callable] | None = None,
+                 restricted_login: bool = False) -> None:
         self.crypto, self.defaults, self.region, self.allowed_purposes = crypto, dict(defaults or {}), region, allowed_purposes
         self.enter_for_org = enter_for_org
+        self.restricted_login = restricted_login   # True only for the cloud's projection, which runs on the projection login
 
     def for_post(self, facts: Mapping[tuple[str, str], Any]) -> "TenantLedgerBackend":
         stored = _stored_settings(facts)
         if stored is None:
             return self
         return TenantLedgerBackend(self.crypto, defaults=stored.get("defaults") or {}, region=stored.get("region"),
-                                   allowed_purposes=stored.get("allowed_purposes"), enter_for_org=self.enter_for_org)
+                                   allowed_purposes=stored.get("allowed_purposes"), enter_for_org=self.enter_for_org,
+                                   restricted_login=self.restricted_login)
 
     def prepare(self, conn, payload: Mapping[str, Any], body: bytes, auth: Auth) -> dict | str:
         fields = {**self.defaults, **{k: v for k, v in payload.items() if v is not None}}

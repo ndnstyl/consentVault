@@ -441,6 +441,7 @@ class CloudApiSettings:
     edge_timestamp_window_s: int = 300
     raw_post_inline_limit_bytes: int = config_mod.DEFAULT_RAW_POST_INLINE_BYTES
     raw_post_unusual_size_bytes: int = config_mod.DEFAULT_RAW_POST_UNUSUAL_BYTES
+    projection_dsn: str | None = None  # the projection's login: a member of consentvault_projection and NOT of the app group
 
     def __repr__(self) -> str:
         return f"CloudApiSettings(token_endpoint_url={self.token_endpoint_url!r}, hosts={self.allowed_hosts!r})"
@@ -1077,7 +1078,8 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                     from .tenancy.tokens import mint_org_token, org_transaction
 
                     read = mint_org_token(self.settings.token_key, stored.org_id, ("gate_read",), credential_id=None, ttl_seconds=60)
-                    door.project_post(self.writer, conn, enter, backend, view, catch_up=lambda c: org_transaction(c, read))
+                    with connect(self.settings.projection_dsn) as pconn:   # the projection runs on its own login, never the app's
+                        door.project_post(self.writer, pconn, enter, backend, view, catch_up=lambda c: org_transaction(c, read))
         except Exception as exc:  # loud-failure-exempt: logged critical below; the answer is given and the post is stored
             _log.critical("the work after an answer failed; the post is stored", request_id=self.request_id,
                           error=type(exc).__name__)
@@ -1314,8 +1316,8 @@ def cloud_backends(settings: CloudApiSettings, pipeline):
         token = mint_org_token(settings.token_key, org_id, ("capture",), credential_id=None, ttl_seconds=60)
         return lambda conn: org_transaction(conn, token)
 
-    ledger_backend = door.TenantLedgerBackend(settings.crypto, enter_for_org=enter_for_org)
-    tenant_backend = door.TenantBackend(pipeline, _credential_enter(settings))
+    ledger_backend = door.TenantLedgerBackend(settings.crypto, enter_for_org=enter_for_org, restricted_login=True)
+    tenant_backend = door.TenantBackend(pipeline, _credential_enter(settings), restricted_login=True)
     return door.Backends({"api": tenant_backend, "edge_site_key": tenant_backend,
                           **{i: ledger_backend for i in (*door.PROVIDER_INTAKES, *door.SYSTEM_INTAKES)}})
 
@@ -1335,7 +1337,7 @@ def rebuild_cloud(settings: CloudApiSettings, org_ids, outcomes: list | None = N
     for org in org_ids:
         try:
             read = mint_org_token(settings.token_key, org, ("gate_read",), credential_id=None, ttl_seconds=300)
-            with connect(settings.dsn) as conn:
+            with connect(settings.projection_dsn) as conn:   # the projection's own login
                 enter_org = lambda c: org_transaction(c, read)
                 door.backfill_request_keys(writer, conn, enter_org)
                 projected = door.project_pending(writer, conn, enter_org, cloud_backends(settings, pipeline))
@@ -1349,6 +1351,26 @@ def rebuild_cloud(settings: CloudApiSettings, org_ids, outcomes: list | None = N
     if failures is None and failed:
         raise ConsentVaultError("the rebuild failed for organisation(s): " + ", ".join(f"{o} ({n})" for o, n in failed))
     return done
+
+
+def _projection_login_check(settings: CloudApiSettings) -> None:
+    """The projection runs on its own login: a member of consentvault_projection and not of the app group, neither a superuser nor
+    able to bypass row security. Anything else refuses the start, so the structural guard cannot be configured away."""
+    if not settings.projection_dsn:
+        raise StartupRefusedError("the multi-tenant API will not serve this database: no projection login is configured "
+                                  "(CONSENTVAULT_PROJECTION_DSN)", code="startup_projection_login_missing")
+    try:
+        with connect(settings.projection_dsn) as conn:
+            row = conn.execute("SELECT pg_has_role(current_user, 'consentvault_projection', 'MEMBER') AS projection,"
+                               " pg_has_role(current_user, 'consentvault_app', 'MEMBER') AS app,"
+                               " (SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user) AS powerful").fetchone()
+    except (ConsentVaultError, psycopg.Error) as exc:
+        raise StartupRefusedError(f"the multi-tenant API cannot use the projection login: {describe(exc)}",
+                                  code="startup_projection_login_unusable") from exc
+    if not row["projection"] or row["app"] or row["powerful"]:
+        raise StartupRefusedError("the multi-tenant API will not serve this database: the projection login must be a member of "
+                                  "consentvault_projection and not of consentvault_app, and neither a superuser nor BYPASSRLS",
+                                  code="startup_projection_login_refused")
 
 
 def _wording_hash(raw: bytes) -> str | None:
@@ -1390,5 +1412,6 @@ def make_cloud_server(settings: CloudApiSettings, host: str = "127.0.0.1", port:
     _logscrub.install(_log.logger)  # the backstop sits on the standard logger the safe logger writes through
     pipeline, writer = _cloud_parts(settings)
     _projection_settings_selfcheck(settings, pipeline)
+    _projection_login_check(settings)
     handler = type("ConsentVaultCloudHandler", (_CloudHandler,), {"settings": settings, "pipeline": pipeline, "writer": writer})
     return SafeHTTPServer((host, port), handler)

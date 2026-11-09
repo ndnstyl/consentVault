@@ -35,7 +35,7 @@ def _copy(t, port):
         su.execute(f'CREATE DATABASE "{dst}" TEMPLATE "{src}" OWNER cv_test_owner')
     swap = lambda dsn: dsn.rsplit("/", 1)[0] + "/" + dst  # noqa: E731
     return dataclasses.replace(t, operator_dsn=swap(t.operator_dsn), super_dsn=swap(t.super_dsn), app_dsn=swap(t.app_dsn),
-                               migrator_dsn=swap(t.migrator_dsn))
+                               migrator_dsn=swap(t.migrator_dsn), projection_dsn=swap(t.projection_dsn))
 
 
 def test_the_gate_answers_503_until_reconciliation_and_the_lost_work_comes_back(env, tmp_path, pg_server):
@@ -60,7 +60,7 @@ def test_the_gate_answers_503_until_reconciliation_and_the_lost_work_comes_back(
                                            ledger=env.ledger, crypto=t.crypto)
         assert len(cloud.gate(cloud.a, X)[1]["stops"]) >= 1
 
-        server2 = api.make_cloud_server(dataclasses.replace(cloud.settings, dsn=r.app_dsn), "127.0.0.1", 0)
+        server2 = api.make_cloud_server(dataclasses.replace(cloud.settings, dsn=r.app_dsn, projection_dsn=r.projection_dsn), "127.0.0.1", 0)
         threading.Thread(target=server2.serve_forever, daemon=True).start()
         cloud.base = f"http://127.0.0.1:{server2.server_address[1]}"  # from here every call reaches the restored copy
         assert cloud.gate(cloud.a, X)[1]["stops"] == []  # the stop is missing
@@ -138,7 +138,7 @@ def test_a_restore_replays_the_erasure_with_its_stop_so_the_gate_still_denies(en
             erasure.confirm_erasure(c, token_key=t.key, crypto=t.crypto, ledger=env.ledger, operator_id=OPERATOR,
                                     request_id="req-e", org_id=t.a.org_id, erasure_id=eid)
 
-        server2 = api.make_cloud_server(dataclasses.replace(cloud.settings, dsn=r.app_dsn), "127.0.0.1", 0)
+        server2 = api.make_cloud_server(dataclasses.replace(cloud.settings, dsn=r.app_dsn, projection_dsn=r.projection_dsn), "127.0.0.1", 0)
         threading.Thread(target=server2.serve_forever, daemon=True).start()
         cloud.base = f"http://127.0.0.1:{server2.server_address[1]}"
         assert cloud.gate(cloud.a, X)[1]["stops"] == []  # the copy predates the erasure
@@ -189,7 +189,7 @@ def test_a_stop_written_before_the_erasure_completed_is_in_the_ledger_and_a_rest
         assert sorted(entries[0]["channels"]) == ["artificial_voice", "email", "sms", "voice"]
         assert X not in str(entries)
 
-        server2 = api.make_cloud_server(dataclasses.replace(cloud.settings, dsn=r.app_dsn), "127.0.0.1", 0)
+        server2 = api.make_cloud_server(dataclasses.replace(cloud.settings, dsn=r.app_dsn, projection_dsn=r.projection_dsn), "127.0.0.1", 0)
         threading.Thread(target=server2.serve_forever, daemon=True).start()
         cloud.base = f"http://127.0.0.1:{server2.server_address[1]}"
         assert cloud.gate(cloud.a, X)[1]["stops"] == []  # the copy lacks the stop
@@ -221,7 +221,7 @@ def test_a_stop_written_before_the_erasure_completed_is_in_the_ledger_and_a_rest
 def _restore_copy(env, cloud, r, restore_point, evidence, *, allow=()):
     """Point the cloud at the restored copy and run the whole reconcile; returns the org's report."""
     t = env.t
-    server2 = api.make_cloud_server(dataclasses.replace(cloud.settings, dsn=r.app_dsn), "127.0.0.1", 0)
+    server2 = api.make_cloud_server(dataclasses.replace(cloud.settings, dsn=r.app_dsn, projection_dsn=r.projection_dsn), "127.0.0.1", 0)
     threading.Thread(target=server2.serve_forever, daemon=True).start()
     cloud.base = f"http://127.0.0.1:{server2.server_address[1]}"
     with psycopg.connect(r.operator_dsn, autocommit=True, row_factory=psycopg.rows.dict_row) as o:

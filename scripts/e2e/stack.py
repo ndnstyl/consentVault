@@ -180,7 +180,7 @@ class Stack:
                   ExportRouteAdapter(exports, auth),
                   BillingRoutes(connect=connect, mint_token=mint, client=FakeStripe(), webhook_secret="e2e-webhook-key"))
         settings = api.CloudApiSettings(
-            dsn=t.app_dsn, token_key=t.key, access_tokens=access, receipts=ReceiptSigner.generate(key_id="rcpt-e2e"),
+            dsn=t.app_dsn, projection_dsn=t.projection_dsn, token_key=t.key, access_tokens=access, receipts=ReceiptSigner.generate(key_id="rcpt-e2e"),
             crypto=t.crypto, evidence_store=LocalAppendOnlyEvidenceStore(self.root / "evidence"),
             token_endpoint_url="https://api.consentvault.test/v1/oauth/token", cursor_key=os.urandom(32),
             allowed_hosts=("127.0.0.1", "localhost"), default_retain_years=7, region="US", routes=routes,

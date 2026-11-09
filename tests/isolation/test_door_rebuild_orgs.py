@@ -80,6 +80,7 @@ def _command_env(cloud, monkeypatch):
     from consentvault import cmd_cloud
 
     monkeypatch.setenv("CONSENTVAULT_DSN", cloud.t.app_dsn)
+    monkeypatch.setenv("CONSENTVAULT_PROJECTION_DSN", cloud.t.projection_dsn)
     monkeypatch.setenv("CONSENTVAULT_OPERATOR_DSN", cloud.t.operator_dsn)
     monkeypatch.setattr(cmd_cloud, "build_cloud", lambda cfg, env: cloud.settings)
 

@@ -467,7 +467,7 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
             except Exception as exc:  # loud-failure-exempt: the pure phase of the reader; its refusal is final and is stored below
                 _log.error("a stored post produces no event; the reason is stored beside it", error=reason_of(exc))
                 _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason_of(exc)))
-                raise _Refused(reason_of(exc)) from exc
+                raise _FinalReading from exc
             if reason is not None or isinstance(fields, str):
                 outcome = Outcome(view.post_id, reason=reason or fields)
             else:
@@ -479,10 +479,10 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
             outcome = _already(conn, enter, view)
             if outcome.event_id is not None:
                 return outcome
-    except _Refused as refused:
+    except _FinalReading as final:
         if raise_errors:
-            raise refused.__cause__
-        return Outcome(view.post_id, reason=refused.reason)
+            raise final.__cause__
+        return Outcome(view.post_id, reason=reason_of(final.__cause__))
     except Exception as exc:  # loud-failure-exempt: no error is final; it is logged, handed on, and the post is projected again on the next run
         reason = reason_of(exc)
         _log.error("the event of a stored post could not be written; the projection will run again for it", error=reason)
@@ -502,13 +502,9 @@ class _AlreadyProjected(Exception):
     pass
 
 
-class _Refused(Exception):
-    """The pure phase of the reader (the same bytes and facts, no database, no store, no key) refused the post: the one final
-    reason, because it repeats on the same bytes by construction."""
-
-    def __init__(self, reason: str) -> None:
-        super().__init__(reason)
-        self.reason = reason
+class _FinalReading(Exception):
+    """The pure phase of the reader (the same bytes and facts, no database, no store, no key) produced no event: the one final
+    reason, because it repeats on the same bytes by construction. The cause is the reader's own error."""
 
 
 EDGE_TIMESTAMP_WINDOW_S = 300

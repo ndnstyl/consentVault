@@ -6,7 +6,7 @@
 --
 -- Not readable by the projection: capture_source (source status, brands, origins), brand, disclosure (a grant's wording is read
 -- from the fact stored at arrival; the ledger's own grant-scope check is a security-definer trigger and still sees it), channel and
--- purpose (the lists), credential (site keys), tenancy_setting, and organization except its id and status (the region, the
+-- purpose (the lists), credential (site keys), retention_policy (read at intake and stored), tenancy_setting, and organization except its id and status (the region, the
 -- default settings). Everything else is the app's, copied at the time this runs and again whenever sync_projection_grants() is
 -- called, which every later migration that grants the app something must do (tests/test_projection_login.py names any drift).
 --
@@ -37,7 +37,7 @@ $$;
 CREATE FUNCTION consentvault.sync_projection_grants() RETURNS void
     LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
-    unreadable text[] := ARRAY['capture_source', 'brand', 'disclosure', 'channel', 'purpose', 'credential', 'tenancy_setting'];
+    unreadable text[] := ARRAY['capture_source', 'brand', 'disclosure', 'channel', 'purpose', 'credential', 'tenancy_setting', 'retention_policy'];
     definers text[] := ARRAY['current_org', 'home_org', 'enter_org', 'current_token_scopes', 'current_token_claims', 'may_read_evidence',
                              'ledger_lock_key', 'raw_post_lock_key', 'raw_post_head', 'ledger_head', 'contact_key_of', 'receipt_of',
                              'request_counted', 'arrival_at', 'arrival_key', 'arrival_place', 'arrival_post_seq',

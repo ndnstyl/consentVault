@@ -333,13 +333,12 @@ def check_wording_from_fact(f: dict, fact: Mapping[str, Any] | None, fallback=No
     return fact
 
 
-def retention_until(conn: psycopg.Connection, default_years: int, now: datetime) -> datetime:
-    """The retain-until date of a new evidence object: the organisation's retention in force, else the platform's."""
+def retention_years_in_force(conn: psycopg.Connection, default_years: int) -> int:
+    """The evidence retention in force now: the organisation's, else the platform's. Read at intake, stored beside the post."""
     row = conn.execute(
         "SELECT evidence_years FROM consentvault.retention_policy WHERE org_id = consentvault.current_org()"
         " AND applies_from <= now() ORDER BY version DESC LIMIT 1").fetchone()
-    years = row["evidence_years"] if row else default_years
-    return now + timedelta(days=366 * int(years))
+    return int(row["evidence_years"]) if row else int(default_years)
 
 
 # Contact keys ---------------------------------------------------------------------------------------------------------
@@ -409,7 +408,8 @@ class CapturePipeline:
         return {"region": org_region(conn, self.region), "channels": sorted(org_channels(conn)),
                 "purposes": sorted(org_purposes(conn)), "source_status": row["status"] if row else None,
                 "source_id": str(row["source_id"]) if row else None,
-                "source_brand_ids": list(row["brands"]) if row else []}
+                "source_brand_ids": list(row["brands"]) if row else [],
+                "retention_years": retention_years_in_force(conn, self.default_retain_years)}
 
     def capture(self, conn: psycopg.Connection, enter: Callable, req: CaptureRequest, *,
                 credential_id: uuid.UUID, link: Callable | None = None, settings: Mapping[str, Any] | None = None,
@@ -433,8 +433,10 @@ class CapturePipeline:
                 check_channel_purpose(f["channels"], f["purposes"], allow_star=f["event_type"] != "grant", stored=settings)
                 check_source_from_settings(f, settings)
                 fp, data_key = contact_key(conn, self.crypto, org, kind, norm, create=True)
-                retain = retention_until(conn, self.default_retain_years,
-                                        self.clock() if self.clock else dbclock.now(conn))
+                # the retention in force when the post arrived (stored beside it), counted from its arrival: neither the policy as it
+                # stands nor the clock at projection decides it
+                years = int(settings.get("retention_years") or self.default_retain_years)
+                retain = (arrived_at or (self.clock() if self.clock else dbclock.now(conn))) + timedelta(days=366 * years)
                 conn.execute("INSERT INTO consentvault.evidence_object (org_id, object_id, object_key, contact_fp,"
                              " retain_until) VALUES (%s, %s, %s, %s, %s)", (org, object_id, key, fp, retain))
         except KeyProviderError as exc:

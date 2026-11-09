@@ -18,7 +18,7 @@ from consentvault import api, door
 from .cloud_harness import attempts_of
 from .test_door_site_key_state import _orgs, hw  # noqa: F401
 
-CONFIG_TABLES = ("capture_source", "brand", "disclosure", "channel", "purpose", "credential", "tenancy_setting")
+CONFIG_TABLES = ("capture_source", "brand", "disclosure", "channel", "purpose", "credential", "tenancy_setting", "retention_policy")
 
 
 def _can(hw, sql, *params):

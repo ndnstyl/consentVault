@@ -125,3 +125,19 @@ test("an origin that does not answer a capture is reported as unknown whether st
   const noSettings = await handleGateway(r("/v1/events", { method: "POST", body: "{}" }), { ...ENV, ORIGIN_URL: "" }, { ...d, alarm: (n) => alarms.push(n) });
   assert.equal(noSettings.status, 503);
 });
+
+test("POST /v1/oauth/token passes through with no bearer, and only that route", async () => {
+  const { d, calls } = mk(200);
+  const form = "grant_type=client_credentials&client_assertion=a.b.c";
+  const res = await handleGateway(r("/v1/oauth/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form }), ENV, d);
+  assert.equal(res.status, 200);
+  assert.equal(calls[0].url, "https://origin.example.com/v1/oauth/token");
+  assert.equal(calls[0].init.body instanceof ArrayBuffer ? new TextDecoder().decode(calls[0].init.body) : String(calls[0].init.body), form);
+  assert.equal((calls[0].init.headers as Headers).get("cf-access-client-id"), "cid");
+  for (const [path, method] of [["/v1/oauth/token", "GET"], ["/v1/oauth/token/x", "POST"], ["/v1/oauth/tokens", "POST"], ["/v1/permission", "POST"]] as const) {
+    const o = mk(200);
+    const x = await handleGateway(r(path, { method, ...(method === "POST" ? { body: "{}" } : {}) }), ENV, o.d);
+    assert.equal(x.status, 401, `${method} ${path}`);
+    assert.equal(o.calls.length, 0);
+  }
+});

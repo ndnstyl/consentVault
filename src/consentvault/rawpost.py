@@ -33,6 +33,7 @@ import psycopg
 
 from .errors import ConsentVaultError
 from .ledger import GENESIS, canonical_dumps
+from . import safelog
 from .safelog import describe
 from .tenancy.errors import KeyProviderError
 
@@ -60,6 +61,14 @@ class Fact:
     source: str
     name: str
     value: Any
+
+
+_log = safelog.get("consentvault.rawpost")
+
+
+def request_key_digest(request_key: str) -> str:
+    """What the request key is stored and indexed as: its sha256. The key is the sender's text and any length; the digest is not."""
+    return hashlib.sha256(request_key.encode("utf-8", "backslashreplace")).hexdigest()
 
 
 def is_request_key(fact: Fact) -> bool:
@@ -348,12 +357,21 @@ class RawPostWriter:
 
     @staticmethod
     def record_request_key(conn: psycopg.Connection, org: uuid.UUID, post_id: uuid.UUID, request_key: str) -> None:
-        """The request key beside the post as a column of its own, indexed: an event is placed by the earliest post that carries
-        its key. A post has one key; the first one recorded stays."""
+        """The request key beside the post as a column of its own, indexed as its sha256 (never the sender's text, which may be
+        any length): an event is placed by the earliest post that carries its key. A post has one key; the first one recorded
+        stays. A failure to write this row never undoes the post: it is logged by name and the backfill writes it on the next run."""
+        try:
+            RawPostWriter._write_request_key(conn, org, post_id, request_key)
+        except psycopg.Error as exc:  # loud-failure-exempt: the post stays stored; logged by name, and door.backfill_request_keys repairs the row
+            _log.error("the request key of a stored post could not be recorded as a column; the backfill will repair it",
+                       error=type(exc).__name__)
+
+    @staticmethod
+    def _write_request_key(conn: psycopg.Connection, org: uuid.UUID, post_id: uuid.UUID, request_key: str) -> None:
         try:
             with conn.transaction():
                 conn.execute("INSERT INTO consentvault.raw_post_request (org_id, post_id, request_key) VALUES (%s, %s, %s)",
-                             (org, post_id, _db_text(request_key)))
+                             (org, post_id, request_key_digest(request_key)))
         except psycopg.errors.UniqueViolation:  # loud-failure-exempt: the post already carries a request key; the first one recorded stays
             return
 

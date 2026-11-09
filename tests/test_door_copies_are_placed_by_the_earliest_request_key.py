@@ -9,6 +9,7 @@ import time
 import psycopg
 
 from consentvault import api, door
+from consentvault.rawpost import request_key_digest
 from test_api import SECRET, TOKEN, VERIFIED_SECRET, PURPOSES, _call, _serve
 
 
@@ -93,12 +94,12 @@ def test_the_request_key_of_a_post_stored_before_the_column_is_backfilled_from_i
     stored = writer.write(conn, None, RawRequest(intake="api", method="POST", path="/v1/events", query="", headers=(),
                                                   body=b"{}", facts=(Fact("vault", "request_key", "sig:abc"),)))
     assert conn.execute("SELECT request_key FROM consentvault.raw_post_request WHERE post_id = %s", (stored.post_id,)
-                        ).fetchall() == [{"request_key": "sig:abc"}]   # the writer records it with the post
+                        ).fetchall() == [{"request_key": request_key_digest("sig:abc")}]   # the writer records it with the post
     old = writer.write(conn, None, RawRequest(intake="api", method="POST", path="/v1/events", query="", headers=(), body=b"{}"))
     conn.execute("INSERT INTO consentvault.raw_post_fact (org_id, post_id, fact_id, source, name, value_ct)"
                  " VALUES (%s, %s, gen_random_uuid(), 'vault', 'request_key', %s)", (old.org_id, old.post_id, b'"sig:old"'))
     assert conn.execute("SELECT count(*) AS n FROM consentvault.raw_post_request WHERE post_id = %s", (old.post_id,)).fetchone()["n"] == 0
     assert door.backfill_request_keys(writer, conn, None) == 1
     assert conn.execute("SELECT request_key FROM consentvault.raw_post_request WHERE post_id = %s", (old.post_id,)
-                        ).fetchall() == [{"request_key": "sig:old"}]
+                        ).fetchall() == [{"request_key": request_key_digest("sig:old")}]
     assert door.backfill_request_keys(writer, conn, None) == 0   # nothing left to record, and running it again changes nothing

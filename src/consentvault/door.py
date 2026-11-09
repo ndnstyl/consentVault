@@ -36,7 +36,7 @@ import psycopg
 from . import edge_envelope, safelog, stopwords
 from .errors import (ConsentVaultError, EmptyConsentError, InvalidEventError, UncheckedConsentError)
 from .ledger import Event, record_event, record_tenant_event
-from .rawpost import Fact, RawPostWriter, RawRequest, StoredPost
+from .rawpost import Fact, RawPostWriter, RawRequest, StoredPost, request_key_digest
 
 _log = safelog.get("consentvault.door")
 
@@ -159,7 +159,8 @@ def auth_from_facts(facts: Mapping[tuple[str, str], Any]) -> Auth:
     def vault(name, default=None):
         return facts.get(("vault", name), default)
 
-    key = vault("request_key")
+    raw_key = vault("request_key")
+    key = request_key_digest(raw_key) if isinstance(raw_key, str) and raw_key else None
     verified = vault("authenticated_by") in ("verified_key", "local")
     cred = vault("credential")
     cred = cred if isinstance(cred, dict) and cred.get("state") == "verified" else None
@@ -796,7 +797,7 @@ def project_text_reply(writer: RawPostWriter, conn: psycopg.Connection, enter: C
     our answer) stands or falls with the stop. A stop the rebuild already projected is returned as the event it made."""
     with _ctx(conn, enter):
         row = conn.execute("SELECT event_id::text AS event_id FROM consentvault.event_source_post"
-                           " WHERE request_key = %s AND role = 'trigger'", (request_key,)).fetchone()
+                           " WHERE request_key = %s AND role = 'trigger'", (request_key_digest(request_key),)).fetchone()
     if row is not None:
         return Outcome(stored.post_id, event_id=row["event_id"])
     facts = {("vault", "request_signature"): "valid", ("vault", "replay"): "fresh", ("vault", "authenticated_by"): "provider",

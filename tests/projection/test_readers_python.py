@@ -233,8 +233,8 @@ def test_17_a_post_cutover_contact_shows_in_the_records_admin(world):
     from consentvault import records_backfill
     v = world.vault
     records_backfill.backfill(v.operator, v.key, v.custody, world.crypto)
-    rid = world.record_id(o, PHONE_NY)
-    shown = o.boss.ok("GET", f"/v1/records/{rid}")
+    world.record_id(o, PHONE_NY)
+    shown = o.boss.ok("POST", "/v1/records:search", body={"contact": PHONE_NY})
     assert "0142" in json.dumps(shown), "the masked contact comes from the last contact ciphertext in history"
 
 

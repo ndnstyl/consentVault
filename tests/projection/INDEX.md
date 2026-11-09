@@ -53,17 +53,17 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | item 14 | `test_14_a_post_cutover_row_is_sealed_into_the_history_seal_table` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 15 | `test_15_a_second_erasure_request_after_cutover_finds_the_first_stop` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 16 | `test_16_a_post_cutover_contact_is_offboarded` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
-| item 17 | `test_17_a_post_cutover_contact_shows_in_the_records_admin` in `test_readers_python.py` | E   AssertionError: ('GET', '/v1/records/93785f0d-c856-44ed-9add-408852f326ec', 404, {'error': 'not_found', 'detail': 'no such endpoint', 'r |
+| item 17 | `test_17_a_post_cutover_contact_shows_in_the_records_admin` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 18 | `test_18_a_post_cutover_contact_is_found_by_the_restore_job` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 19 | `test_19_the_permission_view_is_rebuilt_over_history_and_the_contact_check_does_not_need_it` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 19 | `test_19_with_the_derived_view_switched_off_the_sender_still_skips_on_the_stop_and_the_contact_check_answers` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
-| item 20 | `test_20_a_post_cutover_stop_advances_its_sync_state_and_the_person_state_reads_stopped` in `test_readers_sql_and_history.py` | E   AssertionError: TEST ADAPTER: consentvault.sync_person_state takes ['system_id', 'contact_fps'] and the test supplies no value for it |
+| item 20 | `test_20_a_post_cutover_stop_advances_its_sync_state_and_the_person_state_reads_stopped` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 21 | `test_confirmation_enqueue_is_refused_by_name_only_after_the_cutover` in `test_cutover_0089.py` | PASSES TODAY (not a failing test) |
 | item 22 | `test_22_a_post_cutover_grant_updates_its_record_index_without_the_event_table` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 23 | `test_23_receipt_of_returns_the_receipt_of_a_post_cutover_post` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 24 | `test_24_the_record_doc_check_of_a_history_only_post_reads_its_completeness` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
-| item 25 | `test_25_the_health_and_usage_counts_count_a_post_cutover_post` in `test_readers_sql_and_history.py` |     PL/pgSQL function consentvault.usage_events_for_day(date) line 3 during statement block local variable initialization |
-| item 26 | `test_26_an_erasure_after_cutover_covers_the_contacts_history_rows` in `test_readers_sql_and_history.py` |                           ^ |
+| item 25 | `test_25_the_health_and_usage_counts_count_a_post_cutover_post` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
+| item 26 | `test_26_an_erasure_after_cutover_covers_the_contacts_history_rows` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 27 | `test_27_the_stop_lift_guard_moves_to_the_history_lift_table_with_a_key_to_history` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 28 | `test_28_each_table_that_cited_an_event_can_cite_a_history_event_and_loses_no_column[send_intent]` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 28 | `test_28_each_table_that_cited_an_event_can_cite_a_history_event_and_loses_no_column[reply]` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
@@ -81,7 +81,7 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | item 36 | `test_36_the_bundles_head_equals_the_history_head_and_the_derived_view_is_labelled` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
 | item 37 | `test_37_after_cutover_the_old_append_path_is_refused_by_name` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 38 | `test_38_the_proof_of_a_post_cutover_stop_shows_it_under_the_derived_label` in `test_readers_python.py` | PASSES TODAY (not a failing test) |
-| item 39 | `test_a_valid_grant_a_counted_stop_then_a_forged_grant_the_sender_skips_and_the_forged_row_does_not_count` in `test_readers_sql_and_history.py` | E   AssertionError: TEST ADAPTER: consentvault.sync_person_state takes ['system_id', 'contact_fps'] and the test supplies no value for it |
+| item 39 | `test_a_valid_grant_a_counted_stop_then_a_forged_grant_the_sender_skips_and_the_forged_row_does_not_count` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 39 | `test_a_pending_intent_skips_with_the_old_reason_ends_terminal_and_a_rerun_after_clearing_sends_nothing[stop_on_record]` in `test_sender_skips.py` | PASSES TODAY (not a failing test) |
 | item 40 | `test_40_history_head_returns_the_newest_history_row` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
 | item 41 | `test_41_a_broken_history_link_is_listed` in `test_readers_sql_and_history.py` | PASSES TODAY (not a failing test) |
@@ -131,10 +131,10 @@ Tests: 173. Failing as a missing feature: 0. Passing or failing on a built featu
 | 0080.concurrent_writers_one_chain | `test_two_concurrent_fact_writers_on_one_post_leave_one_unbroken_chain` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0080.database_computes_the_chain | `test_the_database_stamps_order_time_and_hashes_and_each_fact_chains_from_the_one_before` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0080.pre_0080_arrival_credential | `test_a_post_stored_before_the_migration_projects_using_the_credential_its_arrival_facts_hold` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
-| 0080.pre_0080_no_legacy_event | `test_a_post_stored_before_the_migration_with_no_legacy_event_projects_after_the_backfill` in `test_migrations_facts_and_history.py` | ADAPTER TO COMPLETE: a pre-migration post with no event and no lookup answer gets a backfill fact set (not_found) and projects; it never wai |
+| 0080.pre_0080_no_legacy_event | `test_a_post_stored_before_the_migration_with_no_legacy_event_projects_after_the_backfill` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0080.second_succeeded_row_is_lost_race | `test_a_second_succeeded_row_for_one_post_and_name_lands_as_lost_race` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0080.two_arrival_facts_of_one_name | `test_an_arrival_carrying_two_facts_of_one_name_stores_and_the_fold_reads_the_lowest_order` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
-| 0081.replay_stores_no_new_post | `test_replay_from_empty_of_a_rerouted_post_stores_no_new_post_and_places_the_copy_at_its_original_arrival` in `test_migrations_facts_and_history.py` | ADAPTER TO COMPLETE: load a store holding one rerouted post onto a fresh database, project, and expect zero new posts, one history row per s |
+| 0081.replay_stores_no_new_post | `test_replay_from_empty_of_a_rerouted_post_stores_no_new_post_and_places_the_copy_at_its_original_arrival` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0081.second_reroute_fails | `test_a_second_reroute_of_one_original_fails_on_the_primary_key` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0081.table | `test_0081_makes_the_append_only_reroute_table_with_a_key_on_the_original` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0082.append_only_no_truncate_hash_version | `test_the_history_is_append_only_refuses_truncate_and_pins_the_hash_version` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
@@ -212,6 +212,4 @@ Each fails today at its precondition (MISSING FEATURE). Once the feature is buil
 because the design fixes the behaviour but not the call shape (the loader's argument list, the watermark job, the backfill job, the
 restore job). The builder completes the adapter in the same change that creates the call shape.
 
-- `test_migrations_facts_and_history.py::test_a_post_stored_before_the_migration_with_no_legacy_event_projects_after_the_backfill`: a pre-migration post with no event and no lookup answer gets a backfill fact set (not_found) and
-- `test_migrations_facts_and_history.py::test_replay_from_empty_of_a_rerouted_post_stores_no_new_post_and_places_the_copy_at_its_original_arrival`: load a store holding one rerouted post onto a fresh database, project, and expect zero new posts, one
 

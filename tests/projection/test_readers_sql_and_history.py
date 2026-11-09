@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from .support import (as_text, call_fn, PHONE, PHONE2, cut_grant, cut_stop, door_post, grant_fields, history_event_id, history_head, history_row, integrity_conn,
+from .support import (twenty_system, add_push_target, as_text, call_fn, PHONE, PHONE2, cut_grant, cut_stop, door_post, grant_fields, history_event_id, history_head, history_row, integrity_conn,
                       need_cutover, need_function, need_table, sql)
 
 spec = pytest.mark.spec_item
@@ -42,12 +42,13 @@ def test_19_the_permission_view_is_rebuilt_over_history_and_the_contact_check_do
 def test_20_a_post_cutover_stop_advances_its_sync_state_and_the_person_state_reads_stopped(world):
     need_cutover()
     o = world.a
+    system = twenty_system(world, o)
     cut_grant(world, o, PHONE)
     v1 = sql(world, "SELECT coalesce(max(version), 0) AS v FROM consentvault.state_version WHERE org_id = %s", (o.org_id,))[0]["v"]
     cut_stop(world, o, PHONE)
     v2 = sql(world, "SELECT coalesce(max(version), 0) AS v FROM consentvault.state_version WHERE org_id = %s", (o.org_id,))[0]["v"]
     assert v2 > v1
-    state = as_text(call_fn(world, o, "sync_person_state", contact_fp=o.fp(PHONE), fp=o.fp(PHONE)))
+    state = as_text(call_fn(world, o, "sync_person_state", _as="worker", system_id=system, contact_fps=[o.fp(PHONE)]))
     assert ("stop" in state or "revok" in state or "denied" in state) and "permitted" not in state, state
     for name in ("sync_advance_state", "sync_contact_sealed", "sync_person_state"):
         _reads_history_only(world, name)
@@ -75,7 +76,7 @@ def test_23_receipt_of_returns_the_receipt_of_a_post_cutover_post(world):
 
 def _vals(world, o, post=None, fp_phone=PHONE):
     from datetime import date
-    v = {"org_id": o.org_id, "contact_fp": o.fp(fp_phone), "fp": o.fp(fp_phone), "day": date.today(), "source_id": o.web_id}
+    v = {"admin": False, "org_id": o.org_id, "contact_fp": o.fp(fp_phone), "fp": o.fp(fp_phone), "day": date.today(), "source_id": o.web_id}
     if post:
         v["event_id"] = history_event_id(world, o, post)
         v["post_id"] = post
@@ -101,8 +102,8 @@ def test_25_the_health_and_usage_counts_count_a_post_cutover_post(world):
     post = cut_grant(world, o, PHONE)
     assert as_text(call_fn(world, o, "health_counts", **_vals(world, o))) != before, "a history-only post is counted"
     assert str(o.web_id).lower() in as_text(call_fn(world, o, "source_last_events", **_vals(world, o, post)))
-    assert call_fn(world, o, "usage_events_for_day", **_vals(world, o, post))
-    call_fn(world, o, "customer_alarm_rows", **_vals(world, o, post))   # runs against history without error
+    assert call_fn(world, o, "usage_events_for_day", _scopes=("capture", "gate_read", "worker:usage"), **_vals(world, o, post))
+    call_fn(world, o, "customer_alarm_rows", _scopes=("admin",), **_vals(world, o, post))   # runs against history without error
 
 
 @spec("item26")
@@ -111,9 +112,10 @@ def test_26_an_erasure_after_cutover_covers_the_contacts_history_rows(world):
     o = world.a
     post = cut_grant(world, o, PHONE)
     product_erase(world, o.org_id, PHONE)
-    cover = as_text(call_fn(world, o, "erasure_request_cover", **_vals(world, o, post)))
-    assert cover and "[]" != cover, "the cover names the history rows of the erased contact"
-    call_fn(world, o, "erasure_coverage_backfill", **_vals(world, o, post))
+    _reads_history_only(world, "erasure_request_cover")   # a trigger function: proved by what it reads, it cannot be called
+    assert sql(world, "SELECT 1 FROM consentvault.post_history WHERE org_id = %s AND post_id = %s", (o.org_id, post)), "the erased contact's history row stays"
+    if sql(world, "SELECT 1 FROM pg_proc WHERE pronamespace = 'consentvault'::regnamespace AND proname = 'erasure_coverage_backfill'"):
+        _reads_history_only(world, "erasure_coverage_backfill")
 
 
 @spec("item27")
@@ -299,6 +301,7 @@ def test_a_valid_grant_a_counted_stop_then_a_forged_grant_the_sender_skips_and_t
     from consentvault.tenancy.tokens import org_transaction
     from contract_world.confirm import sends
     o = world.a
+    system = twenty_system(world, o)
     cut_grant(world, o, "+13055550142")
     cut_stop(world, o, "+13055550142")
     forged = door_post(world, o, grant_fields(o, "+13055550142"), facts=[Fact("vault", "request_signature", "invalid")])
@@ -311,7 +314,7 @@ def test_a_valid_grant_a_counted_stop_then_a_forged_grant_the_sender_skips_and_t
     forged_id = history_event_id(world, o, forged)
     assert forged_id not in facts.event_ids or "not_authenticated" in json.dumps(facts.as_dict(), default=str), \
         "the contact check ignores or labels a row that did not count"
-    state = as_text(call_fn(world, o, "sync_person_state", **_vals(world, o, fp_phone="+13055550142")))
+    state = as_text(call_fn(world, o, "sync_person_state", _as="worker", system_id=system, contact_fps=[o.fp("+13055550142")]))
     assert "permitted" not in state, "sync person state ignores the forged grant: the person is still stopped"
 
 

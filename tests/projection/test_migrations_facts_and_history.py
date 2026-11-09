@@ -127,15 +127,6 @@ def test_a_post_stored_before_the_migration_with_no_legacy_event_projects_after_
     assert "not_found" in statuses and "value" in statuses, "a backfill fact set: its own arrival facts as value, every other name not_found"
 
 
-@spec("0080.pre_0080_no_legacy_event")
-def test_a_post_stored_before_the_migration_with_no_legacy_event_projects_after_the_backfill(world, request):
-    need_cutover()
-    need_columns("raw_post_fact", "status")
-    _apply_in_two_stages(request)
-    pytest.fail("ADAPTER TO COMPLETE: a pre-migration post with no event and no lookup answer gets a backfill fact set (not_found) and "
-                "projects; it never waits on a fact that will not come", pytrace=False)
-
-
 def _apply_in_two_stages(request):
     from .support import two_stage_migrate
 
@@ -198,14 +189,6 @@ def test_replay_from_empty_of_a_rerouted_post_stores_no_new_post_and_places_the_
     replay = load_into_fresh(hw.cloud)
     assert len(replay.loaded["posts"]) == len(store.loaded["posts"]), "replay stores zero new posts"
     assert replay.fingerprints == store.fingerprints
-
-
-@spec("0081.replay_stores_no_new_post")
-def test_replay_from_empty_of_a_rerouted_post_stores_no_new_post_and_places_the_copy_at_its_original_arrival(cloud):
-    need_table("raw_post_reroute")
-    need_function("load_stored_post")
-    pytest.fail("ADAPTER TO COMPLETE: load a store holding one rerouted post onto a fresh database, project, and expect zero new posts, one "
-                "history row per stored post, and the copy's placed_at equal to the original arrival", pytrace=False)
 
 
 # ---- 0082 ------------------------------------------------------------------------------------------------------------------

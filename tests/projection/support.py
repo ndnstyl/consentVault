@@ -540,20 +540,23 @@ def purity_run(env) -> tuple[Replayed, Replayed, Replayed]:
     return store_snapshot(env), load_into_fresh(env), load_into_fresh(env, refill=True, shift_years=1)
 
 
-def call_fn(world, org, name: str, **values):
+def call_fn(world, org, name: str, _scopes=("capture", "gate_read"), _as: str = "app", **values):
     """Call consentvault.<name> with arguments matched BY NAME (a leading p_ is ignored) to ``values``, entered as the organisation.
     An argument with no value is a defect in the test and fails loudly, naming it."""
     import json as _json
     from consentvault.tenancy.tokens import org_transaction
 
-    with world.vault.appconn() as c:
+    with (login_in_group(world, "consentvault_worker") if _as == "worker" else world.vault.appconn()) as c:
         row = c.execute("SELECT proargnames AS n, pronargs FROM pg_proc WHERE pronamespace = 'consentvault'::regnamespace AND proname = %s"
                         " ORDER BY pronargs DESC LIMIT 1", (name,)).fetchone()
         assert row is not None, f"function consentvault.{name} does not exist"
         names = [n.removeprefix("p_") for n in (row["n"] or [])][: row["pronargs"]]
         absent = [n for n in names if n not in values]
         assert not absent, f"TEST ADAPTER: consentvault.{name} takes {absent} and the test supplies no value for it"
-        with org_transaction(c, world.capture_token(org.org_id)):
+        token = world.capture_token(org.org_id, _scopes)
+        if _as == "worker":   # the sync worker is handed a short token per organisation by the dispatcher
+            token = next(r["token"] for r in c.execute("SELECT org_id, token FROM consentvault.dispatch_orgs('sync')").fetchall() if str(r["org_id"]) == str(org.org_id))
+        with org_transaction(c, token):
             return c.execute(f"SELECT * FROM consentvault.{name}({', '.join(['%s'] * len(names))})", [values[n] for n in names]).fetchall()
 
 
@@ -591,3 +594,10 @@ def product_erase(env, org_id, contact: str) -> dict:
     with operator() as c:
         return erasure.confirm_erasure(c, token_key=key, crypto=crypto, ledger=ledger, operator_id="op-1", request_id="req-op",
                                        org_id=org_id, erasure_id=req["erasure_id"])
+
+
+def twenty_system(world, org, name: str = "crm") -> str:
+    """A connected system the person-state reader accepts: sync_person_state is the Twenty connector's call, so the system is marked as one."""
+    sid = add_push_target(org, name)
+    force(world, "UPDATE consentvault.connected_system SET connector = 'twenty', contact_form = 'plaintext', signature = 'none' WHERE org_id = %s AND system_id = %s", (org.org_id, sid))
+    return sid

@@ -367,7 +367,7 @@ def update_source(ctx: Ctx, source_id, body: Any) -> dict:
     try:
         row = ctx.conn.execute(
             "UPDATE consentvault.capture_source SET name = %s, brand_ids = %s, allowed_origins = %s, status = %s,"
-            " retired_at = CASE WHEN %s = 'retired' THEN now() ELSE retired_at END"
+            " retired_at = CASE WHEN %s = 'retired' THEN clock_timestamp() ELSE retired_at END"
             " WHERE org_id = (SELECT consentvault.current_org()) AND source_id = %s RETURNING *",
             (name, brand_ids, origins, status, status, sid)).fetchone()
     except psycopg.errors.UniqueViolation:
@@ -629,7 +629,7 @@ def revoke_credential(ctx: Ctx, credential_id, body: Any) -> dict:
         raise ApiError("role_not_allowed", "a developer revokes only the capture credentials it issued", {"role": ctx.actor.role})
     if cur["revoked_at"] is not None:
         raise ApiError("already_revoked", "the credential is already revoked")
-    row = ctx.conn.execute("UPDATE consentvault.credential SET revoked_at = now(), revoked_by = %s, revoke_reason = %s"
+    row = ctx.conn.execute("UPDATE consentvault.credential SET revoked_at = clock_timestamp(), revoked_by = %s, revoke_reason = %s"
                            " WHERE org_id = (SELECT consentvault.current_org()) AND credential_id = %s RETURNING revoked_at",
                            (ctx.actor.member_uuid, reason, cid)).fetchone()
     ctx.audit("credential.revoked", "credential", str(cid), reason)

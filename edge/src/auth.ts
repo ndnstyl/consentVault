@@ -18,6 +18,7 @@ export interface AuthEnv {
   SESSIONS: KV;
   SESSION_GATE?: GateNamespace; // one Durable Object per session owns the session record (session-gate.ts)
   ASSERTION_KEY_JWK?: string;   // the edge's private ES256 key (a secret); the vault holds only the public half
+  PROVIDER_MFA_REQUIRED?: string; // "true" when the operator declares the provider environment requires multi-factor at sign-in
 }
 
 export interface AuthDeps {
@@ -105,10 +106,26 @@ async function callback(request: Request, env: AuthEnv, deps: AuthDeps): Promise
   const claims = token ? tokenClaims(token) : null;
   if (!token || !claims) return page(502, "Sign-in is unavailable", "The identity provider answered without a usable token.", [spent]);
 
-  const amr = amrFromExchange(tokens);
+  let passwordWithTotp = false;
+  if (tokens.authentication_method === "Password" && env.PROVIDER_MFA_REQUIRED === "true") {
+    // The provider's own factor list for this person. Any failure to read it is a refusal, never an accepted sign-in.
+    try {
+      if (!claims.sub || !env.AUTH_CLIENT_SECRET) throw new Error("no subject or key");
+      const fr = await deps.fetch(clean(env.AUTH_BASE_URL) + "/users/" + encodeURIComponent(claims.sub) + "/auth_factors", { headers: { authorization: "Bearer " + env.AUTH_CLIENT_SECRET } });
+      if (!fr.ok) throw new Error("factor list answered " + fr.status);
+      const list = (await fr.json()) as { data?: unknown };
+      if (!Array.isArray(list.data)) throw new Error("factor list had no data");
+      passwordWithTotp = list.data.some((f) => (f as { type?: unknown })?.type === "totp");
+    } catch {
+      return page(502, "Sign-in could not check your second factor", "The identity provider's list of your authenticator apps could not be read. Nothing was signed in. Try again in a minute.", [spent]);
+    }
+  }
+  const amr = amrFromExchange(tokens, passwordWithTotp);
   const who = whoFromExchange(tokens);
   const sso = ssoFromExchange(tokens);
   const method = typeof tokens.authentication_method === "string" ? tokens.authentication_method : "";
+  // Diagnostic (2026-11-09 sign-in loop): what the provider reported, never a token or an address.
+  console.log(JSON.stringify({ signin_method: method || null, amr, answer_fields: Object.keys(tokens).filter((k) => !/token/i.test(k)).sort() }));
   let check: Response;
   try {
     const assertion = claims.sub ? await signAssertion(env, token, claims.sub, amr, method, deps.now(), who, sso) : null;
@@ -161,13 +178,17 @@ async function logoutInner(request: Request, env: AuthEnv, deps: AuthDeps, cooki
   const sid = cookieValue(request.headers.get("cookie"), SESSION_COOKIE);
   const store = sessionStoreFor(env, deps.fetch);
   const rec = sid ? await store.load(sid, deps.now()) : null;
-  if (!sid || !rec) return redirect("/sign-in", cookies, request);
+  // `?next=passkey|sso|login` (with an optional `return`) sends the person to a fresh sign-in once the provider session is over.
+  const q = new URL(request.url).searchParams;
+  const next = q.get("next");
+  const after = next ? `/auth/login?${next === "passkey" || next === "sso" ? `method=${next}&` : ""}return=${encodeURIComponent(safeReturn(q.get("return")))}` : "/sign-in";
+  if (!sid || !rec) return redirect(after, cookies, request);
   await store.revoke(sid, deps.now());
   const providerSid = rec.provider_sid ?? tokenClaims(rec.token)?.sid ?? null;
-  if (!providerSid) return redirect("/sign-in", cookies, request);
+  if (!providerSid) return redirect(after, cookies, request);
   const to = new URL(clean(env.AUTH_BASE_URL) + "/sessions/logout");
   to.searchParams.set("session_id", providerSid);
-  to.searchParams.set("return_to", clean(env.PUBLIC_URL) + "/sign-in");
+  to.searchParams.set("return_to", clean(env.PUBLIC_URL) + after);
   return redirect(to.toString(), cookies, request);
 }
 

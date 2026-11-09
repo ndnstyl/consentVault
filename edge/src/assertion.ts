@@ -22,8 +22,11 @@ export interface ExchangeAnswer { authentication_method?: unknown; sso_connectio
 // The rule rests on `authentication_method` alone, the field the provider sends with every successful sign-in. A passkey
 // counts on its own; a password, a magic link, an OAuth sign-in or anything unknown shows no second factor and the vault
 // refuses it. (The provider's separate factor list is not read: it is absent from the live answer.)
-export function amrFromExchange(body: ExchangeAnswer): string[] {
+// `passwordWithTotp` is true only when the operator declared that the provider environment requires multi-factor AND the
+// provider's own factor list shows the person holds an authenticator-app factor; a password then counts as password plus code.
+export function amrFromExchange(body: ExchangeAnswer, passwordWithTotp = false): string[] {
   if (body.authentication_method === "Passkey") return ["hwk", "user"];
+  if (body.authentication_method === "Password" && passwordWithTotp) return ["pwd", "otp"];
   // Company single sign-on: the company's identity provider answers for the second factor, and only through a named
   // connection. The vault then lets it into an organization only if that organization connected the same one.
   if (ssoFromExchange(body)) return ["sso"];

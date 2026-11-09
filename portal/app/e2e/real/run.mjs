@@ -86,7 +86,7 @@ async function seen(page, what, fn) {
 
 async function signIn(page, next = '/') {
   await page.goto(`${S.edge}/sign-in?return=${encodeURIComponent(next)}`);
-  await page.getByRole('link', { name: 'Sign in with a passkey' }).click();
+  await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
 }
 
 async function lookup(page, contact) {
@@ -272,7 +272,7 @@ test('an address in the return parameter can never send the browser to another s
   const { ctx, page } = await newPage();
   await asPerson('alice');
   await page.goto(`${S.edge}/sign-in?return=${encodeURIComponent('/\t/evil.example')}`);
-  await page.getByRole('link', { name: 'Sign in with a passkey' }).click();
+  await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
   await page.waitForURL((u) => u.origin === S.edge, { timeout: 20_000 });
   await page.waitForTimeout(1500);
   assert.equal(new URL(page.url()).origin, S.edge, 'still on the portal');

@@ -13,10 +13,11 @@ export function interpretLogout(status: number, body: { redirect?: unknown; mess
 // Sign-out changes state, so it is a POST (the edge checks the request's origin), never a followed link. It goes over fetch:
 // the page's form-action policy would block a form post that the edge redirects to the identity provider. A failed sign-out
 // is returned as text for the page to show; it is never treated as signed out.
-export async function postLogout(): Promise<string | null> {
+export async function postLogout(next?: 'passkey' | 'sso' | 'login', ret?: string): Promise<string | null> {
+  const qs = next ? `?next=${next}${ret ? `&return=${encodeURIComponent(ret)}` : ''}` : '';
   let outcome;
   try {
-    const r = await fetch('/auth/logout', { method: 'POST', credentials: 'include', cache: 'no-store', headers: { accept: 'application/json' } });
+    const r = await fetch(`/auth/logout${qs}`, { method: 'POST', credentials: 'include', cache: 'no-store', headers: { accept: 'application/json' } });
     outcome = interpretLogout(r.status, (await r.json().catch(() => null)) as never);
   } catch (e) {
     console.error('sign-out call failed', e);

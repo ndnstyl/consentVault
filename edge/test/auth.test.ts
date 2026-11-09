@@ -311,3 +311,52 @@ test("a failing session store at the end of sign-in is a styled 503 with no sess
   assert.equal(cookieNamed(out, SESSION_COOKIE), undefined);
   assert.match(out.headers.get("content-type")!, /html/);
 });
+
+const FACTOR_URL = "https://idp.example/user_management/users/user_1/auth_factors";
+async function signInPassword(flag: string | undefined, factors: () => Response) {
+  const m = mk({ exchange: () => new Response(JSON.stringify({ id_token: IDT, refresh_token: "rt_1", authentication_method: "Password" }), { status: 200 }) });
+  const base = m.deps.fetch;
+  m.deps.fetch = (async (url: string, init: RequestInit) => (String(url) === FACTOR_URL ? (m.calls.push({ url: String(url), init }), factors()) : base(url, init))) as unknown as typeof fetch;
+  if (flag !== undefined) m.env.PROVIDER_MFA_REQUIRED = flag;
+  m.env.AUTH_CLIENT_SECRET = "edge-test-api-key";
+  const s = await startLogin(m);
+  const r = (await handleAuth(req(`/auth/callback?code=x&state=${s.state}`, { headers: { cookie: `${LOGIN_COOKIE}=${s.state}` } }), m.env, m.deps))!;
+  return { m, r };
+}
+const totp = () => new Response(JSON.stringify({ data: [{ type: "totp", id: "f1" }] }), { status: 200 });
+
+test("a password with an authenticator-app factor counts as password plus code only when the operator declared multi-factor", async () => {
+  const on = await signInPassword("true", totp);
+  assert.equal(on.r.status, 302);
+  assert.deepEqual(claimsOf(on.m.vaultCalls[0].headers!["x-consentvault-edge-assertion"]).amr, ["pwd", "otp"]);
+  const call = on.m.calls.find((c) => c.url === FACTOR_URL)!;
+  assert.equal((call.init.headers as Record<string, string>).authorization, "Bearer edge-test-api-key");
+  for (const [flag, factors] of [["true", () => new Response(JSON.stringify({ data: [] }), { status: 200 })], [undefined, totp], ["false", totp]] as const) {
+    const o = await signInPassword(flag, factors);
+    assert.deepEqual(claimsOf(o.m.vaultCalls[0].headers!["x-consentvault-edge-assertion"]).amr, [], String(flag));
+    if (flag !== "true") assert.equal(o.m.calls.some((c) => c.url === FACTOR_URL), false, "no lookup unless declared");
+  }
+});
+
+test("a factor lookup that fails is a named refusal with no session and no vault call", async () => {
+  for (const f of [() => new Response("{}", { status: 500 }), () => { throw new Error("down"); }, () => new Response("{}", { status: 200 })]) {
+    const { m, r } = await signInPassword("true", f);
+    assert.equal(r.status, 502);
+    assert.equal(cookieNamed(r, SESSION_COOKIE), undefined);
+    assert.equal(m.vaultCalls.length, 0);
+    assert.ok((await r.text()).includes("second factor"));
+  }
+});
+
+test("logout with next goes through the provider's sign-out and returns to the sign-in start; with no session it goes straight there", async () => {
+  const m = mk();
+  const s = await startLogin(m);
+  const cb = (await handleAuth(req(`/auth/callback?code=x&state=${s.state}`, { headers: { cookie: `${LOGIN_COOKIE}=${s.state}` } }), m.env, m.deps))!;
+  const sid = cookieValueOf(cookieNamed(cb, SESSION_COOKIE)!);
+  const out = (await handleAuth(req("/auth/logout?next=passkey&return=%2Fbrands", { method: "POST", headers: { cookie: `${SESSION_COOKIE}=${sid}`, origin: "https://app.example.com" } }), m.env, m.deps))!;
+  const loc = new URL(out.headers.get("location")!);
+  assert.equal(loc.origin + loc.pathname, "https://idp.example/user_management/sessions/logout");
+  assert.equal(loc.searchParams.get("return_to"), "https://app.example.com/auth/login?method=passkey&return=%2Fbrands");
+  const bare = (await handleAuth(req("/auth/logout?next=login", { method: "POST", headers: { origin: "https://app.example.com" } }), m.env, m.deps))!;
+  assert.equal(bare.headers.get("location"), "/auth/login?return=%2F");
+});

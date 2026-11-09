@@ -38,17 +38,17 @@ export function SignIn() {
   const ret = safeReturn(search.get('return'));
   const expired = search.get('reason') === 'expired';
   const h = useHeadingFocus(expired);
-  const q = (m: string) => `/auth/login?method=${m}&return=${encodeURIComponent(ret)}`;
+  const { signInFresh } = useSession();
   return (
     <CenteredCard>
       {expired && <Banner kind="warning" title="Your session ended">Your session ended after 8 hours. Sign in again to continue. Anything you had not saved is kept on this device until you return.</Banner>}
       <h1 ref={h} tabIndex={-1}>Sign in to ConsentVault</h1>
-      <p>Use a passkey, or sign in with your company account if your organization has connected one.</p>
+      <p>Use a passkey, your WorkOS password plus a code from your authenticator app, or your company account if your organization has connected one.</p>
       <div className="btn-col">
-        <a className="btn btn-primary" href={q('passkey')}>{expired ? 'Sign in again with a passkey' : 'Sign in with a passkey'}</a>
-        <a className="btn btn-secondary" href={q('sso')}>Sign in with your company</a>
+        <button type="button" className="btn btn-primary" onClick={() => signInFresh('passkey')}>{expired ? 'Sign in again with a passkey' : 'Sign in with a passkey'}</button>
+        <button type="button" className="btn btn-secondary" onClick={() => signInFresh('sso')}>Sign in with your company</button>
       </div>
-      <p className="hint mt4">Hosted by WorkOS under the ConsentVault brand. No password is ever asked for or stored.</p>
+      <p className="hint mt4">Hosted by WorkOS under the ConsentVault brand. ConsentVault never sees or stores your password.</p>
       {FOOTER}
     </CenteredCard>
   );
@@ -60,7 +60,7 @@ type CbState =
   | { k: 'noorg'; email: string } | { k: 'factor' } | { k: 'error'; err: ApiError };
 
 export function Callback() {
-  const { api, selectOrg, signOut } = useSession();
+  const { api, selectOrg, signOut, signInFresh } = useSession();
   const { navigate, search } = useRouter();
   const [s, setS] = useState<CbState>({ k: 'loading' });
   const [nonce, setNonce] = useState(0);
@@ -90,7 +90,7 @@ export function Callback() {
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nonce]);
-  const again = <a className="btn btn-primary" href={`/auth/login?return=${encodeURIComponent(safeReturn(search.get('return')))}`}>Sign in again</a>;
+  const again = <button type="button" className="btn btn-primary" onClick={() => signInFresh()}>Sign in again</button>;
   return (
     <CenteredCard>
       {s.k === 'loading' && <div role="status" aria-busy="true"><h1 ref={h} tabIndex={-1}>Signing you in</h1><p>Checking your sign-in with WorkOS.</p></div>}
@@ -103,9 +103,9 @@ export function Callback() {
       )}
       {s.k === 'factor' && (
         <div role="alert"><h1 ref={h} tabIndex={-1}>Your sign-in needs a second factor</h1>
-          <p><b>Cause:</b> Your sign-in shows no passkey or second factor. ConsentVault requires a passkey or two-step verification on every sign-in.</p>
-          <p><b>Next:</b> Turn on two-step verification with your sign-in provider, or use a passkey, then sign in again.</p>
-          <div className="btn-row"><a className="btn btn-primary" href="/auth/login?method=passkey">Sign in with a passkey</a>{again}</div></div>
+          <p><b>Cause:</b> Your sign-in shows no passkey or second factor. ConsentVault accepts a passkey, or your WorkOS password plus a code from your authenticator app.</p>
+          <p><b>Next:</b> Use a passkey, or add an authenticator app to your WorkOS account and sign in with your password and its code.</p>
+          <div className="btn-row"><button type="button" className="btn btn-primary" onClick={() => signInFresh('passkey')}>Sign in with a passkey</button>{again}</div></div>
       )}
       {s.k === 'error' && (
         <div role="alert"><h1 ref={h} tabIndex={-1}>Sign-in did not finish</h1>

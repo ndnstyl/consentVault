@@ -36,6 +36,7 @@ export interface SessionCtx {
   refreshOrg: () => Promise<void>;
   selectOrg: (orgId: string) => Promise<ApiError | null>;
   signOut: () => void;
+  signInFresh: (method?: 'passkey' | 'sso') => void;
   signOutError: string | null;
   dismissSignOutError: () => void;
   signInAgain: () => void;
@@ -177,6 +178,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     try { sessionStorage.removeItem(STARTED_KEY); localStorage.removeItem(ORG_KEY); } catch { /* nothing to clear */ }
     void postLogout().then((e) => setSignOutError(e));
   }, []);
+  // Ends the provider's session first, so the provider shows its own screen instead of silently reusing the session.
+  const signInFresh = useCallback((method?: 'passkey' | 'sso') => {
+    setSignOutError(null);
+    try { sessionStorage.removeItem(STARTED_KEY); localStorage.removeItem(ORG_KEY); } catch { /* nothing to clear */ }
+    void postLogout(method ?? 'login', safeReturn(routerRef.current.search.get('return'))).then((e) => setSignOutError(e));
+  }, []);
   const dismissSignOutError = useCallback(() => setSignOutError(null), []);
   const signInAgain = useCallback(() => {
     const r = routerRef.current;
@@ -193,7 +200,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   const value: SessionCtx = {
     api, phase, error, user, memberships, org, orgId: org?.org_id ?? null, orgName: org?.name ?? '', role, status: org?.status ?? null,
-    elsewhere, sessionEnding, reload, refreshOrg, selectOrg, signOut, signOutError, dismissSignOutError, signInAgain,
+    elsewhere, sessionEnding, reload, refreshOrg, selectOrg, signOut, signInFresh, signOutError, dismissSignOutError, signInAgain,
     dismissEnding: () => setSessionEnding(false), dismissElsewhere: () => setElsewhere(null),
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

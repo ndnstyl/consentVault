@@ -25,6 +25,7 @@ export interface GatewayEnv {
   AUTH_CLIENT_SECRET?: string;
   PUBLIC_URL?: string;
   ASSERTION_KEY_JWK?: string;
+  PROVIDER_MFA_REQUIRED?: string;
   // One Durable Object per session owns the session record and is its only writer (see session-gate.ts); optional.
   SESSION_GATE?: GateNamespace;
 }

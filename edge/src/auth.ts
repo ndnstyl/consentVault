@@ -181,7 +181,9 @@ async function logoutInner(request: Request, env: AuthEnv, deps: AuthDeps, cooki
   // `?next=passkey|sso|login` (with an optional `return`) sends the person to a fresh sign-in once the provider session is over.
   const q = new URL(request.url).searchParams;
   const next = q.get("next");
-  const after = next ? `/auth/login?${next === "passkey" || next === "sso" ? `method=${next}&` : ""}return=${encodeURIComponent(safeReturn(q.get("return")))}` : "/sign-in";
+  // WorkOS honours only return addresses on its sign-out list, which holds /sign-in; the person then starts a fresh sign-in there.
+  void next;
+  const after = "/sign-in";
   if (!sid || !rec) return redirect(after, cookies, request);
   await store.revoke(sid, deps.now());
   const providerSid = rec.provider_sid ?? tokenClaims(rec.token)?.sid ?? null;

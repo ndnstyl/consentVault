@@ -359,5 +359,5 @@ test("logout with next goes through the provider's sign-out and returns to the s
   // WorkOS honours only return addresses on its sign-out list (it holds /sign-in), so the provider sign-out returns there.
   assert.equal(loc.searchParams.get("return_to"), "https://app.example.com/sign-in");
   const bare = (await handleAuth(req("/auth/logout?next=login", { method: "POST", headers: { origin: "https://app.example.com" } }), m.env, m.deps))!;
-  assert.equal(bare.headers.get("location"), "/sign-in");
+  assert.equal(bare.headers.get("location"), "/auth/login?return=%2F");
 });

@@ -82,8 +82,7 @@ def test_the_event_sits_at_the_earliest_copys_arrival_whichever_copy_projected_f
     bad.clear()
     door.rebuild(conn)   # the fault is gone: copy A is the request seen before; nothing changes
     assert _n(conn, "+12125550181") == 1
-    facts = conn.execute("SELECT f.post_id::text AS p, f.name FROM consentvault.raw_post_fact f"
-                         " WHERE f.name IN ('event_not_derived', 'event_derived')").fetchall()
+    facts = conn.execute("SELECT o.post_id::text AS p, o.outcome AS name FROM consentvault.projection_outcome o").fetchall()
     assert (a_post, "event_not_derived") in {(r["p"], r["name"]) for r in facts}
 
 

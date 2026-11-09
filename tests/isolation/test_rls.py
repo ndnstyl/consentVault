@@ -58,7 +58,9 @@ def test_every_tenant_table_forces_row_level_security_bound_to_the_verified_tena
                           # the request key beside the post that carries it (migration 0078)
                           "raw_post_request",
                           # the arrival a post stored again in its owner's organisation had the first time (migration 0079)
-                          "raw_post_original_arrival"}
+                          "raw_post_original_arrival",
+                          # the history of a person, one row per stored post (migration 0084)
+                          "post_history"}
         audit = {p["tablename"] for p in policies if p["policyname"].endswith("_read_scope")
                  and p["permissive"] == "RESTRICTIVE" and p["cmd"] == "SELECT" and "may_read_audit" in p["qual"]}
         assert audit == {"audit_event"}

@@ -10,16 +10,16 @@ STOP = {"event_type": "revoke", "channels": ["sms"], "purposes": ["marketing"], 
 
 def test_a_plain_error_while_recording_an_outcome_does_not_stop_the_run(conn, monkeypatch):
     calls = {"n": 0}
-    real = RawPostWriter.append_facts
+    real = RawPostWriter.record_outcome
 
     def broken(self, *a, **k):
         calls["n"] += 1
         raise KeyError("not a database error")
 
-    monkeypatch.setattr(RawPostWriter, "append_facts", broken)
+    monkeypatch.setattr(RawPostWriter, "record_outcome", broken)
     ev = door.submit(conn, intake="library", region="US", allowed_purposes=["marketing"], payload=dict(STOP, contact=A))
     assert ev is not None and calls["n"] >= 1   # the stop was written and the caller was answered
     assert conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE contact_norm=%s", (A,)).fetchone()["n"] == 1
-    monkeypatch.setattr(RawPostWriter, "append_facts", real)
+    monkeypatch.setattr(RawPostWriter, "record_outcome", real)
     door.rebuild(conn)
     assert conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE contact_norm=%s", (A,)).fetchone()["n"] == 1

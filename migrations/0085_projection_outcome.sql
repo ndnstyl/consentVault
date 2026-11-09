@@ -1,0 +1,27 @@
+-- Pure projection, migration step 3 (specs/capture-everything/pure-projection.md, "Migration 0083": renumbered 0085). The outcome
+-- of projecting a post leaves raw_post_fact (the old fold wrote event_derived / event_not_derived there, which made a fold write
+-- into the table the fold reads) and lands in its own append-only table. Projecting a post adds no fact row.
+CREATE TABLE consentvault.projection_outcome (
+    org_id            uuid NOT NULL DEFAULT consentvault.current_org() REFERENCES consentvault.organization (org_id),
+    outcome_id        bigint GENERATED ALWAYS AS IDENTITY,
+    post_id           uuid NOT NULL,
+    outcome           text NOT NULL CHECK (outcome IN ('event_derived', 'event_not_derived')),
+    detail            text,   -- the event id, or the plain reason no event was written
+    fold_code_version text NOT NULL,
+    recorded_at       timestamptz NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (org_id, outcome_id),
+    FOREIGN KEY (org_id, post_id) REFERENCES consentvault.raw_post (org_id, post_id)
+);
+CREATE INDEX projection_outcome_post_idx ON consentvault.projection_outcome (org_id, post_id);
+CREATE TRIGGER projection_outcome_append_only BEFORE UPDATE OR DELETE ON consentvault.projection_outcome
+    FOR EACH ROW EXECUTE FUNCTION consentvault.refuse_change();
+CREATE TRIGGER projection_outcome_no_truncate BEFORE TRUNCATE ON consentvault.projection_outcome
+    FOR EACH STATEMENT EXECUTE FUNCTION consentvault.refuse_change();
+
+ALTER TABLE consentvault.projection_outcome ENABLE ROW LEVEL SECURITY;
+ALTER TABLE consentvault.projection_outcome FORCE ROW LEVEL SECURITY;
+CREATE POLICY projection_outcome_tenant ON consentvault.projection_outcome USING (org_id = (SELECT consentvault.current_org()))
+    WITH CHECK (org_id = (SELECT consentvault.current_org()));
+
+GRANT SELECT ON consentvault.projection_outcome TO consentvault_app, consentvault_console, consentvault_integrity;
+GRANT INSERT (org_id, post_id, outcome, detail, fold_code_version) ON consentvault.projection_outcome TO consentvault_app;

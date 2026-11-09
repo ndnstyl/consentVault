@@ -447,6 +447,46 @@ def _is_uuid(value: Any) -> bool:
 
 def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, backend: Any, view: PostView, *,
                  field_map: Any = None, raise_errors: bool = False) -> Outcome:
+    """The old fold, then the new one beside it (shadow: the history is written, nothing is read from it)."""
+    outcome = _project_view_old(writer, conn, enter, backend, view, field_map=field_map, raise_errors=raise_errors)
+    if not (outcome.halts or outcome.retry) and outcome.reason not in (WAITING, WAITING_TO_RETRY, "no_writer_for_intake",
+                                                                        "awaiting_authentication"):
+        _shadow_history(writer, conn, enter, view, field_map)
+    return outcome
+
+
+def _shadow_history(writer, conn, enter, view: PostView, field_map: Any) -> bool:
+    """Project the post into ``post_history`` from the post and its facts alone. A failure here is logged by name and never stops the
+    old fold; the post stays without a history row, which the completeness check (gate 2) reports."""
+    from . import history
+
+    try:
+        with _ctx(conn, enter):
+            facts = writer.read_fold_facts(conn, uuid.UUID(view.org_id), view.post_id)
+        pure = replace(view, facts=facts)
+        reading = read_post(pure.body, field_map, CODE_VERSION, intake=pure.intake, context=_view_context(pure))
+        fields = reading.payload if reading.kind == "event" else history.raw_fields(view.body)
+        auth = auth_from_facts(facts)
+        with _ctx(conn, enter):
+            earliest = True
+            if auth.key:
+                earliest = conn.execute(
+                    "SELECT NOT EXISTS (SELECT 1 FROM consentvault.raw_post_request q JOIN consentvault.raw_post p"
+                    "   ON p.org_id = q.org_id AND p.post_id = q.post_id WHERE q.org_id = %s AND q.request_key = %s"
+                    "   AND p.seq < (SELECT seq FROM consentvault.raw_post WHERE org_id = %s AND post_id = %s)) AS first",
+                    (uuid.UUID(view.org_id), auth.key, uuid.UUID(view.org_id), uuid.UUID(view.post_id))).fetchone()["first"]
+        reason = decide(reading, replace(auth, org_id=view.org_id), lambda _k: not earliest)
+        facts_read = sorted([s, n] for (s, n) in facts)
+        return history.write_row(conn, lambda: _ctx(conn, enter), org_id=view.org_id, post_id=view.post_id, fields=fields,
+                                 reason=reason, earliest_copy=earliest, facts_read=facts_read,
+                                 intake_code_version=facts.get(("vault", "code_version")))
+    except Exception as exc:  # loud-failure-exempt: logged by name; the old fold's outcome stands and the missing row is reported by the completeness check
+        _log.error("the history row of a stored post could not be written; the next rebuild writes it", error=type(exc).__name__)
+    return False
+
+
+def _project_view_old(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, backend: Any, view: PostView, *,
+                      field_map: Any = None, raise_errors: bool = False) -> Outcome:
     """Append the event one post produces, if it produces one, and record the plain reason when it does not. Idempotent: a post
     already projected, or a request already counted, appends nothing. Never judges the sender. A caller in this process
     (``raise_errors``) is also given the error that names why no event was written, after the reason is stored."""
@@ -591,12 +631,10 @@ def _already(conn, enter, view: PostView) -> Outcome:
 
 
 def _record(writer, conn, enter, view: PostView, outcome: Outcome) -> Outcome:
-    """Leave the plain outcome beside the post as a fact (appended; the post is never touched)."""
+    """Leave the plain outcome beside the post in its own table (appended; the post and its facts are never touched)."""
     try:
-        fact = Fact("vault", "event_derived", outcome.event_id) if outcome.event_id is not None else \
-            Fact("vault", "event_not_derived", outcome.reason)
-        writer.append_facts(conn, enter, view.org_id, view.post_id, view.facts.get(("__key__", "data_key")),
-                            [fact, Fact("vault", "projection_code_version", CODE_VERSION)])
+        kind, detail = ("event_derived", outcome.event_id) if outcome.event_id is not None else ("event_not_derived", outcome.reason)
+        writer.record_outcome(conn, enter, view.org_id, view.post_id, kind, None if detail is None else str(detail), CODE_VERSION)
     except Exception as exc:  # loud-failure-exempt: logged by name; the post is not dropped and no other post of the organisation waits on this record
         _log.error("the outcome of a stored post could not be recorded beside it", error=type(exc).__name__)
     return outcome
@@ -665,6 +703,8 @@ def project_pending(writer: RawPostWriter, conn: psycopg.Connection, enter: Call
             "                   AND s.post_id = p.post_id AND s.role = 'trigger')"
             "   AND NOT EXISTS (SELECT 1 FROM consentvault.raw_post_fact f WHERE f.org_id = p.org_id"
             "                   AND f.post_id = p.post_id AND f.name = 'event_not_derived')"
+            "   AND NOT EXISTS (SELECT 1 FROM consentvault.projection_outcome o WHERE o.org_id = p.org_id"
+            "                   AND o.post_id = p.post_id AND o.outcome = 'event_not_derived')"
             " ORDER BY p.seq", (through_seq, through_seq, intakes and list(intakes), intakes and list(intakes))).fetchall()
     rows = [r for r in rows if _backend_for(backend, r["intake"]) is not None]
     out: list[Outcome] = []
@@ -742,7 +782,30 @@ def rebuild(conn: psycopg.Connection, *, backend: Any = None, writer: RawPostWri
     earliest post carrying its key."""
     writer = writer or RawPostWriter()
     backfill_request_keys(writer, conn, enter)
-    return project_pending(writer, conn, enter, backend or SingleBackend())
+    out = project_pending(writer, conn, enter, backend or SingleBackend())
+    history_catch_up(writer, conn, enter)
+    return out
+
+
+def history_catch_up(writer: RawPostWriter, conn: psycopg.Connection, enter: Callable | None, field_map: Any = None) -> int:
+    """Write the history row of every stored post that has none, from a context that can read its posts (the live path may run
+    under a capture token, which writes but cannot read back, and then leaves the row for this). Returns the rows written."""
+    with _ctx(conn, enter):
+        rows = conn.execute(
+            "SELECT p.org_id::text AS org, p.post_id::text AS post_id, p.seq, p.intake, p.method, p.path,"
+            " EXTRACT(EPOCH FROM p.received_at)::float8 AS arrived FROM consentvault.raw_post p"
+            " WHERE p.org_id = (SELECT consentvault.current_org()) AND p.kind = 'post'"
+            "   AND (EXISTS (SELECT 1 FROM consentvault.projection_outcome o WHERE o.org_id = p.org_id AND o.post_id = p.post_id)"
+            "        OR EXISTS (SELECT 1 FROM consentvault.event_source_post s WHERE s.org_id = p.org_id AND s.post_id = p.post_id))"
+            "   AND NOT EXISTS (SELECT 1 FROM consentvault.post_history h WHERE h.org_id = p.org_id AND h.post_id = p.post_id)"
+            " ORDER BY p.seq").fetchall()
+    n = 0
+    for r in rows:
+        with _ctx(conn, enter):
+            view = read_view(writer, conn, r["org"], r["post_id"], r["seq"], r["intake"], r["method"], r["path"], r["arrived"])
+        before = _shadow_history(writer, conn, enter, view, field_map)
+        n += 1 if before else 0
+    return n
 
 
 class TenantLedgerBackend:

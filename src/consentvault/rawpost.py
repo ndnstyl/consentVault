@@ -408,6 +408,31 @@ class RawPostWriter:
             out[(r["source"], r["name"])] = json.loads(blob.decode("utf-8"))
         return out
 
+    def record_outcome(self, conn: psycopg.Connection, enter: Callable | None, org_id: str, post_id: str, outcome: str,
+                       detail: str | None, code_version: str) -> None:
+        """Leave the plain outcome of projecting a post in its own append-only table (migration 0085); never among the post's facts."""
+        ctx = enter(conn) if enter is not None else conn.transaction()
+        with ctx:
+            conn.execute("INSERT INTO consentvault.projection_outcome (org_id, post_id, outcome, detail, fold_code_version)"
+                         " VALUES (%s, %s, %s, %s, %s)", (uuid.UUID(str(org_id)), uuid.UUID(str(post_id)), outcome, detail, code_version))
+
+    def read_fold_facts(self, conn: psycopg.Connection, org: uuid.UUID, post_id: uuid.UUID | str) -> dict[tuple[str, str], Any]:
+        """The facts the pure fold reads: per (source, name) the status-bearing row with the lowest ``fact_seq`` whose status is a
+        succeeded one. A row written before migration 0082 (no status) is never read here; the backfill writes its status-bearing copy."""
+        key = self.open_key(conn, org, post_id)
+        out: dict[tuple[str, str], Any] = {}
+        for r in conn.execute("SELECT source, name, value_ct FROM consentvault.raw_post_fact WHERE org_id = %s AND post_id = %s"
+                              " AND status IN ('value', 'not_found', 'not_applicable', 'unparseable') ORDER BY fact_seq",
+                              (org, uuid.UUID(str(post_id)))).fetchall():
+            if (r["source"], r["name"]) in out:
+                continue
+            blob = bytes(r["value_ct"])
+            if key is not None:
+                from .tenancy import crypto as tc
+                blob = tc.decrypt_field(key, org, str(post_id), COL_FACT, blob)
+            out[(r["source"], r["name"])] = json.loads(blob.decode("utf-8"))
+        return out
+
     def link_event(self, conn: psycopg.Connection, enter: Callable, stored: StoredPost, event_id: str | uuid.UUID,
                    role: str = "trigger") -> None:
         """Record which post an event came from (``event_source_post``): an event written because of this post cites it."""

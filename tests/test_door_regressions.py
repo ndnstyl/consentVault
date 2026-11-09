@@ -19,7 +19,7 @@ def _revokes(conn):
     return conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE event_type='revoke'").fetchone()["n"]
 
 def _facts(conn):
-    return [dict(r) for r in conn.execute("SELECT p.seq, f.name FROM consentvault.raw_post p JOIN consentvault.raw_post_fact f USING (org_id, post_id) WHERE f.name IN ('event_not_derived','event_derived') ORDER BY p.seq")]
+    return [dict(r) for r in conn.execute("SELECT p.seq, o.outcome AS name FROM consentvault.raw_post p JOIN consentvault.projection_outcome o USING (org_id, post_id) ORDER BY p.seq")]
 
 def test_a_store_failure_then_the_senders_retry_loses_the_stop(app_dsn, conn, monkeypatch):
     gen = _serve(_settings(app_dsn)); base = next(gen)
@@ -100,6 +100,6 @@ def test_every_projection_names_the_code_version_that_produced_it(app_dsn, conn)
     _call(base + "/v1/events", "POST", body, headers); base.settle()
     gen.close()
     door.rebuild(conn)
-    versions = [r["n"] for r in conn.execute("SELECT count(*) AS n FROM consentvault.raw_post_fact WHERE name = 'projection_code_version'")]
+    versions = [r["n"] for r in conn.execute("SELECT count(*) AS n FROM consentvault.projection_outcome WHERE fold_code_version = %s", (door.CODE_VERSION,))]
     assert versions == [1]
 

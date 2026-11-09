@@ -58,12 +58,19 @@ def test_a_failing_organisation_does_not_stop_the_ones_after_it(cloud, monkeypat
         api.rebuild_cloud(cloud.settings, [a.org.org_id, b.org.org_id])
 
 
+def _outcomes(t, row) -> set:
+    """The outcomes recorded for a stored post (migration 0085: they live in their own table, not among the post's facts)."""
+    with t.superuser() as su:
+        return {r["outcome"] for r in su.execute("SELECT outcome FROM consentvault.projection_outcome WHERE org_id = %s AND post_id = %s",
+                                                 (row["org_id"], row["post_id"])).fetchall()}
+
+
 def test_every_projected_post_has_its_outcome_recorded_beside_it(cloud):
     a = cloud.a
     _store_without_projecting(cloud, a, 3)
     api.rebuild_cloud(cloud.settings, [a.org.org_id])
     post = raw_posts(cloud.t, a.org.org_id)[-1]
-    assert "event_derived" in facts_of(cloud.t, post)
+    assert "event_derived" in _outcomes(cloud.t, post)
 
 
 def test_the_catch_up_before_a_new_post_records_the_outcome_of_the_earlier_post(cloud):
@@ -73,7 +80,7 @@ def test_the_catch_up_before_a_new_post_records_the_outcome_of_the_earlier_post(
                            headers={"X-ConsentVault-Request-Id": "r5"})
     assert status == 201
     first = raw_posts(cloud.t, a.org.org_id)[-2]
-    assert "event_derived" in facts_of(cloud.t, first)
+    assert "event_derived" in _outcomes(cloud.t, first)
 
 
 def _command_env(cloud, monkeypatch):

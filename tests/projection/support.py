@@ -356,20 +356,26 @@ ALLOWED_KEY_CALLS = {"unwrap_data_key", "fingerprint_secret", "display_key"}   #
 
 
 class RecordingKeyProvider:
-    """Wraps a key provider and records every call by name."""
+    """Wraps a key provider and records every call by name. The methods are explicit so the provider-interface check sees them."""
 
     def __init__(self, inner):
         self.inner, self.log = inner, []
 
-    def __getattr__(self, name):
-        target = getattr(self.inner, name)
-        if not callable(target):
-            return target
+    def wrap_data_key(self, org_id, data_key):
+        self.log.append("wrap_data_key")
+        return self.inner.wrap_data_key(org_id, data_key)
 
-        def call(*a, **k):
-            self.log.append(name)
-            return target(*a, **k)
-        return call
+    def unwrap_data_key(self, org_id, wrapped):
+        self.log.append("unwrap_data_key")
+        return self.inner.unwrap_data_key(org_id, wrapped)
+
+    def fingerprint_secret(self, org_id):
+        self.log.append("fingerprint_secret")
+        return self.inner.fingerprint_secret(org_id)
+
+    def display_key(self, org_id):
+        self.log.append("display_key")
+        return self.inner.display_key(org_id)
 
 
 class RecordingEvidence:

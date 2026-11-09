@@ -8,6 +8,7 @@ any database is made. A failure that does not start with "MISSING FEATURE" is a 
 import pytest
 
 from admin.conftest import vault  # noqa: F401  (the multi-mode vault the world is built on; reached only through getfixturevalue)
+from test_seal import _tsa_server, tsa  # noqa: F401  (the throwaway timestamp authority the seal tests use)
 from contract_world.confirm import build_stack, arm
 from contract_world.fixtures import Lazy
 from contract_world.world import World

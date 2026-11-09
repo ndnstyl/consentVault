@@ -8,7 +8,7 @@ import psycopg
 import pytest
 
 from .support import (EMAIL, PHONE, PHONE2, cut_grant, door_post, fact_chain, grant_fields, history_row, history_rows,
-                      in_threads, login_in_group, need_columns, need_cutover, need_function, need_sql, need_table, sql,
+                      in_threads, login_in_group, need_columns, need_cutover, need_function, need_py, need_sql, need_table, sql,
                       stop_fields, tenant_facts, write_fact)
 
 spec = pytest.mark.spec_item
@@ -90,12 +90,40 @@ def test_an_arrival_carrying_two_facts_of_one_name_stores_and_the_fold_reads_the
 
 
 @spec("0080.pre_0080_arrival_credential")
-def test_a_post_stored_before_the_migration_projects_using_the_credential_its_arrival_facts_hold(world, request):
+def test_a_post_stored_before_the_migration_projects_using_the_credential_its_arrival_facts_hold(request):
     need_cutover()
-    need_columns("raw_post_fact", "status")
-    _apply_in_two_stages(request)
-    pytest.fail("ADAPTER TO COMPLETE: build a tenant post under today's schema, apply the migrations above it, run the backfill, and "
-                "read that the history row's credential is the arrival fact's value", pytrace=False)
+    need_columns("raw_post_fact", "status", "label")
+    need_py("consentvault.history_backfill", "shadow_start")
+    from consentvault.rawpost import Fact
+    from .conftest import _loader_role
+    from .store_copy import finish_migrations, shadow, store_unprojected, today_store
+    _loader_role(request)
+    env, _ = today_store(request)
+    a = env.t.a
+    post = store_unprojected(env, a, "+13055550190", facts=tenant_facts())   # a credential fact in its arrival facts, no status yet
+    finish_migrations(request)
+    shadow(env, a)
+    row = sql(env.t, "SELECT standing FROM consentvault.post_history WHERE org_id = %s AND post_id = %s", (a.org_id, post))
+    assert row and row[0]["standing"] == "counts", "projected using the credential's value; had it been read as not found the standing would be no_credential"
+
+
+@spec("0080.pre_0080_no_legacy_event")
+def test_a_post_stored_before_the_migration_with_no_legacy_event_projects_after_the_backfill(request):
+    need_cutover()
+    need_columns("raw_post_fact", "status", "label")
+    need_py("consentvault.history_backfill", "shadow_start")
+    from .conftest import _loader_role
+    from .store_copy import finish_migrations, shadow, store_unprojected, today_store
+    _loader_role(request)
+    env, _ = today_store(request)
+    a = env.t.a
+    post = store_unprojected(env, a, "+13055550191")      # stored, never projected: no event, no outcome
+    assert sql(env.t, "SELECT 1 FROM consentvault.event_source_post WHERE post_id = %s", (post,)) == []
+    finish_migrations(request)
+    shadow(env, a)
+    assert sql(env.t, "SELECT 1 FROM consentvault.post_history WHERE org_id = %s AND post_id = %s", (a.org_id, post)), "it projects, it does not wait"
+    statuses = {r["status"] for r in sql(env.t, "SELECT status FROM consentvault.raw_post_fact WHERE org_id = %s AND post_id = %s AND label = 'backfill'", (a.org_id, post))}
+    assert "not_found" in statuses and "value" in statuses, "a backfill fact set: its own arrival facts as value, every other name not_found"
 
 
 @spec("0080.pre_0080_no_legacy_event")
@@ -246,10 +274,21 @@ def test_the_history_is_append_only_refuses_truncate_and_pins_the_hash_version(w
 
 
 @spec("0082.backfill_rows")
-def test_backfill_rows_copy_the_legacy_event_and_carry_their_own_versions(world, request):
+def test_backfill_rows_copy_the_legacy_event_and_carry_their_own_versions(request):
     need_cutover()
-    pytest.fail("ADAPTER TO COMPLETE: backfill one legacy event; its row has label backfill, received_at copied from the event, "
-                "fold_code_version backfill-1, rule_set_version as-written-hash-v1 or -v2, standing counts, and is exempt from the arrival trigger", pytrace=False)
+    need_py("consentvault.history_backfill", "shadow_start")
+    from .conftest import _loader_role
+    from .store_copy import finish_migrations, legacy_event, shadow, today_store
+    _loader_role(request)
+    env, _ = today_store(request)
+    a = env.t.a
+    legacy = legacy_event(env, a)
+    finish_migrations(request)
+    shadow(env, a)
+    (row,) = sql(env.t, "SELECT * FROM consentvault.post_history WHERE org_id = %s AND post_id = %s", (a.org_id, legacy["post_id"]))
+    assert row["label"] == "backfill" and row["received_at"] == legacy["received_at"]
+    assert row["fold_code_version"] == "backfill-1" and row["rule_set_version"] in ("as-written-hash-v1", "as-written-hash-v2")
+    assert row["standing"] == "counts" and str(row["backfill_of_event_id"]) == legacy["event_id"]
 
 
 # ---- 0083 ------------------------------------------------------------------------------------------------------------------

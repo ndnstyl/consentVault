@@ -90,7 +90,7 @@ def iso_grant_fields(org, contact_value: str) -> dict:
                 source_id=org.source_id, disclosure_sha256=org.disclosure, brand_ids=[org.brand_id], session_ref="s-q", contact_verification="none")
 
 
-def store_unprojected(env, org, contact_value: str) -> str:
+def store_unprojected(env, org, contact_value: str, facts=None) -> str:
     """A post stored by the intake and never projected: the old fold had not reached it when it stopped."""
     import json as _json
 
@@ -99,7 +99,7 @@ def store_unprojected(env, org, contact_value: str) -> str:
     from consentvault.tenancy.tokens import org_transaction
     body = _json.dumps(iso_grant_fields(org, contact_value), sort_keys=True, default=door._json_default).encode()
     req = RawRequest(intake="staff_marked", method="POST", path="/v1/events", query="", headers=(("content-type", "application/json"),),
-                     body=body, headers_presented_by="local-process", facts=tuple(door_good_facts()))
+                     body=body, headers_presented_by="local-process", facts=tuple(facts if facts is not None else door_good_facts()))
     with env.t.app() as c, org_transaction(c, env.t.token(org)):
         return str(door.store_raw(RawPostWriter(crypto=env.t.crypto), c, lambda cc: cc.transaction(), req).post_id)
 
@@ -139,3 +139,25 @@ def watermark_fact(env, org, post_id: str):
     with env.t.superuser() as su:
         row = su.execute("SELECT * FROM consentvault.raw_post WHERE org_id = %s AND post_id = %s", (org.org_id, post_id)).fetchone()
     return facts_of(env.t, row).get("effect_watermark")
+
+
+def legacy_event(env, org, n: int = 600) -> dict:
+    """An event the old fold wrote for a post (post, event and link all exist), before any of this spec's migrations."""
+    from consentvault import door
+    from consentvault.tenancy.tokens import org_transaction
+    with env.t.app() as c, org_transaction(c, env.t.token(org)):
+        out = door.record_observed(c, env.t.crypto, intake="staff_marked", enter=lambda cc: cc.transaction(), region="US",
+                                   fields=iso_grant_fields(org, contact(n)))
+    with env.t.superuser() as su:
+        row = su.execute("SELECT s.post_id, e.received_at FROM consentvault.event_source_post s JOIN consentvault.event e ON e.org_id = s.org_id"
+                         " AND e.event_id = s.event_id WHERE s.org_id = %s AND s.event_id = %s", (org.org_id, out.event_id)).fetchone()
+    return {"event_id": out.event_id, "post_id": str(row["post_id"]), "received_at": row["received_at"]}
+
+
+def shadow(env, org) -> dict:
+    """The shadow start for one organisation: backfill every pre-migration post's fact set and write the missing history rows."""
+    from consentvault.history_backfill import shadow_start
+    from consentvault.rawpost import RawPostWriter
+    from consentvault.tenancy.tokens import org_transaction
+    with env.t.app() as c, org_transaction(c, env.t.token(org)):
+        return shadow_start(RawPostWriter(crypto=env.t.crypto), c, lambda cc: cc.transaction())

@@ -66,16 +66,15 @@ def test_gate_2_every_stored_post_is_in_history_and_a_planted_missing_row_is_rep
 def test_gate_3_a_mixed_store_replays_to_the_same_history_per_label(request):
     need_cutover()
     need_function("load_stored_post")
-    need_py("consentvault.cutover", "backfill_history")
-    from consentvault.cutover import backfill_history
+    need_py("consentvault.history_backfill", "shadow_start")
     from .conftest import _loader_role
-    from .store_copy import finish_migrations, today_store
+    from .store_copy import finish_migrations, shadow, today_store
     _loader_role(request)
     env, _ = today_store(request)
     env.grant(env.t.a, "+13055550111")                  # a legacy event: it becomes a backfill row
     finish_migrations(request)
     v = env.t
-    backfill_history(v.operator, v.key, env.custody, v.crypto)
+    shadow(env, v.a)
     from consentvault import door
     from consentvault.tenancy.tokens import org_transaction
     from .store_copy import iso_grant_fields

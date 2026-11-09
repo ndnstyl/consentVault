@@ -299,6 +299,8 @@ class TenantBackend:
     """Writes the event of one post into the entered organisation's chain through the capture pipeline (evidence object, receipt,
     the tenant's own checks). The pipeline puts the link in the transaction that writes the event."""
 
+    takes_arrival = True
+
     def __init__(self, pipeline: Any, enter_for_credential: Callable[[str, Mapping[str, Any]], Callable],
                  settings: Mapping[str, Any] | None = None) -> None:
         self.pipeline, self.enter_for_credential, self.settings = pipeline, enter_for_credential, settings
@@ -341,7 +343,7 @@ class TenantBackend:
 
     def apply(self, conn, enter, fields: dict, link: Callable) -> str:
         result = self.pipeline.capture(conn, self.enter_for_credential(fields["org_id"], fields["credential"]), fields["req"], credential_id=fields["credential_id"],
-                                       link=link, settings=fields.get("settings"))
+                                       link=link, settings=fields.get("settings"), arrived_at=fields.get("arrived_at"))
         return result.event_id
 
 
@@ -480,7 +482,7 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
                 raise _FinalReading from exc
             if isinstance(fields, dict) and getattr(backend, "takes_arrival", False) and view.arrived_epoch is not None:
                 fields["arrived_at"] = datetime.fromtimestamp(view.arrived_epoch, tz=timezone.utc)
-                claimed = fields.get("captured_at")
+                claimed = fields.get("captured_at", getattr(fields.get("req"), "fields", {}).get("captured_at"))
                 if isinstance(claimed, datetime) and claimed.tzinfo is not None and claimed > fields["arrived_at"] + ledger.MAX_CAPTURE_SKEW:
                     skew = ClockSkewError("the claimed capture time is later than the post's arrival plus the skew bound")
                     _log.error("a stored post produces no event; the reason is stored beside it", error=reason_of(skew))

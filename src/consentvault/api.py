@@ -299,7 +299,7 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
                     view = door.PostView(stored.org_id, stored.post_id, stored.seq, raw.intake, bytes(raw.body),
                                          {**{(f.source, f.name): f.value for f in raw.facts},
                                           ("__key__", "data_key"): stored.data_key},
-                                         raw.method, raw.path)
+                                         raw.method, raw.path, stored.received_at.timestamp())
                     door.project_post(self.writer, conn, None, door.SingleBackend(self.settings.default_region, self.settings.purposes),
                                       view, catch_up=True)
         except Exception as exc:  # loud-failure-exempt: logged critical below; the answer is given and the post is stored

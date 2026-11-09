@@ -385,7 +385,8 @@ class CapturePipeline:
                 "purposes": sorted(org_purposes(conn)), "source_status": row["status"] if row else None}
 
     def capture(self, conn: psycopg.Connection, enter: Callable, req: CaptureRequest, *,
-                credential_id: uuid.UUID, link: Callable | None = None, settings: Mapping[str, Any] | None = None) -> CaptureResult:
+                credential_id: uuid.UUID, link: Callable | None = None, settings: Mapping[str, Any] | None = None,
+                arrived_at: datetime | None = None) -> CaptureResult:
         """``enter(conn)`` is a context manager that opens a transaction inside the caller's tenant and yields its
         org id (``tenancy.tokens.org_transaction`` bound to the caller's token). ``link(conn, event_id)``, when given, writes the
         link from the event to the post it came from inside the transaction that writes the event, so the two stand or fall
@@ -425,7 +426,7 @@ class CapturePipeline:
         try:
             with enter(conn):
                 ev = door.write_tenant_event(conn, self.crypto, payload=req.body, region=region,
-                                    allowed_purposes=None, display=req.display, **f)
+                                    allowed_purposes=None, display=req.display, arrived_at=arrived_at, **f)
                 if link is not None:
                     link(conn, ev.event_id)
                 conn.execute("UPDATE consentvault.evidence_object SET status = 'committed', event_id = %s,"

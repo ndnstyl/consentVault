@@ -22,7 +22,7 @@ def test_a_resource_error_in_the_reader_is_an_attempt_and_the_post_is_tried_agai
     monkeypatch.setattr(door.SingleBackend, "prepare", prepare)
     with pytest.raises(exc):
         door.submit(conn, intake="library", region="US", allowed_purposes=["marketing"], payload=STOP)
-    assert conn.execute("SELECT count(*) AS n FROM consentvault.raw_post_fact WHERE name='event_not_derived'").fetchone()["n"] == 0
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.projection_outcome WHERE outcome = 'event_not_derived'").fetchone()["n"] == 0
     assert conn.execute("SELECT count(*) AS n FROM consentvault.projection_attempt").fetchone()["n"] == 1
     door.rebuild(conn)
     assert conn.execute("SELECT count(*) AS n FROM consentvault.event WHERE contact_norm=%s", (STOP["contact"],)).fetchone()["n"] == 1

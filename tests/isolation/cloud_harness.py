@@ -224,9 +224,15 @@ def facts_of(t: Tenancy, row) -> dict:
     with t.superuser() as su:
         found = su.execute("SELECT name, value_ct FROM consentvault.raw_post_fact WHERE org_id = %s AND post_id = %s"
                            " ORDER BY recorded_at", (row["org_id"], row["post_id"])).fetchall()
-    return {f["name"]: json.loads(bytes(f["value_ct"]) if key is None else
-                                  tc.decrypt_field(key, row["org_id"], str(row["post_id"]), "raw_post_fact.value", bytes(f["value_ct"])))
-            for f in found}
+    out = {f["name"]: json.loads(bytes(f["value_ct"]) if key is None else
+                                 tc.decrypt_field(key, row["org_id"], str(row["post_id"]), "raw_post_fact.value", bytes(f["value_ct"])))
+           for f in found}
+    # the outcome of projecting the post lives in its own table (migration 0085); it is read back under its old fact name
+    with t.superuser() as su:
+        for o in su.execute("SELECT outcome, detail FROM consentvault.projection_outcome WHERE org_id = %s AND post_id = %s"
+                            " ORDER BY outcome_id", (row["org_id"], row["post_id"])).fetchall():
+            out[o["outcome"]] = o["detail"]
+    return out
 
 
 def attempts_of(t: Tenancy, row) -> list:

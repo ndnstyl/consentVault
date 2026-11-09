@@ -63,7 +63,7 @@ def test_an_error_leaves_the_post_unfinished_with_exit_2_named_and_the_next_run_
     summary = json.loads(capsys.readouterr().out.splitlines()[-1])
     post = conn.execute("SELECT post_id::text AS p FROM consentvault.raw_post").fetchone()["p"]
     assert summary["unfinished"] == 1 and summary["unfinished_posts"] == [{"post": post, "error": "LedgerError:SerializationFailure"}]
-    assert conn.execute("SELECT count(*) AS n FROM consentvault.raw_post_fact WHERE name = 'event_not_derived'").fetchone()["n"] == 0
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.projection_outcome WHERE outcome = 'event_not_derived'").fetchone()["n"] == 0
     attempt, = conn.execute("SELECT code_version, error_class, attempted_at FROM consentvault.projection_attempt").fetchall()
     assert (attempt["code_version"], attempt["error_class"]) == (door.CODE_VERSION, "LedgerError:SerializationFailure")
     assert attempt["attempted_at"] is not None

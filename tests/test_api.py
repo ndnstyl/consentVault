@@ -81,8 +81,12 @@ def _posts(conn):
 
 
 def _facts(conn, post_id):
-    return {r["name"]: json.loads(bytes(r["value_ct"])) for r in conn.execute(
+    out = {r["name"]: json.loads(bytes(r["value_ct"])) for r in conn.execute(
         "SELECT name, value_ct FROM consentvault.raw_post_fact WHERE post_id = %s", (post_id,)).fetchall()}
+    # the outcome of projecting the post lives in its own table (migration 0085); it is read back under its old fact name
+    for o in conn.execute("SELECT outcome, detail FROM consentvault.projection_outcome WHERE post_id = %s ORDER BY outcome_id", (post_id,)).fetchall():
+        out[o["outcome"]] = o["detail"]
+    return out
 
 
 def _attempts(conn, post_id):

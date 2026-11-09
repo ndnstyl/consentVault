@@ -254,13 +254,13 @@
    "defined_in": "0067_raw_post.sql"
   },
   {
-   "code": "db_check_received_at_tmstqg",
+   "code": "db_check_received_at_whgtqr",
    "function": "consentvault.check_received_at",
    "signature": "",
-   "line": 7,
+   "line": 14,
    "template": "consentvault received_at: the receipt time must be the vault server's own clock",
    "meaning": "consentvault received_at: the receipt time must be the vault server's own clock",
-   "defined_in": "0001_init.sql"
+   "defined_in": "0086_loading_at_stored_arrival.sql"
   },
   {
    "code": "db_check_release_ref_jxwtng",
@@ -272,31 +272,31 @@
    "defined_in": "0071_stop_lift.sql"
   },
   {
-   "code": "db_check_stop_lift_qrgzvq",
+   "code": "db_check_stop_lift_hgtzpv",
    "function": "consentvault.check_stop_lift",
    "signature": "",
-   "line": 13,
-   "template": "consentvault stop lift: the stop named is not a stop of this contact point",
-   "meaning": "consentvault stop lift: the stop named is not a stop of this contact point",
-   "defined_in": "0071_stop_lift.sql"
-  },
-  {
-   "code": "db_check_stop_lift_rgzzvt",
-   "function": "consentvault.check_stop_lift",
-   "signature": "",
-   "line": 28,
-   "template": "consentvault stop lift: the lifting post did not arrive after the stop",
-   "meaning": "consentvault stop lift: the lifting post did not arrive after the stop",
-   "defined_in": "0071_stop_lift.sql"
-  },
-  {
-   "code": "db_check_stop_lift_xkhskr",
-   "function": "consentvault.check_stop_lift",
-   "signature": "",
-   "line": 21,
+   "line": 30,
    "template": "consentvault stop lift: the lifting post is not matched to the same contact point",
    "meaning": "consentvault stop lift: the lifting post is not matched to the same contact point",
-   "defined_in": "0071_stop_lift.sql"
+   "defined_in": "0089_history_links_and_stop_lift.sql"
+  },
+  {
+   "code": "db_check_stop_lift_pzyvqv",
+   "function": "consentvault.check_stop_lift",
+   "signature": "",
+   "line": 22,
+   "template": "consentvault stop lift: the stop named is not a stop of this contact point",
+   "meaning": "consentvault stop lift: the stop named is not a stop of this contact point",
+   "defined_in": "0089_history_links_and_stop_lift.sql"
+  },
+  {
+   "code": "db_check_stop_lift_ynkqvx",
+   "function": "consentvault.check_stop_lift",
+   "signature": "",
+   "line": 37,
+   "template": "consentvault stop lift: the lifting post did not arrive after the stop",
+   "meaning": "consentvault stop lift: the lifting post did not arrive after the stop",
+   "defined_in": "0089_history_links_and_stop_lift.sql"
   },
   {
    "code": "db_check_verified_claim_pznnzr",
@@ -767,6 +767,15 @@
    "defined_in": "0024_manifest_guard.sql"
   },
   {
+   "code": "db_inline_code_block_jkwyhy",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault migration 0086 refused: the role consentvault_loader does not exist. As a superuser ",
+   "meaning": "consentvault migration 0086 refused: the role consentvault_loader does not exist. As a superuser",
+   "defined_in": "0086_loading_at_stored_arrival.sql"
+  },
+  {
    "code": "db_inline_code_block_jmpgmn",
    "function": "inline_code_block",
    "signature": "",
@@ -801,6 +810,15 @@
    "template": "consentvault tenancy: role consentvault_operator (NOLOGIN BYPASSRLS) is missing; a superuser must run: CREATE ROLE consentvault_operator NOLOGIN BYPASSRLS; GRANT consentvault_operator TO %",
    "meaning": "consentvault tenancy: role consentvault_operator (NOLOGIN BYPASSRLS) is missing; a superuser must run: CREATE ROLE consentvault_operator NOLOGIN BYPASSRLS; GRANT consentvault_operator TO %",
    "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_inline_code_block_mvqmzw",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 8,
+   "template": "consentvault migration 0086 refused: consentvault_loader must be neither a superuser nor BYPASSRLS",
+   "meaning": "consentvault migration 0086 refused: consentvault_loader must be neither a superuser nor BYPASSRLS",
+   "defined_in": "0086_loading_at_stored_arrival.sql"
   },
   {
    "code": "db_inline_code_block_nvvwgn",
@@ -1055,6 +1073,24 @@
    "defined_in": "0014_erasure_holds.sql"
   },
   {
+   "code": "db_load_lookup_rows_ssqhvw",
+   "function": "consentvault.load_lookup_rows",
+   "signature": "jsonb",
+   "line": 4,
+   "template": "consentvault load refused: this database carries no replay mark (it is a store of record)",
+   "meaning": "consentvault load refused: this database carries no replay mark (it is a store of record)",
+   "defined_in": "0086_loading_at_stored_arrival.sql"
+  },
+  {
+   "code": "db_load_stored_post_zznvny",
+   "function": "consentvault.load_stored_post",
+   "signature": "jsonb",
+   "line": 6,
+   "template": "consentvault load refused: this database carries no replay mark (it is a store of record)",
+   "meaning": "consentvault load refused: this database carries no replay mark (it is a store of record)",
+   "defined_in": "0086_loading_at_stored_arrival.sql"
+  },
+  {
    "code": "db_mark_seal_verified_szwjzj",
    "function": "consentvault.mark_seal_verified",
    "signature": "uuid",
@@ -1296,6 +1332,51 @@
    "template": "consentvault.policy is a record: DELETE refused",
    "meaning": "consentvault.policy is a record: DELETE refused",
    "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_post_history_chain_rzxkvm",
+   "function": "consentvault.post_history_chain",
+   "signature": "",
+   "line": 19,
+   "template": "consentvault.post_history: a projected row's arrival and place must equal the stored post",
+   "meaning": "consentvault.post_history: a projected row's arrival and place must equal the stored post",
+   "defined_in": "0084_post_history.sql"
+  },
+  {
+   "code": "db_post_history_chain_vwgyhn",
+   "function": "consentvault.post_history_chain",
+   "signature": "",
+   "line": 15,
+   "template": "consentvault.post_history: the cited post is not stored",
+   "meaning": "consentvault.post_history: the cited post is not stored",
+   "defined_in": "0084_post_history.sql"
+  },
+  {
+   "code": "db_post_history_seal_guard_tntkyz",
+   "function": "consentvault.post_history_seal_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.post_history_seal is append-only: DELETE refused",
+   "meaning": "consentvault.post_history_seal is append-only: DELETE refused",
+   "defined_in": "0087_history_seal_and_anchor.sql"
+  },
+  {
+   "code": "db_post_history_seal_guard_xxgrqs",
+   "function": "consentvault.post_history_seal_guard",
+   "signature": "",
+   "line": 8,
+   "template": "consentvault.post_history_seal is append-only: only verified_at may change",
+   "meaning": "consentvault.post_history_seal is append-only: only verified_at may change",
+   "defined_in": "0087_history_seal_and_anchor.sql"
+  },
+  {
+   "code": "db_raw_post_fact_chain_vqkrns",
+   "function": "consentvault.raw_post_fact_chain",
+   "signature": "",
+   "line": 19,
+   "template": "consentvault load: the stored fact's hash does not match its columns",
+   "meaning": "consentvault load: the stored fact's hash does not match its columns",
+   "defined_in": "0086_loading_at_stored_arrival.sql"
   },
   {
    "code": "db_raw_post_key_delete_guard_gkhrnq",
@@ -1746,6 +1827,15 @@
    "template": "consentvault trigger guard: re-pinning the guards refused for %: only a superuser may",
    "meaning": "consentvault trigger guard: re-pinning the guards refused for %: only a superuser may",
    "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_replay_target_guard_nqghhs",
+   "function": "consentvault.replay_target_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault replay mark refused: this database already holds a post (a store of record is never marked)",
+   "meaning": "consentvault replay mark refused: this database already holds a post (a store of record is never marked)",
+   "defined_in": "0086_loading_at_stored_arrival.sql"
   },
   {
    "code": "db_require_multi_tenant_mpgrky",

@@ -11,7 +11,9 @@ SENDER = "+13055550151"
 
 def _facts_by_post(world, o):
     rows = world.sql(o, "SELECT p.post_id, f.name FROM consentvault.raw_post p LEFT JOIN consentvault.raw_post_fact f"
-                        " ON f.org_id = p.org_id AND f.post_id = p.post_id WHERE p.org_id = %s AND p.intake = 'sms_reply'", (o.org_id,))
+                        " ON f.org_id = p.org_id AND f.post_id = p.post_id WHERE p.org_id = %s AND p.intake = 'sms_reply'"
+                        " UNION ALL SELECT p.post_id, x.outcome FROM consentvault.raw_post p JOIN consentvault.projection_outcome x"
+                        " ON x.org_id = p.org_id AND x.post_id = p.post_id WHERE p.org_id = %s AND p.intake = 'sms_reply'", (o.org_id, o.org_id))
     out: dict = {}
     for r in rows:
         out.setdefault(str(r["post_id"]), set()).add(r["name"])

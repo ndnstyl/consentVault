@@ -45,7 +45,7 @@ def test_a_stop_that_meets_any_error_once_lands_on_the_next_run(cls, conn, monke
     outcomes = door.rebuild(conn)
     assert [o.retry for o in outcomes] == [False]
     assert _events(conn, contact) == 1
-    assert conn.execute("SELECT count(*) AS n FROM consentvault.raw_post_fact WHERE name = 'event_not_derived'").fetchone()["n"] == 0
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.projection_outcome WHERE outcome = 'event_not_derived'").fetchone()["n"] == 0
     door.rebuild(conn)
     assert _events(conn, contact) == 1
 
@@ -60,7 +60,7 @@ def test_a_post_that_always_meets_an_error_stays_unfinished_on_every_run_and_is_
     for _ in range(3):
         outcomes = door.rebuild(conn)
         assert [(o.retry, o.reason) for o in outcomes] == [(True, "QueryCanceled")]
-    assert conn.execute("SELECT count(*) AS n FROM consentvault.raw_post_fact WHERE name = 'event_not_derived'").fetchone()["n"] == 0
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.projection_outcome WHERE outcome = 'event_not_derived'").fetchone()["n"] == 0
 
 
 def test_every_attempt_is_a_fact_on_the_post_with_the_code_version_the_error_class_and_the_databases_time(conn, monkeypatch):
@@ -94,7 +94,7 @@ def test_a_post_whose_bytes_cannot_be_read_is_unfinished_with_an_attempt_and_nev
     monkeypatch.setattr(door, "read_view", unreadable)
     assert [(o.retry, o.reason) for o in door.rebuild(conn)] == [(True, "OSError")]
     assert [r["error_class"] for r in conn.execute("SELECT error_class FROM consentvault.projection_attempt").fetchall()] == ["OSError"]
-    assert conn.execute("SELECT count(*) AS n FROM consentvault.raw_post_fact WHERE name = 'event_not_derived'").fetchone()["n"] == 0
+    assert conn.execute("SELECT count(*) AS n FROM consentvault.projection_outcome WHERE outcome = 'event_not_derived'").fetchone()["n"] == 0
     monkeypatch.setattr(door, "read_view", real_read)
     assert [o.retry for o in door.rebuild(conn)] == [False]
     assert _events(conn, "+12125550195") == 1

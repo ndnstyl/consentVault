@@ -52,5 +52,5 @@ def shadow_start(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
             " ORDER BY p.seq").fetchall()
     facts = sum(backfill_post(writer, conn, enter, r["org"], r["post_id"]) for r in posts)
     rows = door.history_catch_up(writer, conn, enter, every_post=True)
-    _log.info("shadow start finished", posts=len(posts), facts=facts, history_rows=rows)
+    _log.info("shadow start finished")
     return {"posts": len(posts), "facts": facts, "history_rows": rows}

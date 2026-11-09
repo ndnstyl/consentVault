@@ -134,9 +134,12 @@ def register_wording(ctx: Ctx, body: Any) -> dict:
         raise ApiError("disclosure_exists", "this exact wording is already registered", {"sha256": sha})
     supersedes = b.get("supersedes_sha256")
     if supersedes is not None:
-        if not isinstance(supersedes, str) or not _SHA.match(supersedes) or not ctx.conn.execute(
-                "SELECT 1 FROM consentvault.disclosure WHERE org_id = %s AND sha256 = %s", (org, supersedes)).fetchone():
+        prior = ctx.conn.execute("SELECT effective_from FROM consentvault.disclosure WHERE org_id = %s AND sha256 = %s",
+                                 (org, supersedes)).fetchone() if isinstance(supersedes, str) and _SHA.match(supersedes) else None
+        if prior is None:
             raise ApiError("not_found", "the wording this one supersedes is not registered in this organization")
+        if prior["effective_from"] is not None and effective_from <= prior["effective_from"]:
+            raise invalid(effective_from="must be later than the start date of the wording it replaces")
     locale = opt_text(b, "locale", max_len=16) or "en"
     try:
         ctx.conn.execute(

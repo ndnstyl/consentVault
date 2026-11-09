@@ -334,7 +334,7 @@ class TenantBackend:
         from .tenancy.pipeline import _check_disclosure
 
         with self.enter_for_credential(fields["org_id"], fields["credential"])(conn):
-            _check_disclosure(conn, dict(fields["req"].fields))
+            _check_disclosure(conn, dict(fields["req"].fields), fields.get("arrived_at"))
 
     def reroute(self, writer, conn, view: "PostView", owner, found: Mapping[tuple[str, str], Any]):
         """Store the post again in the organisation the site key belongs to, with everything known about it (the original facts,

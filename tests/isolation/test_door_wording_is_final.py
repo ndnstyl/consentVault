@@ -52,3 +52,24 @@ def test_a_brand_the_wording_does_not_name_is_a_final_reason_with_no_attempt(hw)
     final, attempts = _reason(hw, _last_post(hw, a))
     assert final == "brand_not_allowed" and not attempts
     assert not [o for o in outs if o.retry]
+
+
+def test_a_wording_registered_after_the_post_arrived_does_not_change_its_outcome(hw):
+    """Unknown wording is decided as of arrival (the wording's first_seen_at against the post's stored arrival): the same bytes
+    give the same answer before and after the organisation registers the wording."""
+    import hashlib
+    from consentvault import disclosure as disc
+    from consentvault.tenancy.tokens import org_transaction
+
+    a = hw.cloud.a
+    text = "Late wording %s may text you. Reply STOP to end." % uuid.uuid4()
+    sha = hashlib.sha256(text.encode()).hexdigest()
+    hw.cloud.grant(a, "+12125550451", disclosure_sha256=sha)
+    outs = []
+    api.rebuild_cloud(hw.cloud.settings, _orgs(hw), outcomes=outs)
+    final, attempts = _reason(hw, _last_post(hw, a))
+    assert final == "UnknownDisclosureError" and not attempts
+    with hw.t.app() as app, org_transaction(app, hw.t.token(a.org)):
+        disc.register(app, text, "late", "en", ["sms"], ["marketing"])
+    from .test_door_replay_after_brand_edit import _decisions
+    assert _decisions(hw, a.org.org_id)[str(_last_post(hw, a)["post_id"])] == "UnknownDisclosureError"

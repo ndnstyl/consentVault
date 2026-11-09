@@ -31,7 +31,7 @@ def _decisions(hw, org_id):
                 continue
             b = b.for_post(view.facts) if hasattr(b, "for_post") else b
             reading = door.read_post(view.body, None, door.CODE_VERSION, intake=view.intake, context=door._view_context(view))
-            auth = door.auth_from_facts(view.facts)
+            auth = __import__('dataclasses').replace(door.auth_from_facts(view.facts), org_id=str(org_id))
             reason = door.decide(reading, auth, set())
             if reason is None:
                 try:
@@ -39,6 +39,15 @@ def _decisions(hw, org_id):
                 except Exception as exc:
                     fields = door.reason_of(exc)
                 reason = fields if isinstance(fields, str) else None
+                if isinstance(fields, dict) and view.arrived_epoch is not None:   # as project_view does
+                    from datetime import datetime, timezone
+                    fields["arrived_at"] = datetime.fromtimestamp(view.arrived_epoch, tz=timezone.utc)
+                if reason is None and hasattr(b, "check_wording"):   # the wording checks are part of the replayed decision
+                    try:
+                        with api.connect(settings.dsn) as fresh:   # a connection that is idle, as the token entry needs
+                            b.check_wording(fresh, fields)
+                    except Exception as exc:
+                        reason = door.reason_of(exc)
             out[r["p"]] = reason
     return out
 

@@ -295,7 +295,9 @@ def check_source_from_settings(f: dict, stored: Mapping[str, Any]) -> None:
         raise ApiError("brand_not_allowed", "a brand does not belong to this organization and source")
 
 
-def _check_disclosure(conn: psycopg.Connection, f: dict) -> None:
+def _check_disclosure(conn: psycopg.Connection, f: dict, arrived_at: datetime | None = None) -> None:
+    """The wording checks, from the hash the post carries. Wording is immutable, but whether the organisation had registered it
+    changes over time, so a wording first seen after the post arrived does not count: the answer is the one at arrival."""
     if f["event_type"] != "grant":
         if f.get("disclosure_sha256"):
             raise ApiError("validation_failed", "only a grant carries wording", {"disclosure_sha256": "only on a grant"})
@@ -303,7 +305,7 @@ def _check_disclosure(conn: psycopg.Connection, f: dict) -> None:
     row = conn.execute("SELECT to_jsonb(d) AS d FROM consentvault.disclosure d"
                        " WHERE org_id = consentvault.current_org() AND sha256 = %s",
                        (str(f["disclosure_sha256"]),)).fetchone()
-    if row is None:
+    if row is None or (arrived_at is not None and datetime.fromisoformat(str(row["d"]["first_seen_at"])) > arrived_at):
         raise ApiError("UnknownDisclosureError", "this organization has not registered that wording")
     named = {str(b) for b in (row["d"].get("brand_ids") or [])}
     if named and any(b not in named for b in f.get("brand_ids") or []):
@@ -409,7 +411,7 @@ class CapturePipeline:
                 kind, norm = normalize(f["contact"], region)
                 check_channel_purpose(f["channels"], f["purposes"], allow_star=f["event_type"] != "grant", stored=settings)
                 check_source_from_settings(f, settings)
-                _check_disclosure(conn, f)
+                _check_disclosure(conn, f, arrived_at)
                 fp, data_key = contact_key(conn, self.crypto, org, kind, norm, create=True)
                 retain = retention_until(conn, self.default_retain_years,
                                         self.clock() if self.clock else dbclock.now(conn))

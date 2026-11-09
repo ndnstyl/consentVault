@@ -170,3 +170,18 @@ def test_gap_shadow_start_gives_a_legacy_event_with_no_post_a_legacy_event_post_
     with world.vault.appconn() as c, org_transaction(c, world.admin_token(a.org_id)):
         again = history_backfill.shadow_start(writer, c, lambda conn: contextlib.nullcontext())
     assert again["legacy_event_posts"] == 0 and again["history_rows"] == 0, "running it again adds nothing"
+
+
+def test_item10_a_broken_history_link_fails_ledger_verify_chain(world):
+    from consentvault import ledger
+    o = world.a
+    door_post(world, o, grant_fields(o, PHONE))
+    door_post(world, o, grant_fields(o, "+13055550143"))
+    with world.vault.superuser() as su:
+        assert ledger.verify_chain(su) == []
+    with world.vault.superuser() as su, su.transaction():
+        su.execute("SET LOCAL session_replication_role = replica")
+        su.execute("UPDATE consentvault.post_history SET prev_hash = repeat('0', 64) WHERE org_id = %s AND history_seq ="
+                   " (SELECT max(history_seq) FROM consentvault.post_history WHERE org_id = %s)", (o.org_id, o.org_id))
+    with world.vault.superuser() as su:
+        assert any(b.reason.startswith("history:") for b in ledger.verify_chain(su))

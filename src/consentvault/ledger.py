@@ -678,4 +678,7 @@ def verify_chain(conn: psycopg.Connection, *, sink_file: str | None = None, cryp
         sink = [{**a, "org_id": uuid.UUID(str(a["org_id"])) if a.get("org_id") else home}
                 for a in read_file_sink(sink_file)]
         breaks += _anchor_breaks(seen, sink, "sink")
+    has_history = conn.execute("SELECT to_regprocedure('consentvault.history_chain_breaks()') IS NOT NULL AS t").fetchone()["t"]   # absent on a store not yet migrated to the history table
+    for h in (conn.execute("SELECT org_id, history_seq, reason FROM consentvault.history_chain_breaks()").fetchall() if has_history else ()):
+        breaks.append(Break(h["history_seq"], str(h["org_id"]), "history: " + h["reason"]))   # the history chain is verified with the frozen one (item 10)
     return breaks

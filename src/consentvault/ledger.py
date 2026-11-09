@@ -310,6 +310,7 @@ def record_event(
     release_cause: str | None = None,
     allowed_purposes: Collection[str] | None = None,
     contact_verification: str = "none",
+    arrived_at: datetime | None = None,
 ) -> Event:
     """Append one event to the chain. The only writer of consentvault.event."""
     chans, purps, kind, norm = _validate(
@@ -353,7 +354,7 @@ def record_event(
         with conn.transaction():
             conn.execute(_LOCK_SQL)
             received = conn.execute("SELECT clock_timestamp() AS now").fetchone()["now"]
-            if captured_at is not None and captured_at > received + MAX_CAPTURE_SKEW:
+            if captured_at is not None and captured_at > (arrived_at or received) + MAX_CAPTURE_SKEW:
                 raise ClockSkewError(
                     f"captured_at {captured_at.isoformat()} is later than the vault's receipt time plus "
                     f"{int(MAX_CAPTURE_SKEW.total_seconds() // 60)} minutes; the vault orders events by arrival, "
@@ -410,6 +411,7 @@ def record_tenant_event(
     contact_verification: str = "none",
     source_system_id: str | uuid.UUID | None = None,
     display: dict | None = None,
+    arrived_at: datetime | None = None,
 ) -> Event:
     """Append one hash-version-2 event to the current organisation's chain.
 
@@ -458,7 +460,7 @@ def record_tenant_event(
                 raise TenantRequiredError("no tenant entered: open the write inside tenancy.tokens.org_transaction")
             conn.execute(_LOCK_SQL)
             received = conn.execute("SELECT clock_timestamp() AS now").fetchone()["now"]
-            if captured_at is not None and captured_at > received + MAX_CAPTURE_SKEW:
+            if captured_at is not None and captured_at > (arrived_at or received) + MAX_CAPTURE_SKEW:
                 raise ClockSkewError(
                     f"captured_at {captured_at.isoformat()} is later than the vault's receipt time plus "
                     f"{int(MAX_CAPTURE_SKEW.total_seconds() // 60)} minutes; the vault orders events by arrival, "

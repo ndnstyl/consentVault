@@ -28,7 +28,7 @@ import re
 import urllib.parse
 import uuid
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
 import psycopg
@@ -232,6 +232,8 @@ def _list(value: Any) -> list[str]:
 class SingleBackend:
     """Writes the event of one post into the single-company chain, with the capture rules: a grant needs the box checked, a
     channel, a purpose and the wording hash; a verified grant needs the integrator's key; a stop always records."""
+
+    takes_arrival = True   # the ledger compares the claimed capture time against the post's stored arrival, not the clock at projection
 
     def __init__(self, region: str | None = None, allowed_purposes=None) -> None:
         self.region, self.allowed_purposes = region, allowed_purposes
@@ -470,6 +472,8 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
                 _log.error("a stored post produces no event; the reason is stored beside it", error=reason_of(exc))
                 _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason_of(exc)))
                 raise _FinalReading from exc
+            if isinstance(fields, dict) and getattr(backend, "takes_arrival", False) and view.arrived_epoch is not None:
+                fields["arrived_at"] = datetime.fromtimestamp(view.arrived_epoch, tz=timezone.utc)
             if reason is not None or isinstance(fields, str):
                 outcome = Outcome(view.post_id, reason=reason or fields)
             else:
@@ -715,6 +719,8 @@ class TenantLedgerBackend:
     """Writes the event of one post into the entered organisation's chain with the ledger's tenant append (no capture pipeline:
     the stops and the system events whose evidence is the post itself). ``defaults`` fill fields the post does not carry."""
 
+    takes_arrival = True
+
     def __init__(self, crypto: Any, *, defaults: Mapping[str, Any] | None = None, region: str | None = None,
                  allowed_purposes=None, enter_for_org: Callable[[str], Callable] | None = None) -> None:
         self.crypto, self.defaults, self.region, self.allowed_purposes = crypto, dict(defaults or {}), region, allowed_purposes
@@ -814,7 +820,7 @@ def project_text_reply(writer: RawPostWriter, conn: psycopg.Connection, enter: C
         return Outcome(stored.post_id, event_id=row["event_id"])
     facts = {("vault", "request_signature"): "valid", ("vault", "replay"): "fresh", ("vault", "authenticated_by"): "provider",
              ("vault", "request_key"): request_key, ("__key__", "data_key"): stored.data_key}
-    view = PostView(stored.org_id, stored.post_id, stored.seq, "sms_reply", body, facts)
+    view = PostView(stored.org_id, stored.post_id, stored.seq, "sms_reply", body, facts, arrived_epoch=stored.received_at.timestamp())
     return project_post(writer, conn, enter, TenantLedgerBackend(crypto, defaults=defaults, region=region), view,
                         raise_errors=True)
 
@@ -836,7 +842,8 @@ def record_observed(conn: psycopg.Connection, crypto: Any, *, intake: str, field
                      body=body, headers_presented_by="local-process", facts=tuple(facts))
     stored = store_raw(writer, conn, enter, req)
     view = PostView(stored.org_id, stored.post_id, stored.seq, intake, body,
-                    {**{("vault", f.name): f.value for f in facts}, ("__key__", "data_key"): stored.data_key})
+                    {**{("vault", f.name): f.value for f in facts}, ("__key__", "data_key"): stored.data_key},
+                    arrived_epoch=stored.received_at.timestamp())
     backend = TenantLedgerBackend(crypto, region=region, allowed_purposes=allowed_purposes)
     outcome = project_post(writer, conn, enter, backend, view, raise_errors=True)
     return outcome
@@ -868,7 +875,7 @@ def submit(conn: psycopg.Connection, *, intake: str, payload: Mapping[str, Any],
     stored = store_raw(writer, conn, None, req)
     all_facts = {("vault", f.name): f.value for f in facts}
     all_facts[("__key__", "data_key")] = stored.data_key
-    view = PostView(stored.org_id, stored.post_id, stored.seq, intake, body, all_facts)
+    view = PostView(stored.org_id, stored.post_id, stored.seq, intake, body, all_facts, arrived_epoch=stored.received_at.timestamp())
     outcome = project_post(writer, conn, None, SingleBackend(region, allowed_purposes), view, raise_errors=True, catch_up=True)
     if outcome.event_id is None and outcome.reason == WAITING:
         return StoredWaiting(stored.post_id, stored.seq)

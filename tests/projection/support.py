@@ -190,7 +190,7 @@ def cut_stop(world, org, contact: str = PHONE, **kw) -> str:
 
 # ---- fingerprints (gate 3 and the proof of purity) -----------------------------------------------------------------------
 
-CHAIN_COLUMNS = {"history_seq", "prev_hash", "row_hash", "contact_ct", "display_ct", "nonce", "contact_nonce", "display_nonce"}
+CHAIN_COLUMNS = {"history_seq", "prev_hash", "row_hash", "recorded_at", "contact_ct", "display_ct", "nonce", "contact_nonce", "display_nonce"}
 
 
 def history_fingerprint(rows: list[dict], *, label: str | None = None) -> str:

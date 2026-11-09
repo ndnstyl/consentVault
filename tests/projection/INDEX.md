@@ -78,9 +78,9 @@ Tests: 173. Failing as a missing feature: 7. Passing or failing on a built featu
 | item 33 | `test_33_the_anchor_command_reads_history_head` in `test_readers_python.py` | ADAPTER TO COMPLETE: cmd_anchor.anchor_tenants anchors history_head() for an organisation whose only rows are history |
 | item 34 | `test_34_the_seal_command_seals_a_post_cutover_row` in `test_readers_python.py` | ADAPTER TO COMPLETE: cmd_seal reads unsealed_history and seals the row |
 | item 35 | `test_35_integrity_reports_an_unsealed_post_cutover_row_and_its_head_equals_the_history_head` in `test_readers_python.py` | E   AssertionError: the frozen event table got a row after cutover |
-| item 36 | `test_36_the_bundles_head_equals_the_history_head_and_the_derived_view_is_labelled` in `test_readers_python.py` | E   assert ('ad25ba90b5b414beb8b553b59d784bc25f545b9810824c070df021cf820fa15d' in '{"bundle_version": 2, "multi_tenant": true, "org_id": "67 |
+| item 36 | `test_36_the_bundles_head_equals_the_history_head_and_the_derived_view_is_labelled` in `test_readers_python.py` | E   assert ('faee3584d8a86754fd3e781fa12f57c712fdd3aa54bb6c6f76111dca3f2cbeb0' in '{"bundle_version": 2, "multi_tenant": true, "org_id": "40 |
 | item 37 | `test_37_after_cutover_the_old_append_path_is_refused_by_name` in `test_readers_sql_and_history.py` | E   Failed: DID NOT RAISE ConsentVaultError |
-| item 38 | `test_38_the_proof_of_a_post_cutover_stop_shows_it_under_the_derived_label` in `test_readers_python.py` |      +        where <function dumps at 0x10a56b600> = json.dumps |
+| item 38 | `test_38_the_proof_of_a_post_cutover_stop_shows_it_under_the_derived_label` in `test_readers_python.py` |      +        where <function dumps at 0x106650680> = json.dumps |
 | item 39 | `test_a_valid_grant_a_counted_stop_then_a_forged_grant_the_sender_skips_and_the_forged_row_does_not_count` in `test_readers_sql_and_history.py` | E   AssertionError: the frozen event table got a row after cutover |
 | item 39 | `test_a_pending_intent_skips_with_the_old_reason_ends_terminal_and_a_rerun_after_clearing_sends_nothing[stop_on_record]` in `test_sender_skips.py` | E   AssertionError: the frozen event table got a row after cutover |
 | item 40 | `test_40_history_head_returns_the_newest_history_row` in `test_readers_sql_and_history.py` | E   AssertionError: the frozen event table got a row after cutover |
@@ -97,25 +97,25 @@ Tests: 173. Failing as a missing feature: 7. Passing or failing on a built featu
 | gate3 | `test_gate_3_a_mixed_store_replays_to_the_same_history_per_label` in `test_gates.py` |       Use -v to get more diff |
 | gate4 | `test_gate_4_the_retrieval_log_names_who_and_what_recomputes_to_the_payload_and_a_failed_log_returns_nothing` in `test_gates.py` | PASSES TODAY (not a failing test) |
 | gate5 | `test_gate_5_every_row_carries_exactly_the_versions_the_running_code_declares` in `test_gates.py` | E   AssertionError: the frozen event table got a row after cutover |
-| gate6 | `test_gate_6_a_year_of_clock_and_different_lookups_change_no_row_and_the_forged_post_is_recorded_not_refused` in `test_gates.py` |       Use -v to get more diff) |
+| gate6 | `test_gate_6_a_year_of_clock_and_different_lookups_change_no_row_and_the_forged_post_is_recorded_not_refused` in `test_gates.py` | PASSES TODAY (not a failing test) |
 | gate7 | `test_gate_7_the_chain_verifies_from_the_newest_anchor_after_an_erasure_and_a_tamper_is_caught` in `test_gates.py` | E   AssertionError: the frozen event table got a row after cutover |
 | gate8 | `test_gate_8_completeness_names_the_source_of_every_element_and_a_missing_one_is_a_fact_not_a_refusal` in `test_gates.py` | PASSES TODAY (not a failing test) |
-| gate9 | `test_gate_9_matching_is_exact_on_the_normalised_contact_under_a_versioned_rule` in `test_gates.py` | E   KeyError: 'f052cb49-27d1-44a2-85be-f1a69b0e86b3' |
+| gate9 | `test_gate_9_matching_is_exact_on_the_normalised_contact_under_a_versioned_rule` in `test_gates.py` | E   KeyError: '08171756-ceb2-4c9d-8830-dadb1f20aafb' |
 
 ## Finding C1: refused posts derive no intent
 
 | Spec item | Test id | Failure today |
 |---|---|---|
-| C1.grant_without_source | `test_a_grant_with_no_source_derives_pushes_as_today_and_no_confirmation` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x10c19e990>, Org(name='acme', org_id='5a782e36-aea7-464b-89c5-d4aece7d3a |
-| C1.invalid_signature | `test_a_forged_signature_derives_no_intent` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x10c14a480>, Org(name='acme', org_id='00934b67-20c4-4853-a90a-3e8cd7edf2 |
-| C1.lookup_failed | `test_a_post_whose_site_key_lookup_failed_waits_for_the_lookup_and_then_projects` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x10bf1fe90>, Org(name='acme', org_id='be310f1c-9d9c-4734-a7e1-c634863a73 |
-| C1.no_credential | `test_a_tenant_post_with_no_credential_derives_no_intent` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x10cfb8c80>, Org(name='acme', org_id='6d809919-5933-466b-bf29-0664bbd135 |
+| C1.grant_without_source | `test_a_grant_with_no_source_derives_pushes_as_today_and_no_confirmation` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x1082ef470>, Org(name='acme', org_id='87747852-14f1-4cef-92dd-b25d0f86e5 |
+| C1.invalid_signature | `test_a_forged_signature_derives_no_intent` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x1082ce450>, Org(name='acme', org_id='c30acdf9-1e11-4185-be67-78f4408f16 |
+| C1.lookup_failed | `test_a_post_whose_site_key_lookup_failed_waits_for_the_lookup_and_then_projects` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x1082cc8c0>, Org(name='acme', org_id='7c32fe35-a48a-46ad-9dea-7432e32167 |
+| C1.no_credential | `test_a_tenant_post_with_no_credential_derives_no_intent` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x1082cf6b0>, Org(name='acme', org_id='962e80a0-dcbd-4ffc-8198-da735be1a8 |
 | C1.second_copy | `test_a_second_copy_of_a_counted_request_derives_no_intent` in `test_intents_c1.py` |     assert (True is True and 0) |
-| C1.soft_stop_positive | `test_a_stop_with_a_stale_timestamp_still_counts_and_derives_its_pushes` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x10c19fec0>, Org(name='acme', org_id='425ce866-3c15-4058-8e51-a5b1a4fc77 |
-| C1.stale_grant | `test_a_grant_with_a_stale_timestamp_derives_no_intent` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x10c1cc4d0>, Org(name='acme', org_id='59289b1d-05aa-4b2b-857a-23d7cd8c98 |
-| C1.text | `test_a_text_or_an_unreadable_body_derives_no_intent[text]` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x10cf15d90>, Org(name='acme', org_id='f4c3175d-920d-4649-a6fc-8453bdbc03 |
-| C1.unreadable | `test_a_text_or_an_unreadable_body_derives_no_intent[unreadable]` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x10cfb96a0>, Org(name='acme', org_id='85ac0b6a-0366-4af3-ab4d-73784ea607 |
-| C1.unsigned | `test_an_unsigned_post_derives_no_intent` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x10c14b890>, Org(name='acme', org_id='6a7e1d09-1bd5-4192-8b42-265497e2ad |
+| C1.soft_stop_positive | `test_a_stop_with_a_stale_timestamp_still_counts_and_derives_its_pushes` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x1082ef440>, Org(name='acme', org_id='7285e646-441a-48ef-a810-7978b4b701 |
+| C1.stale_grant | `test_a_grant_with_a_stale_timestamp_derives_no_intent` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x1083140b0>, Org(name='acme', org_id='e120dd09-9a16-430c-90b6-f49cd4bea6 |
+| C1.text | `test_a_text_or_an_unreadable_body_derives_no_intent[text]` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x1082bd7c0>, Org(name='acme', org_id='d598a04f-789a-4509-81fc-24de6bd05a |
+| C1.unreadable | `test_a_text_or_an_unreadable_body_derives_no_intent[unreadable]` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x1082bf350>, Org(name='acme', org_id='f45c928a-eb07-4bd1-8d4d-993296fe32 |
+| C1.unsigned | `test_an_unsigned_post_derives_no_intent` in `test_intents_c1.py` |      +  where [] = intents(<contract_world.fixtures.Lazy object at 0x1082bdb80>, Org(name='acme', org_id='2b33421d-8aee-4447-a4bd-19ecd7d7b5 |
 
 ## Sender skips (finding C2), one per old reason
 
@@ -136,7 +136,7 @@ Tests: 173. Failing as a missing feature: 7. Passing or failing on a built featu
 | 0080.two_arrival_facts_of_one_name | `test_an_arrival_carrying_two_facts_of_one_name_stores_and_the_fold_reads_the_lowest_order` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0081.replay_stores_no_new_post | `test_replay_from_empty_of_a_rerouted_post_stores_no_new_post_and_places_the_copy_at_its_original_arrival` in `test_migrations_facts_and_history.py` | ADAPTER TO COMPLETE: load a store holding one rerouted post onto a fresh database, project, and expect zero new posts, one history row per s |
 | 0081.second_reroute_fails | `test_a_second_reroute_of_one_original_fails_on_the_primary_key` in `test_migrations_facts_and_history.py` | ADAPTER TO COMPLETE: store an original in the home organisation, reroute it once through the retry lane, then insert a second reroute row fo |
-| 0081.table | `test_0081_makes_the_append_only_reroute_table_with_a_key_on_the_original` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
+| 0081.table | `test_0081_makes_the_append_only_reroute_table_with_a_key_on_the_original` in `test_migrations_facts_and_history.py` | E   consentvault.api.StartupRefusedError: the multi-tenant API will not serve this database: its security surface differs from the security  |
 | 0082.append_only_no_truncate_hash_version | `test_the_history_is_append_only_refuses_truncate_and_pins_the_hash_version` in `test_migrations_facts_and_history.py` | E   AssertionError: the frozen event table got a row after cutover |
 | 0082.as_sent.capture_time_a_year_ahead | `test_a_post_that_today_is_refused_projects_to_one_row_holding_each_value_as_sent[capture_time_a_year_ahead]` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0082.as_sent.channel_fax | `test_a_post_that_today_is_refused_projects_to_one_row_holding_each_value_as_sent[channel_fax]` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
@@ -156,7 +156,7 @@ Tests: 173. Failing as a missing feature: 7. Passing or failing on a built featu
 | 0083.no_fact_row | `test_projecting_a_post_adds_no_row_to_the_fact_table` in `test_migrations_facts_and_history.py` | PASSES TODAY (not a failing test) |
 | 0084.fresh_database_holds_stored_arrival | `test_a_fresh_database_loaded_from_the_store_holds_every_post_at_its_stored_arrival` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | 0084.guard_function_owned_by_operator | `test_the_mark_guard_is_a_definer_function_owned_by_the_bypass_role_and_the_received_check_is_not_a_definer` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
-| 0084.loader_recomputes_fact_chain | `test_in_loader_mode_a_stored_fact_whose_computed_columns_differ_is_refused` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
+| 0084.loader_recomputes_fact_chain | `test_in_loader_mode_a_stored_fact_whose_computed_columns_differ_is_refused` in `test_loader_purity_erasure.py` | E   consentvault.api.StartupRefusedError: the multi-tenant API will not serve this database: its security surface differs from the security  |
 | 0084.loading_post_setting_refused_for_app | `test_a_session_that_sets_the_loading_setting_cannot_insert_a_post_in_the_past_as_the_app_role` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | 0084.multi_mode_mark_refused | `test_in_multi_mode_with_a_post_in_a_non_home_organisation_the_mark_is_refused` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | 0084.ordinary_intake_succeeds_unmarked_and_marked | `test_an_ordinary_intake_insert_as_the_app_role_succeeds_on_an_unmarked_and_on_a_marked_database` in `test_loader_purity_erasure.py` | ADAPTER TO COMPLETE: on an empty marked database an ordinary intake insert as consentvault_app succeeds (the mark does not loosen or tighten |
@@ -164,7 +164,7 @@ Tests: 173. Failing as a missing feature: 7. Passing or failing on a built featu
 | 0084.replay_target_insert_refused_by_grant | `test_an_insert_into_replay_target_by_the_app_role_is_refused_by_the_grant` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | 0084.store_of_record_refuses_load | `test_on_the_store_of_record_load_stored_post_is_refused` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
 | 0089.between_old_stop_and_new_intake | `test_posts_between_the_old_folds_stop_and_the_new_intake_get_their_effects` in `test_cutover_0089.py` | MISSING FEATURE: module consentvault.effects (No module named 'consentvault.effects') |
-| 0089.intake_writes_above | `test_from_the_cutover_deploy_on_the_intake_writes_the_watermark_fact_above_at_arrival_through_the_http_door` in `test_cutover_0089.py` |      +        where Tenancy(operator_dsn='postgresql://cv_test_console@127.0.0.1:54018/t_b3e8a035b609', super_dsn='postgresql://postgres@1.. |
+| 0089.intake_writes_above | `test_from_the_cutover_deploy_on_the_intake_writes_the_watermark_fact_above_at_arrival_through_the_http_door` in `test_cutover_0089.py` |      +        where Tenancy(operator_dsn='postgresql://cv_test_console@127.0.0.1:60251/t_f8369b4f8945', super_dsn='postgresql://postgres@1.. |
 | 0089.one_pending_intent_per_rule_and_target | `test_one_new_grant_gives_one_pending_intent_per_enabled_rule_and_target_and_projecting_again_gives_none` in `test_cutover_0089.py` | E   AssertionError: the frozen event table got a row after cutover |
 | 0089.queued_stop_push_delivered | `test_a_queued_stop_push_in_the_outbox_is_delivered_by_the_effects_layer_after_cutover` in `test_cutover_0089.py` | MISSING FEATURE: module consentvault.effects (No module named 'consentvault.effects') |
 | 0089.replay_database_refuses_effects | `test_the_effects_layer_started_on_a_marked_database_exits_by_name_and_sends_nothing` in `test_cutover_0089.py` | MISSING FEATURE: module consentvault.effects (No module named 'consentvault.effects') |
@@ -198,13 +198,13 @@ Tests: 173. Failing as a missing feature: 7. Passing or failing on a built featu
 | M6.read_scope.post_history_chain_head | `test_the_evidence_tables_also_carry_the_restrictive_read_scope_policy[post_history_chain_head]` in `test_row_security.py` | PASSES TODAY (not a failing test) |
 | M6.read_scope.post_history_seal | `test_the_evidence_tables_also_carry_the_restrictive_read_scope_policy[post_history_seal]` in `test_row_security.py` | PASSES TODAY (not a failing test) |
 | M6.read_scope.retrieval_log | `test_the_evidence_tables_also_carry_the_restrictive_read_scope_policy[retrieval_log]` in `test_row_security.py` | PASSES TODAY (not a failing test) |
-| erasure.replay_agrees | `test_replay_from_empty_of_a_database_holding_one_erased_contact_holds_its_erasure_stop` in `test_loader_purity_erasure.py` |       Use -v to get more diff |
+| erasure.replay_agrees | `test_replay_from_empty_of_a_database_holding_one_erased_contact_holds_its_erasure_stop` in `test_loader_purity_erasure.py` | E   consentvault.api.StartupRefusedError: the multi-tenant API will not serve this database: its security surface differs from the security  |
 | erasure.stop_is_a_post | `test_an_erasure_stores_its_stop_as_a_post_through_the_ordinary_writer_and_the_history_cites_it` in `test_loader_purity_erasure.py` | E   AssertionError: the frozen event table got a row after cutover |
-| purity.content_fingerprints | `test_the_content_fingerprints_per_label_match_each_other_and_the_store` in `test_loader_purity_erasure.py` |       Use -v to get more diff) |
-| purity.evidence_reads_only | `test_the_evidence_stand_in_saw_only_reads_of_each_posts_own_object` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
-| purity.intent_keys | `test_the_intent_key_fingerprints_match` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
-| purity.key_provider_four_calls | `test_the_key_provider_stand_in_saw_only_the_four_allowed_calls` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
-| purity.senders_zero_calls | `test_every_sender_stand_in_saw_zero_calls` in `test_loader_purity_erasure.py` | PASSES TODAY (not a failing test) |
+| purity.content_fingerprints | `test_the_content_fingerprints_per_label_match_each_other_and_the_store` in `test_loader_purity_erasure.py` | E   consentvault.api.StartupRefusedError: the multi-tenant API will not serve this database: its security surface differs from the security  |
+| purity.evidence_reads_only | `test_the_evidence_stand_in_saw_only_reads_of_each_posts_own_object` in `test_loader_purity_erasure.py` | E   consentvault.api.StartupRefusedError: the multi-tenant API will not serve this database: its security surface differs from the security  |
+| purity.intent_keys | `test_the_intent_key_fingerprints_match` in `test_loader_purity_erasure.py` | E   consentvault.api.StartupRefusedError: the multi-tenant API will not serve this database: its security surface differs from the security  |
+| purity.key_provider_four_calls | `test_the_key_provider_stand_in_saw_only_the_four_allowed_calls` in `test_loader_purity_erasure.py` | E   consentvault.api.StartupRefusedError: the multi-tenant API will not serve this database: its security surface differs from the security  |
+| purity.senders_zero_calls | `test_every_sender_stand_in_saw_zero_calls` in `test_loader_purity_erasure.py` | E   consentvault.api.StartupRefusedError: the multi-tenant API will not serve this database: its security surface differs from the security  |
 
 ## Tests that stop at an adapter once their feature exists
 

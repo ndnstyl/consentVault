@@ -32,11 +32,32 @@ def _loader_role(request) -> int:
     return port
 
 
+def _cutover_orgs(superuser, org_ids) -> None:
+    """The design's cutover is per organisation by watermark row: the old fold is off for an organisation once its row exists. Each
+    organisation the fixtures create gets its row (head 0: the old fold finished nothing here), when the table exists."""
+    with superuser() as su:
+        if su.execute("SELECT to_regclass('consentvault.effect_watermark') IS NOT NULL AS t").fetchone()["t"]:
+            for org_id in org_ids:
+                su.execute("INSERT INTO consentvault.effect_watermark (org_id, head_seq) VALUES (%s, 0) ON CONFLICT DO NOTHING", (str(org_id),))
+
+
+def _build_cloud(request, tmp_path):
+    cloud = Cloud(build_tenancy(request.getfixturevalue("dsn") if _loader_role(request) else None,
+                                request.getfixturevalue("pg_server")["port"]), str(tmp_path / "evidence"))
+    _cutover_orgs(cloud.t.superuser, [cloud.a.org.org_id, cloud.b.org.org_id])
+    return cloud
+
+
+def _build_world(request, tmp_path):
+    world = World(request.getfixturevalue("vault") if _loader_role(request) else None, tmp_path)
+    _cutover_orgs(world.vault.superuser, [world.a.org_id, world.b.org_id])
+    return world
+
+
 @pytest.fixture
 def cloud(request, tmp_path):
     """The multi-tenant HTTP door over two synthetic organisations (isolation harness), built on first use."""
-    lazy = Lazy(lambda: Cloud(build_tenancy(request.getfixturevalue("dsn") if _loader_role(request) else None,
-                                            request.getfixturevalue("pg_server")["port"]), str(tmp_path / "evidence")))
+    lazy = Lazy(lambda: _build_cloud(request, tmp_path))
     yield lazy
     built = object.__getattribute__(lazy, "_obj")
     if built is not None:
@@ -45,7 +66,7 @@ def cloud(request, tmp_path):
 
 @pytest.fixture
 def world(request, tmp_path):
-    return Lazy(lambda: World(request.getfixturevalue("vault") if _loader_role(request) else None, tmp_path))
+    return Lazy(lambda: _build_world(request, tmp_path))
 
 
 @pytest.fixture

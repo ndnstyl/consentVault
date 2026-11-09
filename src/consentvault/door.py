@@ -468,6 +468,8 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
                 reason = decide(reading, auth, _seen(conn, view.org_id))
             try:
                 fields = backend.prepare(conn, reading.payload, view.body, auth) if reason is None else None
+            except (MemoryError, RecursionError):   # the machine ran out, not the bytes: an attempt below, never a final reason
+                raise
             except Exception as exc:  # loud-failure-exempt: the pure phase of the reader; its refusal is final and is stored below
                 _log.error("a stored post produces no event; the reason is stored beside it", error=reason_of(exc))
                 _record(writer, conn, enter, view, Outcome(view.post_id, reason=reason_of(exc)))

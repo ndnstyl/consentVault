@@ -365,6 +365,7 @@ class TenantBackend:
             check_source_from_settings(f, settings)
             normalize_tenant_contact(f["contact"], settings["region"])   # an unreadable contact reads the same every time: final
             check_wording_from_fact(f, self.wording)   # the wording as the intake saw it, stored at arrival: final
+            check_event_shape(f)   # the box, the channel, the purpose, the wording hash: the bytes alone, final
         except ApiError as exc:
             return exc.name
         return {"req": req, "credential_id": uuid.UUID(str(cred.get("credential_id"))), "credential": dict(cred), "org_id": auth.org_id,
@@ -860,6 +861,7 @@ class TenantLedgerBackend:
             text = str(fields.pop("payload_b64"))
             fields["payload"] = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
         fields["region"], fields["allowed_purposes"] = self.region, self.allowed_purposes
+        check_event_shape(fields)   # the same shape checks the append makes, decided here so they are final
         if self.enter_for_org is not None:
             fields["_org"] = auth.org_id
         return fields
@@ -871,6 +873,22 @@ class TenantLedgerBackend:
                 event = record_tenant_event(conn, self.crypto, **fields)
                 link(conn, event.event_id)
         return event.event_id
+
+
+def check_event_shape(f: Mapping[str, Any]) -> None:
+    """The write step's checks that depend on the bytes alone, run in the pure phase so they are final (they repeat on the same
+    post): a grant needs the consent box checked, a channel, a purpose and wording; a stop carries no box; a text restores nothing."""
+    if f.get("event_type") == "grant":
+        if f.get("checked") is not True:
+            raise UncheckedConsentError("the consent box was not checked; no grant recorded")
+        if not _list(f.get("channels")) or not _list(f.get("purposes")):
+            raise EmptyConsentError("a grant must name at least one channel and one purpose")
+        if not f.get("disclosure_sha256"):
+            raise EmptyConsentError("a grant must carry the hash of the disclosure the person saw")
+        if f.get("contact_verification") == "inbound_keyword" or f.get("inbound_message") is not None:
+            raise InvalidEventError("a START text restores nothing; the way back is a form")
+    elif f.get("checked") is not None:
+        raise InvalidEventError("'checked' belongs only to a grant")
 
 
 def write_tenant_event(conn: psycopg.Connection, crypto, *, contact: str, event_type: str, channels, purposes,

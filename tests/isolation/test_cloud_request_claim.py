@@ -50,6 +50,7 @@ def test_a_crash_after_the_answer_leaves_no_event_and_a_stop_is_not_lifted_by_a_
     nonce = str(uuid.uuid4())
     tok = cloud.token(cloud.a, "capture")
     h = {"X-ConsentVault-Request-Id": "form-1"}
+    monkeypatch.setattr(door, "LIVE_RETRY_INTERVAL_SECONDS", 0)   # the once-per-interval bound on the live retry is tested apart
     real = door.TenantBackend.apply
     n = {"c": 0}
 

@@ -19,7 +19,7 @@ export interface ErrorBody {
 
 // session.md
 export interface Membership { org_id: string; name: string; role: Role; status: OrgStatus | null; sso_required?: boolean }
-export interface SessionAnswer { user: { display_name: string; email: string }; items: Membership[]; next_cursor: string | null }
+export interface SessionAnswer { user: { display_name: string | null; email: string }; items: Membership[]; next_cursor: string | null }
 export interface OffboardingStep { step: 'final_export' | 'credentials_revoked' | 'key_destruction_scheduled' | 'destruction_record'; status: 'pending' | 'done' | 'delayed'; at: string | null }
 export interface SsoSetting { connected: boolean; connection_id: string | null; required: boolean; verified: boolean }
 export interface SsoSaved { version: number; connection_id: string | null; required: boolean; verified: boolean; applies_from: string }
@@ -99,7 +99,7 @@ export interface AuditRow {
 export interface Channel { channel: string; label: string }
 export interface Purpose { purpose: string; label: string; description: string }
 export interface Disclosure {
-  sha256: string; label: string; version_label: string; channels: string[]; purposes: string[]; brand_ids: string[];
+  sha256: string; label: string; version_label: string | null; channels: string[]; purposes: string[]; brand_ids: string[];
   supersedes_sha256: string | null; superseded_by_sha256: string | null; effective_from: string; registered_by: string; registered_at: string;
   body?: string;
 }
@@ -138,22 +138,24 @@ export interface Redrive { redrive_id: string; system_id: string; status: 'runni
 export interface ContactDelivery { system_id: string; system_name: string; sent_at: string; state: 'denied' | 'permitted'; status: 'sent' | 'acknowledged' | 'failed' | 'dead' | 'superseded'; acknowledged_at: string | null }
 
 // proof-export.md
-export interface ProofPermission { channel: string; purpose: string; evidence_status: string; policy_action: 'proceed' | 'hold' | null; policy_version: number | null; basis_event_ids: string[] }
+// The service answers the recorded fact in `status` (records_found, no_record_found) and no policy outcome. `evidence_status` is the older name.
+export interface ProofPermission { channel: string; purpose: string; status?: string; evidence_status?: string; basis_event_ids: string[] }
+export interface ProofAnchor { anchor_id?: string; anchored_at?: string; at?: string; ok?: boolean; seq?: number }
 export interface TimelineEvent {
   event_id: string; seq: number; event_type: 'grant' | 'revoke' | 'suppress' | 'release'; at: string; channels: string[]; purposes: string[];
   source_id: string; brand_ids: string[]; disclosure_sha256: string | null; sealed: boolean; sealed_at: string | null; recorded_during_trial: boolean;
 }
-export interface GateDecision { decision_id: string; at: string; channel: string; purpose: string; evidence_status: string; policy_action: 'proceed' | 'hold' | null; policy_version: number | null }
+export interface GateDecision { decision_id: string; at: string; channel: string; purpose: string; evidence_status?: string; status?: string }
 export interface Proof {
   found: boolean; evaluated_at: string; notice: string;
   permissions: ProofPermission[];
   timeline: Page<TimelineEvent> | null;
-  disclosures: { sha256: string; label: string; version_label: string }[] | null;
+  disclosures: { sha256: string; label: string; version_label: string | null }[] | null;
   gate_decisions: Page<GateDecision> | null;
   contact_log: Page<Record<string, unknown>> | null;
   reviews: Page<{ review_id: string; at: string; kind: string; event_id: string | null }> | null;
   doc_check_results: { event_id: string; checklist_version: number; present: string[]; missing: string[] }[] | null;
-  chain: { head: string; events: number; path: string; anchors: { at: string; ok: boolean }[] } | null;
+  chain: { head: unknown; events: unknown; path: unknown; anchors: ProofAnchor[] } | null;
   partial?: string[];
 }
 export interface ExportItem {
@@ -228,7 +230,7 @@ export interface SetupStep {
   step: SetupStepName;
   status: 'done' | 'to_do' | 'skipped' | 'blocked' | null;
   required: boolean;
-  evidence: { kind: string; id: string; at: string } | null;
+  evidence: { kind: string; id: string | null; at: string } | null;
   blocked_reason: string | null;
   skipped_by: string | null; skipped_at: string | null; skip_reason: string | null;
   roles: ('admin' | 'developer')[];

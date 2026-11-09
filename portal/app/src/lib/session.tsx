@@ -16,6 +16,9 @@ export const WARN_BEFORE_MS = 2 * 60 * 1000;
 const ORG_KEY = 'cv.org';
 const STARTED_KEY = 'cv.session.started';
 
+/** The service may answer a null display name for a user it only knows by address; the address stands in. */
+export function sessionUser(u: { display_name: string | null; email: string }): { display_name: string; email: string } { return { display_name: u.display_name ?? u.email, email: u.email }; }
+
 export interface SessionCtx {
   api: Api;
   phase: Phase;
@@ -81,7 +84,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     try {
       const s = await api.session.get();
       if (!alive()) return;
-      items = s.items; setUser(s.user); setMemberships(items); memRef.current = items;
+      items = s.items; setUser(sessionUser(s.user)); setMemberships(items); memRef.current = items;
     } catch (e) {
       if (!alive()) return;
       const err = e as ApiError;

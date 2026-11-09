@@ -10,9 +10,11 @@ export function fmtDateTime(iso: string): string {
   return new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(d);
 }
 export function fmtDate(iso: string): string {
+  // A date the service stores as midnight UTC is a calendar day, not a moment: it is read in UTC so it never slips to the day before.
+  const day = iso.length === 10 || /T00:00:00(\.0+)?Z$/.test(iso);
   const d = new Date(iso.length === 10 ? `${iso}T12:00:00Z` : iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: iso.length === 10 ? 'UTC' : undefined }).format(d);
+  return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: day ? 'UTC' : undefined }).format(d);
 }
 export function fmtTime(iso: string): string {
   const d = new Date(iso);

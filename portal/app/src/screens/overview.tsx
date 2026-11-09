@@ -88,7 +88,8 @@ function OverviewBody({ v, celebrate, role }: { v: OverviewView; celebrate: bool
   note('Health counts', d.health); note('Setup progress', d.setup); note('Policy', d.policy); note('Usage', d.billing); note('Systems', d.systems);
   const h = d.health.ok ? d.health.v : null;
   const policy = d.policy.ok ? d.policy.v[0] ?? null : undefined;
-  const dead = h ? h.dead_deliveries : null;
+  const noSystems = !!d.systems && d.systems.ok && d.systems.v.length === 0;
+  const dead = h ? (h.dead_deliveries ?? (noSystems ? 0 : null)) : null;
   const deadSystem = d.systems && d.systems.ok ? [...d.systems.v].sort((a, b) => (b.counts?.dead ?? 0) - (a.counts?.dead ?? 0))[0] : null;
   const showUsage = role === 'admin';
   const showPolicy = role !== 'developer';
@@ -96,7 +97,7 @@ function OverviewBody({ v, celebrate, role }: { v: OverviewView; celebrate: bool
   const usageNA = !billing || !billing.used || !billing.included;
   const usageFailed = !!d.billing && (!d.billing.ok || (billing !== null && billing.plan !== null && usageNA));
   const incomplete = !!v.answer && !v.answer.complete;
-  const nullTiles = (h && (h.unsealed_events_over_1h === null || h.dead_deliveries === null)) || !d.health.ok || (showUsage && usageFailed) || (showPolicy && policy === undefined);
+  const nullTiles = (h && (h.unsealed_events_over_1h === null || dead === null)) || !d.health.ok || (showUsage && usageFailed) || (showPolicy && policy === undefined);
   return (
     <>
       {celebrate && v.firstEventAt && <SuccessBanner>{`Setup is complete. Your first test event was recorded on ${fmtDateTime(v.firstEventAt)}.`}</SuccessBanner>}
@@ -125,9 +126,9 @@ function OverviewBody({ v, celebrate, role }: { v: OverviewView; celebrate: bool
             : <Tile label="Policy in force" value="None" sub="Gate checks return evidence status only until you approve a policy." />)}
         <Tile label="Events not yet sealed after 1 hour" value={h && h.unsealed_events_over_1h !== null ? <span className="num">{h.unsealed_events_over_1h}</span> : null} sub={h && h.unsealed_events_over_1h !== null ? <>Checked <Time iso={h.evaluated_at} /></> : 'Count did not load'} />
         <Tile label="Undelivered stops (dead)" alert={!!dead && dead > 0} value={dead !== null ? <span className="num">{dead}</span> : null}
-          sub={dead === null ? 'Count did not load' : dead > 0 && deadSystem ? `${deadSystem.name}: review and redrive` : dead > 0 ? 'Review in Connected systems' : 'Nothing waiting'}
+          sub={dead === null ? 'Count did not load' : h && h.dead_deliveries === null ? 'No systems are connected, so no stops are waiting' : dead > 0 && deadSystem ? `${deadSystem.name}: review and redrive` : dead > 0 ? 'Review in Connected systems' : 'Nothing waiting'}
           href={dead && dead > 0 ? (deadSystem ? `/systems/${deadSystem.system_id}` : '/systems') : undefined} action={dead && dead > 0 ? 'Review in Connected systems' : undefined} />
-        {showUsage && <Tile label="Events this period" value={!usageNA ? <span className="num">{billing!.used!.events.toLocaleString('en-US')}</span> : null} of={!usageNA ? `of ${billing!.included!.events.toLocaleString('en-US')}` : undefined}
+        {showUsage && <Tile label="Events this period" value={!usageNA ? <span className="num">{billing!.used!.events.toLocaleString('en-US')}</span> : billing && billing.plan === null ? 'No plan yet' : null} of={!usageNA ? `of ${billing!.included!.events.toLocaleString('en-US')}` : undefined}
           sub={!usageNA ? `Gate checks: ${billing!.used!.gate_checks.toLocaleString('en-US')} of ${billing!.included!.gate_checks.toLocaleString('en-US')}` : billing && billing.plan === null ? 'Usage counts once you choose a plan' : 'Usage count did not load'} />}
       </div>
       {showUsage && !usageNA && (

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ApiError } from '../lib/api/client.ts';
 import { SYMBOLS, reactAttrs } from '../lib/sprite.ts';
 import { DELIVERY_LABEL, DELIVERY_TONE, NA, ORG_STATUS_ICON, ORG_STATUS_LABEL, ORG_STATUS_TONE, causeLine, evidenceLabel, policyLabel } from '../lib/copy.ts';
-import { fmtDateTime } from '../lib/format.ts';
+import { fmtDate, fmtDateTime } from '../lib/format.ts';
 import type { OrgStatus } from '../lib/api/types.ts';
 import { Link, useRouter } from '../lib/router.tsx';
 
@@ -78,7 +78,7 @@ export function NotAvailable() { return <span className="na">{NA}</span>; }
 
 export function Time({ iso, date }: { iso: string | null | undefined; date?: boolean }) {
   if (!iso) return <NotAvailable />;
-  const text = date ? new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' }).format(new Date(iso)) : fmtDateTime(iso);
+  const text = date ? fmtDate(iso) : fmtDateTime(iso);
   return <time dateTime={iso}>{text}</time>;
 }
 

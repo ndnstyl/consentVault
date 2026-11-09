@@ -57,9 +57,10 @@ function groupStatuses(r: ContactRecord, channels: string[], purpose: string | u
   }
   return [...byPurpose.values()];
 }
-function StatusChip({ status, n }: { status: string; n?: number }) {
+function StatusChip({ status, n, erased }: { status: string; n?: number; erased?: boolean }) {
   const l = evidenceLabel(status);
-  return <Chip tone={`ev-${l.kind}`} icon={l.icon}>{l.text}{n && n > 1 ? ` (${n})` : ''}</Chip>;
+  const text = erased && status === 'stop_on_record' ? 'Stop written by the erasure request' : l.text;
+  return <Chip tone={`ev-${l.kind}`} icon={l.icon}>{text}{n && n > 1 ? ` (${n})` : ''}</Chip>;
 }
 function ChannelCell({ r, channels, purpose }: { r: ContactRecord; channels: string[]; purpose: string | undefined }) {
   const st = groupStatuses(r, channels, purpose);
@@ -67,7 +68,7 @@ function ChannelCell({ r, channels, purpose }: { r: ContactRecord; channels: str
   const found = st.filter((s) => s === 'consent_record_found').length;
   return (
     <span className="chips">
-      {stop > 0 && <StatusChip status="stop_on_record" n={stop} />}
+      {stop > 0 && <StatusChip status="stop_on_record" n={stop} erased={r.state === 'erased'} />}
       {found > 0 && <StatusChip status="consent_record_found" n={found} />}
       {stop === 0 && found === 0 && <StatusChip status="no_record" />}
     </span>
@@ -433,7 +434,8 @@ export function Records() {
               {summary.status === 'loading' && <Skeleton what="the channel shares" rows={1} />}
               {(summary.status === 'error' || (sum && sum.by_channel === null)) && <p className="na">{NA}</p>}
               {sum && sum.by_channel && <><ShareBars by={sum.by_channel} call={sum.call} />
-                <p className="hint mt4">Each record counts once per channel, under its most protective status for any purpose: a stop first, then found, then no record. Whether a record is complete against your documentation checklist depends on your policy, and shows on each contact's evidence lookup page, not here. A record is one phone number or one email address, so an email record reads No record for Text and Call, and a phone record reads No record for Email. A stop from a text reply covers texts and calls.</p></>}
+                {filters.state === 'erased' && <p className="hint mt4">These records are erased. Each stop shown was written by the erasure request, on the channels it was recorded on.</p>}
+                <p className="hint mt4">Each record counts once per channel, as the records show it. Where a stop and a consent are both recorded for a channel, the count shows the stop, as read under the rule-set in use. Whether a record is complete against your documentation checklist depends on your policy, and shows on each contact's evidence lookup page, not here. A record is one phone number or one email address, so an email record reads No record for Text and Call, and a phone record reads No record for Email. A stop is recorded on the channel it arrived on. How far a stop reaches is set by the rule-set in use, which your counsel may replace. This portal does not name the rule-set yet; each contact's evidence lookup page lists the stop with the channel it arrived on.</p></>}
             </div>
           </div>
 
@@ -506,7 +508,7 @@ export function Records() {
                     onNext={() => { if (list.status !== 'ok' || !list.data.next_cursor) return; const nc = list.data.next_cursor; setCursors((c) => [...c.slice(0, pageIdx + 1), nc]); setPageIdx((i) => i + 1); }} />
                 </div>
               )}
-              {rows.some((r) => r.state === 'erased') && <p className="hint mt4">Erased (stop kept): the contact point, name and company can no longer be read. The stop stays, so a returning number still matches it. Shown only with the filter Erased or All.</p>}
+              {rows.some((r) => r.state === 'erased') && <p className="hint mt4">Erased (stop kept): the contact point, name and company can no longer be read. The stop was written by the erasure request and is kept, with the channels it was recorded on. How far it reaches is set by the rule-set in use. Shown only with the filter Erased or All.</p>}
               <p className="notice mt4">{RECORDS_NOTICE}</p>
             </>
           )}

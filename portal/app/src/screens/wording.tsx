@@ -7,6 +7,7 @@ import { Link, useRouter } from '../lib/router.tsx';
 import { canDo } from '../lib/roles.ts';
 import { useSession } from '../lib/session.tsx';
 import { fmtDate, shortId } from '../lib/format.ts';
+import { memberName, wordingName, type NamedMember } from '../lib/labels.ts';
 import type { Embedded } from '../components/ui.tsx';
 import { Banner, Btn, Check, CopyButton, DataTable, ErrorBlock, ErrorSummary, KV, LinkBtn, NotAvailable, PageHead, Radio, Skeleton, StateBlock, SuccessBanner, TextArea, TextField, Time } from '../components/ui.tsx';
 
@@ -51,13 +52,13 @@ export function Wording() {
           {labelsFailed && <Banner kind="warning" title="Some names did not load">Brand, channel or purpose names that did not load show as Not available. Versions and fingerprints are current.</Banner>}
           <DataTable caption="Registered wording versions" rows={rows} rowKey={(r) => r.sha256}
             columns={[
-              { key: 'v', header: 'Version', render: (r) => <Link href={`/wording/${r.sha256}`}>{r.version_label}</Link>, primary: true },
+              { key: 'v', header: 'Version', render: (r) => <Link href={`/wording/${r.sha256}`}>{wordingName(r)}</Link>, primary: true },
               { key: 'b', header: 'Brands', render: (r) => (l?.brands ? r.brand_ids.map((b) => brLabel(l, b) ?? b).join(', ') : <NotAvailable />) },
               { key: 'c', header: 'Channels', render: (r) => (l?.channels ? r.channels.map((c) => chLabel(l, c)).join(', ') : <NotAvailable />) },
               { key: 'p', header: 'Purposes', render: (r) => (l?.purposes ? r.purposes.map((p) => prLabel(l, p)).join(', ') : <NotAvailable />) },
               { key: 'f', header: 'Shown from', render: (r) => <Time iso={r.effective_from} date /> },
               { key: 'h', header: 'Fingerprint', render: (r) => <code className="mono">{shortId(r.sha256)}</code> },
-              { key: 'r', header: 'Replaces', render: (r) => (r.supersedes_sha256 ? byHash(r.supersedes_sha256)?.version_label ?? <code className="mono">{shortId(r.supersedes_sha256)}</code> : <span className="hint">None</span>) },
+              { key: 'r', header: 'Replaces', render: (r) => (r.supersedes_sha256 ? (byHash(r.supersedes_sha256) ? wordingName(byHash(r.supersedes_sha256)!) : null) ?? <code className="mono">{shortId(r.supersedes_sha256)}</code> : <span className="hint">None recorded</span>) },
             ]} />
         </>
       )}
@@ -102,7 +103,7 @@ export function WordingNew({ embedded }: { embedded?: Embedded } = {}) {
   if (!canDo(role, 'wording.register')) return null;
   const exists = register.error?.code === 'disclosure_exists';
   const existingSha = String((register.error?.fields as { sha256?: string } | undefined)?.sha256 ?? '');
-  const existingLabel = data?.existing.find((x) => x.sha256 === existingSha)?.version_label;
+  const existingLabel = data?.existing.find((x) => x.sha256 === existingSha) ? wordingName(data!.existing.find((x) => x.sha256 === existingSha)!) : undefined;
   return (
     <>
       {!embedded && <PageHead title="Register wording" lede="Paste the exact text people see next to the checkbox. It is stored character for character, including spaces and punctuation. Registered wording can never be edited." />}
@@ -124,7 +125,7 @@ export function WordingNew({ embedded }: { embedded?: Embedded } = {}) {
           <fieldset><legend>Brands named as seller</legend>{data.brands.map((b) => <Check key={b.brand_id} name={`br-${b.brand_id}`} label={b.display_name} checked={d.brands.includes(b.brand_id)} onChange={(e) => toggle('brands', b.brand_id, e.target.checked)} />)}</fieldset>
           <fieldset><legend>Replaces</legend>
             <Radio name="replaces" label="Nothing (first version)" checked={d.replaces === ''} onChange={() => setD({ replaces: '' })} />
-            {data.existing.map((x) => <Radio key={x.sha256} name="replaces" label={x.version_label} checked={d.replaces === x.sha256} onChange={() => setD({ replaces: x.sha256 })} />)}
+            {data.existing.map((x) => <Radio key={x.sha256} name="replaces" label={wordingName(x)} checked={d.replaces === x.sha256} onChange={() => setD({ replaces: x.sha256 })} />)}
           </fieldset>
           <TextField label="Shown on your forms from" name="from" type="date" value={d.from} onChange={(e) => setD({ from: e.target.value })} required />
           <div className="actions">{!embedded && <LinkBtn href="/wording" variant="secondary">Cancel</LinkBtn>}<Btn type="submit" variant="primary" busy={register.busy} busyLabel="Registering">Register wording</Btn></div>
@@ -143,6 +144,7 @@ export function WordingDetail({ sha }: { sha: string }) {
   const l = labels.status === 'ok' ? labels.data : null;
   const list = useResource(() => allPages((c) => api.disclosures.list({ cursor: c })), [api]);
   const all: Disclosure[] = list.status === 'ok' ? list.data : [];
+  const members = useResource(() => (role === 'admin' ? allPages((c) => api.members.list({ cursor: c })).catch(() => null) : Promise.resolve(null)), [api, role]);
   if (res.status === 'loading') return <><PageHead title="Wording" /><Skeleton what="this wording" /></>;
   if (res.status === 'error') {
     return res.error.status === 404
@@ -150,17 +152,18 @@ export function WordingDetail({ sha }: { sha: string }) {
       : <><PageHead title="Wording" /><ErrorBlock title="This wording did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
   }
   const d = res.data;
-  const link = (h: string | null) => (h ? <Link href={`/wording/${h}`}>{all.find((x) => x.sha256 === h)?.version_label ?? shortId(h)}</Link> : null);
+  const link = (h: string | null) => { const x = h ? all.find((y) => y.sha256 === h) : undefined; return h ? <Link href={`/wording/${h}`}>{x ? wordingName(x) : shortId(h)}</Link> : null; };
+  const by = members.status === 'ok' && members.data ? memberName(members.data.find((m: NamedMember) => m.id === d.registered_by)) : null;
   return (
     <>
-      <PageHead title={`Wording ${d.version_label}`} />
-      {search.get('registered') && <SuccessBanner>{`Version ${d.version_label} registered. Send this fingerprint with each grant: ${shortId(d.sha256)}.`}</SuccessBanner>}
+      <PageHead title={`Wording ${wordingName(d)}`} />
+      {search.get('registered') && <SuccessBanner>{`Version ${wordingName(d)} registered. Send this fingerprint with each grant: ${shortId(d.sha256)}.`}</SuccessBanner>}
       <div className="card">
         <KV rows={[
           ['Fingerprint (sha256)', <span key="f" className="gap-row"><code className="mono">{d.sha256}</code><CopyButton text={d.sha256} ariaLabel="Copy fingerprint" /></span>],
-          ['Registered', <span key="r"><Time iso={d.registered_at} date /> by {d.registered_by}</span>],
+          ['Registered', <span key="r"><Time iso={d.registered_at} date /> by {by ?? <NotAvailable />}</span>],
           ['Shown from', <Time key="s" iso={d.effective_from} date />],
-          ['Replaces', link(d.supersedes_sha256) ?? 'Nothing'],
+          ['Replaces', link(d.supersedes_sha256) ?? 'None recorded'],
           ['Replaced by', link(d.superseded_by_sha256) ?? 'Nothing yet'],
           ['Brands', l?.brands ? d.brand_ids.map((b) => brLabel(l, b) ?? b).join(', ') : NA],
           ['Channels', l?.channels ? d.channels.map((c) => chLabel(l, c)).join(', ') : NA],

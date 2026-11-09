@@ -8,6 +8,7 @@ import { useRouter } from '../lib/router.tsx';
 import { ROLE_LABEL, canDo } from '../lib/roles.ts';
 import { useSession } from '../lib/session.tsx';
 import { fmtDate, fmtDateTime, fmtNum, maskContact } from '../lib/format.ts';
+import { actionLabel, actorName, type NamedMember } from '../lib/labels.ts';
 import { useToast } from '../lib/toast.tsx';
 import { ConfirmDialog, Dialog } from '../components/Dialog.tsx';
 import { Banner, Btn, Chip, DataTable, ErrorBlock, KV, LinkBtn, Meter, NotAvailable, OrgChip, PageHead, Radio, SelectField, Skeleton, StateBlock, SuccessBanner, TextArea, TextField, Time } from '../components/ui.tsx';
@@ -106,9 +107,10 @@ export function Members() {
         <div className={onlyYou ? 'mt5' : undefined}>
           <DataTable caption="Members and invitations" rows={rows} rowKey={(r) => `${r.kind}:${r.id}`}
             columns={[
-              { key: 'n', header: 'Name', render: (r) => (r.display_name ?? <span className="hint">Not signed in yet</span>), primary: true },
+              { key: 'n', header: 'Name', render: (r) => (r.display_name ?? <span className="hint">{r.last_sign_in_at ? 'No name given' : 'Not signed in yet'}</span>), primary: true },
               { key: 'e', header: 'Email', render: (r) => r.email },
               { key: 'r', header: 'Role', render: (r) => ROLE_LABEL[r.role] },
+              { key: 'l', header: 'Last sign-in', render: (r) => (r.kind === 'invite' ? <span className="hint">Not signed in yet</span> : r.last_sign_in_at ? <Time iso={r.last_sign_in_at} /> : <span className="hint">Never</span>) },
               { key: 's', header: 'Status', render: (r) => (r.kind === 'invite' ? <Chip tone="st-info" icon="i-info">{`Invited, expires ${r.expires_at ? fmtDate(r.expires_at) : NA}`}</Chip> : <Chip tone="st-success" icon="i-ok">Active</Chip>) },
             ]}
             actions={(r) => {
@@ -185,13 +187,14 @@ function RoleDialog({ row, onClose, onDone }: { row: MemberRow; onClose: () => v
 // ---------- 18 Audit log ----------
 const PERSONAL = /(\+?\d[\d\s().-]{8,}\d)|([^\s@]+@[^\s@]+\.[^\s@]+)/;
 function safeTarget(t: AuditRow['target']): string {
+  if (t.kind === 'org') return 'This organization';
   const id = t.id ?? '';
   const shown = PERSONAL.test(id) ? maskContact(id) : id;
   return `${t.kind.replace(/_/g, ' ')}${shown ? ` ${shown}` : ''}`;
 }
 
 export function Audit() {
-  const { api } = useSession();
+  const { api, role } = useSession();
   const { search, navigate } = useRouter();
   const action = search.get('action') ?? '';
   const actor = search.get('actor') ?? '';
@@ -203,7 +206,10 @@ export function Audit() {
   const dateErr = from && to && from > to ? 'The From date is later than the To date.' : null;
   const res = useResource(() => (dateErr ? Promise.resolve(null) : api.audit.list({ ...q, cursor, limit: 25 })), [api, action, actor, from, to, cursor]);
   const actions = useResource(() => api.audit.actions({ limit: 200 }).then((p) => p.items).catch(() => null), [api]);
-  const actors = useMemo(() => { const m = new Map<string, string>(); if (res.status === 'ok' && res.data) for (const r of res.data.items) m.set(r.actor.id, r.actor.display_name ?? r.actor.id); return [...m.entries()]; }, [res.status, res.data]);
+  const memberRes = useResource(() => (role === 'admin' ? allPages((c) => api.members.list({ cursor: c })).catch(() => null) : Promise.resolve(null)), [api, role]);
+  const members = useMemo(() => new Map<string, NamedMember>((memberRes.status === 'ok' && memberRes.data ? memberRes.data : []).map((m) => [m.id, m])), [memberRes.status, memberRes.data]);
+  const labelOf = useMemo(() => new Map<string, string>((actions.status === 'ok' && actions.data ? actions.data : []).map((a) => [a.action, a.label])), [actions.status, actions.data]);
+  const actors = useMemo(() => { const m = new Map<string, string>(); if (res.status === 'ok' && res.data) for (const r of res.data.items) { const n = actorName(r.actor, members); if (n) m.set(r.actor.id, n); } return [...m.entries()]; }, [res.status, res.data, members]);
   const setFilter = (k: string, v: string) => {
     const p = new URLSearchParams(search.toString()); if (v) p.set(k, v); else p.delete(k);
     setStack([]); setCursor(null);
@@ -211,7 +217,7 @@ export function Audit() {
   };
   const filtered = !!(action || actor || from || to);
   const rows = res.status === 'ok' && res.data ? res.data.items : [];
-  const namesMissing = rows.length > 0 && rows.some((r) => r.actor.display_name === null);
+  const namesMissing = rows.length > 0 && memberRes.status !== 'loading' && rows.some((r) => actorName(r.actor, members) === null);
   return (
     <>
       <PageHead title="Audit log" lede="Append-only and anchored outside ConsentVault. Nobody can change or remove an entry." />
@@ -232,12 +238,12 @@ export function Audit() {
         )}
         {rows.length > 0 && (
           <>
-            {namesMissing && <Banner kind="warning" title="Member names did not load">Entries show the sign-in id instead.</Banner>}
+            {namesMissing && <Banner kind="warning" title="Some member names did not load">Entries from a member the list does not hold read Not available.</Banner>}
             <DataTable caption="Audit entries" rows={rows} rowKey={(r) => r.audit_id}
               columns={[
                 { key: 'w', header: 'When', render: (r) => <Time iso={r.at} />, primary: true },
-                { key: 'a', header: 'Who', render: (r) => r.actor.display_name ?? <code className="mono">{r.actor.id}</code> },
-                { key: 'x', header: 'Action', render: (r) => <code className="mono">{r.action}</code> },
+                { key: 'a', header: 'Who', render: (r) => actorName(r.actor, members) ?? <NotAvailable /> },
+                { key: 'x', header: 'Action', render: (r) => actionLabel(r.action, labelOf) },
                 { key: 't', header: 'Target', render: (r) => safeTarget(r.target) },
                 { key: 'r', header: 'Reason', render: (r) => r.reason ?? <span className="hint">None given</span> },
                 { key: 'q', header: 'Request', render: (r) => <code className="mono">{r.request_id}</code> },

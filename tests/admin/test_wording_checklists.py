@@ -34,10 +34,10 @@ def test_a_new_version_supersedes_the_old_one_both_ways_and_only_once(world):
     vault, org, boss, dev, brand = world
     v1 = boss.ok("POST", "/v1/disclosures", body=wording(brand, "Version one wording."))
     v2 = boss.ok("POST", "/v1/disclosures", body=wording(brand, "Version two wording.", supersedes_sha256=v1["sha256"],
-                                                          version_label="v2"))
+                                                          version_label="v2", effective_from="2026-11-01T00:00:00Z"))
     assert v2["supersedes_sha256"] == v1["sha256"] and v2["version_label"] == "v2"
     assert boss.ok("GET", f"/v1/disclosures/{v1['sha256']}")["superseded_by_sha256"] == v2["sha256"]
-    boss.err("POST", "/v1/disclosures", body=wording(brand, "Fork.", supersedes_sha256=v1["sha256"]), name="validation_failed")
+    boss.err("POST", "/v1/disclosures", body=wording(brand, "Fork.", supersedes_sha256=v1["sha256"], effective_from="2026-12-01T00:00:00Z"), name="validation_failed")
     boss.err("POST", "/v1/disclosures", body=wording(brand, "Orphan.", supersedes_sha256="0" * 64), name="not_found")
     assert [w["sha256"] for w in boss.ok("GET", "/v1/disclosures", {"state": "current"})["items"]] == [v2["sha256"]]
     assert [w["sha256"] for w in boss.ok("GET", "/v1/disclosures", {"state": "superseded"})["items"]] == [v1["sha256"]]
@@ -115,3 +115,61 @@ def test_checklist_input_checks(world):
     boss.err("POST", "/v1/checklists", body={"kind": "custom", "label": "x", "elements": [{"name": "a", "element_id": same},
                                                                                          {"name": "b", "element_id": same}]},
              name="validation_failed")
+
+
+def _owner_tx(vault, org_id):
+    from consentvault.tenancy.tokens import mint_org_token, org_transaction
+    return org_transaction, mint_org_token(vault.key, org_id, ["admin"], credential_id=None)
+
+
+def test_the_replaces_link_cannot_be_edited_and_both_ways_show_on_the_version_pair(world):
+    import psycopg
+    vault, org, boss, dev, brand = world
+    v1 = boss.ok("POST", "/v1/disclosures", body=wording(brand, "Link one.", effective_from="2026-01-01T00:00:00Z"))
+    v2 = boss.ok("POST", "/v1/disclosures", body=wording(brand, "Link two.", effective_from="2026-02-01T00:00:00Z",
+                                                          supersedes_sha256=v1["sha256"]))
+    assert dev.ok("GET", f"/v1/disclosures/{v2['sha256']}")["supersedes_sha256"] == v1["sha256"]
+    assert dev.ok("GET", f"/v1/disclosures/{v1['sha256']}")["superseded_by_sha256"] == v2["sha256"]
+    listed = {w["sha256"]: w for w in dev.ok("GET", "/v1/disclosures")["items"]}
+    assert listed[v2["sha256"]]["supersedes_sha256"] == v1["sha256"] and listed[v1["sha256"]]["superseded_by_sha256"] == v2["sha256"]
+    org_transaction, token = _owner_tx(vault, org["org_id"])
+    for sql in ("UPDATE consentvault.disclosure SET supersedes_sha256 = NULL WHERE sha256 = %s",
+                "DELETE FROM consentvault.disclosure WHERE sha256 = %s"):
+        with vault.migrator() as o, org_transaction(o, token):
+            with pytest.raises(psycopg.errors.IntegrityConstraintViolation):
+                o.execute(sql, (v2["sha256"],))
+
+
+def test_a_replaces_link_must_stay_inside_the_organisation_and_come_later(world):
+    vault, org, boss, dev, brand = world
+    other_org, other_boss = vault.org_with_admin("Other", "boss@other.example")
+    other_brand = other_boss.ok("POST", "/v1/brands", body={"display_name": "Other"})["brand_id"]
+    theirs = other_boss.ok("POST", "/v1/disclosures", body=wording(other_brand, "Their wording."))
+    boss.err("POST", "/v1/disclosures", body=wording(brand, "Mine.", supersedes_sha256=theirs["sha256"]), name="not_found")
+    v1 = boss.ok("POST", "/v1/disclosures", body=wording(brand, "Dated one.", effective_from="2026-05-01T00:00:00Z"))
+    boss.err("POST", "/v1/disclosures", body=wording(brand, "Same day.", effective_from="2026-05-01T00:00:00Z",
+                                                      supersedes_sha256=v1["sha256"]), name="validation_failed")
+    boss.err("POST", "/v1/disclosures", body=wording(brand, "Earlier.", effective_from="2026-04-01T00:00:00Z",
+                                                      supersedes_sha256=v1["sha256"]), name="validation_failed")
+    ok = boss.ok("POST", "/v1/disclosures", body=wording(brand, "Later.", effective_from="2026-06-01T00:00:00Z",
+                                                          supersedes_sha256=v1["sha256"]))
+    assert ok["supersedes_sha256"] == v1["sha256"]
+
+
+def test_the_database_refuses_a_self_cross_organisation_or_earlier_link(world):
+    import psycopg
+    vault, org, boss, dev, brand = world
+    other_org, other_boss = vault.org_with_admin("Other", "boss@other.example")
+    other_brand = other_boss.ok("POST", "/v1/brands", body={"display_name": "Other"})["brand_id"]
+    theirs = other_boss.ok("POST", "/v1/disclosures", body=wording(other_brand, "Their wording."))
+    v1 = boss.ok("POST", "/v1/disclosures", body=wording(brand, "DB one.", effective_from="2026-05-01T00:00:00Z"))
+    org_transaction, token = _owner_tx(vault, org["org_id"])
+    ins = ("INSERT INTO consentvault.disclosure (org_id, sha256, body, label, locale, channels, purposes, supersedes_sha256,"
+           " effective_from) VALUES (%s, %s, 'x', 'x', 'en', '{sms}', '{marketing}', %s, %s)")
+    sha = lambda s: hashlib.sha256(s.encode()).hexdigest()  # noqa: E731
+    cases = [(sha("self"), sha("self"), "2026-06-01T00:00:00Z"), (sha("cross"), theirs["sha256"], "2026-06-01T00:00:00Z"),
+             (sha("early"), v1["sha256"], "2026-04-01T00:00:00Z"), (sha("ghost"), "0" * 64, "2026-06-01T00:00:00Z")]
+    for new, target, when in cases:
+        with vault.migrator() as o, org_transaction(o, token):
+            with pytest.raises(psycopg.errors.IntegrityConstraintViolation):
+                o.execute(ins, (org["org_id"], new, target, when))

@@ -47,7 +47,7 @@ function proofFor(st: Store, contactKey: string): Res {
   const digits = contactKey.replace(/\D/g, '');
   if (digits.endsWith('0503')) return E(503, 'key_unavailable', 'The organization key did not answer.');
   if (!(digits.endsWith('0100') || digits.endsWith('0101') || digits.endsWith('0102') || digits.endsWith('0103') || contactKey === 'dana.test@example.com')) {
-    return OK({ found: false, evaluated_at: nowIso(), notice: 'Evidence status and the outcome of your organization\'s approved policy. Not a legal determination.', permissions: [], timeline: null, disclosures: null, gate_decisions: null, contact_log: null, reviews: null, doc_check_results: null, chain: null });
+    return OK({ found: false, evaluated_at: nowIso(), notice: 'The records held for this contact point, as recorded. ConsentVault records consent and does not decide.', permissions: [], timeline: null, disclosures: null, gate_decisions: null, contact_log: null, reviews: null, doc_check_results: null, chain: null });
   }
   const unsealed = digits.endsWith('0101');
   const review = digits.endsWith('0102');
@@ -56,7 +56,7 @@ function proofFor(st: Store, contactKey: string): Res {
   const pv = inForce ? inForce.version : null;
   const act = (a: 'proceed' | 'hold') => (inForce ? a : null);
   return OK({
-    found: true, evaluated_at: nowIso(), notice: "Evidence status and the outcome of your organization's approved policy. Not a legal determination.",
+    found: true, evaluated_at: nowIso(), notice: "The records held for this contact point, as recorded. ConsentVault records consent and does not decide.",
     permissions: [
       { channel: 'sms', purpose: 'marketing', evidence_status: 'stop_on_record', policy_action: act('hold'), policy_version: pv, basis_event_ids: ['evt_9'] },
       { channel: 'voice', purpose: 'marketing', evidence_status: 'stop_on_record', policy_action: act('hold'), policy_version: pv, basis_event_ids: ['evt_9'] },

@@ -3,7 +3,7 @@ import type { OrgStatus, Role } from './api/types.ts';
 // Copy of record: portal/design/copy-rules.md and the wireframe text.
 // No em dashes or en dashes. Never a legal conclusion.
 
-export const GATE_NOTICE = "Evidence status and the outcome of your organization's approved policy. Not a legal determination.";
+export const GATE_NOTICE = "Evidence status as recorded. Not a legal determination.";
 export const PACKAGE_COVER = 'Its cover page states that the records are evidence for an investigation or dispute, and that storing a record does not by itself establish valid consent.';
 export const ATTESTATION_TEMPLATE = "I am an admin of [Organization]. [Organization] is responsible for whether this policy is legally sufficient for its marketing. ConsentVault recommends that [Organization]'s counsel review it before approval. ConsentVault applies this policy as written and does not decide whether any communication is permitted by law.";
 export const NOT_LEGAL_ADVICE = 'Not legal advice';
@@ -19,6 +19,8 @@ export interface Label { text: string; kind: EvidenceKind; icon: string }
 
 export function evidenceLabel(status: string): Label {
   if (status === 'consent_record_found') return { text: 'Consent record found', kind: 'found', icon: 'i-found' };
+  if (status === 'records_found') return { text: 'Records found', kind: 'found', icon: 'i-found' };
+  if (status === 'no_record_found') return { text: 'No record found', kind: 'none', icon: 'i-none' };
   if (status === 'stop_on_record') return { text: 'Stop on record', kind: 'stop', icon: 'i-stop' };
   if (status === 'no_record') return { text: 'No record', kind: 'none', icon: 'i-none' };
   if (status.startsWith('record_incomplete')) {
@@ -156,7 +158,7 @@ export const CAPTURE_REFUSALS: { answer: string; means: string; todo: string }[]
 ];
 
 // ---- Records, setup and confirmation messages (copy-rules.md section 8) ----
-export const RECORDS_NOTICE = 'Evidence status describes the records held. Your policy outcome for a contact is on its evidence lookup page.';
+export const RECORDS_NOTICE = 'Evidence status describes the records held. Each contact\'s evidence lookup page shows the recorded facts and history.';
 export const RECORDS_SEARCH_HINT = 'Whole number or address only. Each contact is stored encrypted, so partial search is not possible.';
 export const REVEAL_DIALOG = 'Each page you open this way writes one audit row with your name and the records shown.';
 export const REGISTRATION_DIALOG = 'ConsentVault records who marked it and when. It does not check your registration with carriers or your provider.';

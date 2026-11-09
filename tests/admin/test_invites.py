@@ -189,3 +189,78 @@ def test_accept_itself_refuses_an_identity_with_no_second_factor(vault, org):
         with pytest.raises(ApiError) as exc:
             invite.accept(c, vault.key, token=token, identity=weak, request_id="r-weak")
     assert exc.value.name == "second_factor_required"
+
+
+# ---- sign-in joins the person to the organisations that invited their verified address ----
+
+def session(vault, idt):
+    return vault.app.handle(Request("GET", "/v1/session", identity_token=idt, request_id="r-sess"))
+
+
+def _count(vault, sql, *a):
+    with vault.superuser() as su:
+        return su.execute(sql, a).fetchone()["n"]
+
+
+def test_sign_in_with_a_pending_invitation_joins_without_the_link(vault, org):
+    o, boss = org
+    boss.ok("POST", "/v1/members", body={"email": "ana@acme.example", "role": "admin"})
+    audits = "SELECT count(*) AS n FROM consentvault.audit_event WHERE action = 'invite.accepted'"
+    before = _count(vault, audits)
+    r = session(vault, vault.idp.issue("ana-1", "ana@acme.example"))
+    assert r.status == 200 and [(i["org_id"], i["name"], i["role"]) for i in r.body["items"]] == [(o["org_id"], "Acme", "admin")]
+    assert _count(vault, "SELECT count(*) AS n FROM consentvault.invite WHERE accepted_at IS NOT NULL AND email_norm = 'ana@acme.example'") == 1
+    assert _count(vault, "SELECT count(*) AS n FROM consentvault.member WHERE email_norm = 'ana@acme.example'") == 1
+    assert _count(vault, audits) == before + 1
+    again = session(vault, vault.idp.issue("ana-1", "ana@acme.example"))
+    assert len(again.body["items"]) == 1
+    assert _count(vault, audits) == before + 1
+    chosen = vault.app.handle(Request("POST", "/v1/session/org", body={"org_id": o["org_id"]},
+                                      identity_token=vault.idp.issue("ana-1", "ana@acme.example"), request_id="r-ch"))
+    assert chosen.status == 200 and chosen.body["role"] == "admin"
+
+
+def test_the_emailed_link_still_works_and_a_used_link_is_used(vault, org):
+    o, boss = org
+    boss.ok("POST", "/v1/members", body={"email": "ana@acme.example", "role": "developer"})
+    tok = vault.mailer.token_for("ana@acme.example")
+    session(vault, vault.idp.issue("ana-1", "ana@acme.example"))
+    assert accept(vault, tok, vault.idp.issue("ana-1", "ana@acme.example")).body["error"] == "invite_used"
+    boss.ok("POST", "/v1/members", body={"email": "bob@acme.example", "role": "developer"})
+    assert accept(vault, vault.mailer.token_for("bob@acme.example"), vault.idp.issue("bob-1", "bob@acme.example")).status == 200
+
+
+def test_an_unverified_address_or_no_second_factor_joins_nothing(vault, org):
+    o, boss = org
+    boss.ok("POST", "/v1/members", body={"email": "ana@acme.example", "role": "admin"})
+    r = session(vault, vault.idp.issue("ana-1", "ana@acme.example", verified=False))
+    assert r.status == 200 and r.body["items"] == []
+    r = session(vault, vault.idp.issue("ana-1", "ana@acme.example", mfa=False))
+    assert r.status == 403
+    assert _count(vault, "SELECT count(*) AS n FROM consentvault.member WHERE email_norm = 'ana@acme.example'") == 0
+    assert _count(vault, "SELECT count(*) AS n FROM consentvault.invite WHERE accepted_at IS NOT NULL AND email_norm = 'ana@acme.example'") == 0
+
+
+def test_withdrawn_and_expired_invitations_join_nothing(vault, org):
+    o, boss = org
+    boss.ok("POST", "/v1/members", body={"email": "ana@acme.example", "role": "developer"})
+    boss.ok("POST", "/v1/members", body={"email": "bob@acme.example", "role": "developer"})
+    ids = {i["email"]: i["id"] for i in boss.ok("GET", "/v1/members", {"include": "invites"})["items"]}
+    assert boss.call("DELETE", f"/v1/invites/{ids['ana@acme.example']}").status == 204
+    with vault.superuser() as su:
+        su.execute("ALTER TABLE consentvault.invite DISABLE TRIGGER invite_guard")
+        su.execute("ALTER TABLE consentvault.invite DROP CONSTRAINT invite_life")
+        su.execute("UPDATE consentvault.invite SET expires_at = now() - interval '1 minute', created_at = now() - interval '8 days'"
+                   " WHERE email_norm = 'bob@acme.example'")
+    assert session(vault, vault.idp.issue("ana-1", "ana@acme.example")).body["items"] == []
+    assert session(vault, vault.idp.issue("bob-1", "bob@acme.example")).body["items"] == []
+
+
+def test_two_pending_invitations_to_different_organisations_are_both_listed_and_the_person_chooses(vault, org):
+    o, boss = org
+    o2, boss2 = vault.org_with_admin("Birch", "boss@birch.example")
+    boss.ok("POST", "/v1/members", body={"email": "ana@acme.example", "role": "admin"})
+    boss2.ok("POST", "/v1/members", body={"email": "ana@acme.example", "role": "developer"})
+    r = session(vault, vault.idp.issue("ana-1", "ana@acme.example"))
+    assert sorted(i["name"] for i in r.body["items"]) == ["Acme", "Birch"]
+    assert r.body.get("next_cursor") is None

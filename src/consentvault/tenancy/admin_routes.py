@@ -322,7 +322,7 @@ class AdminApp:
         conn = self._connect()
         try:
             if route.handler == "session_get":
-                return self._sessions.memberships(conn, req.identity_token, **_paging(req.query or {}), now=self._clock(), assertion=req.edge_assertion)
+                return self._sessions.memberships(conn, req.identity_token, **_paging(req.query or {}), now=self._clock(), assertion=req.edge_assertion, request_id=req.request_id)
             body = body_dict(req.body)
             chosen = self._sessions.choose_org(conn, req.identity_token, body.get("org_id"), request_id=req.request_id,
                                            assertion=req.edge_assertion)

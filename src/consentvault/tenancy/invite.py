@@ -177,6 +177,13 @@ def accept(conn: psycopg.Connection, token_key: TokenKey, *, token: str, identit
                                                f"sign in with that address")
     if r.org_status == "closed":
         raise ApiError("org_not_active", "the organization is closed")
+    return _join(conn, token_key, r, identity, claims, signed_in, request_id, token)
+
+
+def _join(conn, token_key: TokenKey, r: Resolved, identity, claims: dict, signed_in: str, request_id: str,
+          token: Optional[str]) -> dict:
+    """The acceptance itself: inside the invited organisation's tenant, mark the invitation accepted (once), create the
+    membership, write the audit row. ``token`` is None on the sign-in path, where the lost race is simply 'not usable'."""
     entry = mint_org_token(token_key, r.org_id, ["invite_accept"], credential_id=None, ttl_seconds=ACCEPT_TOKEN_SECONDS)
     display = claims.get("name") if isinstance(claims.get("name"), str) and claims.get("name").strip() else None
     try:
@@ -188,7 +195,8 @@ def accept(conn: psycopg.Connection, token_key: TokenKey, *, token: str, identit
                 " AND invite_id = %s AND accepted_at IS NULL AND withdrawn_at IS NULL AND expires_at > now()"
                 " RETURNING role", (r.invite_id,)).fetchone()
             if row is None:
-                _lookup(conn, token)  # raises the precise reason (used, withdrawn, expired) after a lost race
+                if token is not None:
+                    _lookup(conn, token)  # raises the precise reason (used, withdrawn, expired) after a lost race
                 raise ApiError("invite_not_found", "no invitation for that link")
             m = conn.execute(
                 "INSERT INTO consentvault.member (org_id, idp_issuer, idp_subject, role, email_norm, display_name,"
@@ -207,3 +215,39 @@ def accept(conn: psycopg.Connection, token_key: TokenKey, *, token: str, identit
     except psycopg.errors.UniqueViolation:
         raise ApiError("already_member", "that person is already a member of this organization") from None
     return {"org_id": str(r.org_id), "name": org["name"], "role": row["role"], "status": org["status"]}
+
+
+def accept_pending(conn: psycopg.Connection, token_key: TokenKey, *, identity, request_id: str) -> list[dict]:
+    """On sign-in: join the person to every organisation holding an open invitation for their verified address, without
+    the emailed link. The address comes only from the identity (the edge's signed assertion), never from a request.
+    Needs a second factor and a provider-verified address, else joins nothing. Each invitation is accepted exactly once;
+    one that cannot be accepted now (company sign-in required, already a member, lost race) is skipped and stays open.
+    Returns the organisations joined."""
+    if not getattr(identity, "multi_factor", False):
+        return []
+    claims = identity.claims
+    raw_email = claims.get("email")
+    if not isinstance(raw_email, str) or claims.get("email_verified") is not True:
+        return []
+    try:
+        signed_in = normalize_email(raw_email)
+    except NormalizationError:
+        return []
+    rows = conn.execute("SELECT org_id, invite_id FROM consentvault.invite_pending_for_email(%s)", (signed_in,)).fetchall()
+    joined = []
+    for pr in rows:
+        entry = mint_org_token(token_key, pr["org_id"], ["invite_read"], credential_id=None, ttl_seconds=30)
+        with org_transaction(conn, entry):
+            inv = conn.execute("SELECT i.invite_id, i.role, i.email_norm, i.expires_at, i.invited_by, o.status AS org_status,"
+                               " o.name FROM consentvault.invite i JOIN consentvault.organization o ON o.org_id = i.org_id"
+                               " WHERE i.org_id = (SELECT consentvault.current_org()) AND i.invite_id = %s",
+                               (pr["invite_id"],)).fetchone()
+        if inv is None or inv["org_status"] == "closed":
+            continue
+        r = Resolved(pr["org_id"], inv["invite_id"], inv["name"], inv["org_status"], inv["role"], "ConsentVault",
+                     inv["email_norm"], inv["expires_at"])
+        try:
+            joined.append(_join(conn, token_key, r, identity, claims, signed_in, request_id, None))
+        except ApiError:
+            continue  # not joinable now; the invitation stays open for the emailed link
+    return joined

@@ -97,9 +97,11 @@ class SessionMinter:
             raise ApiError("unauthenticated", "the sign-in token is missing, expired or not valid") from None
 
     def memberships(self, conn: psycopg.Connection, id_token: Any, *, limit: Any = None,
-                    cursor: Optional[str] = None, now: float = 0.0, assertion: Optional[str] = None) -> dict:
+                    cursor: Optional[str] = None, now: float = 0.0, assertion: Optional[str] = None, request_id: str = "") -> dict:
         """GET /v1/session: who is signed in and every membership (an empty list is an account with none)."""
         who = self.verify(id_token, assertion)
+        from . import invite as invite_mod
+        invite_mod.accept_pending(conn, self._key, identity=who, request_id=request_id or "session-sign-in")
         rows = self._named(conn, who)
         mine = who.claims.get("sso_connection_id")
         if mine:  # a single sign-in sees only the organizations connected to that same connection (a pending one: admins only)

@@ -155,3 +155,38 @@ def test_a_stop_through_parse_capture_and_tenant_capture_ignores_the_text():
             "contact_verification": "inbound_keyword", "inbound_message": "STOP"}
     req = parse_capture(body, b"{}", ("capture",))
     assert req.fields.get("contact_verification", "none") == "none" and "inbound_message" not in req.fields
+
+
+def test_r9_resend_inside_interval_then_stop(cloud, monkeypatch):
+    """The real live retry interval (one-door review round 9). A grant faults; its resend arrives inside the interval and waits; a stop
+    arriving after records at once and stands; the later run then records the grant once, placed where it arrived, BEFORE the stop,
+    so the stop is still the open stop and the grant lifts nothing."""
+    from consentvault import api
+
+    assert door.LIVE_RETRY_INTERVAL_SECONDS > 0
+    nonce = str(uuid.uuid4())
+    tok = cloud.token(cloud.a, "capture")
+    h = {"X-ConsentVault-Request-Id": "form-r9"}
+    real = door.TenantBackend.apply
+    n = {"c": 0}
+
+    def dies(self, *a, **k):
+        n["c"] += 1
+        if n["c"] == 1:
+            raise psycopg.OperationalError("process died before the event")
+        return real(self, *a, **k)
+    base = _events(cloud, "grant")
+    monkeypatch.setattr(door.TenantBackend, "apply", dies)
+    cloud.call("/v1/events", _grant_body(cloud, nonce), token=tok, headers=h)
+    cloud.server.drain(30)
+    cloud.call("/v1/events", _grant_body(cloud, nonce), token=tok, headers=h)   # the resend, inside the interval
+    cloud.server.drain(30)
+    assert _events(cloud, "grant") == base                                       # waiting for the next run, nothing recorded twice
+    assert _stop(cloud)[0] == 201
+    cloud.server.drain(30)
+    assert len(_open_stops(cloud)) == 1                                          # the stop records at once
+    with cloud.t.superuser() as su:
+        home = su.execute("SELECT consentvault.home_org() AS h").fetchone()["h"]
+    api.rebuild_cloud(cloud.settings, [home, cloud.a.org.org_id, cloud.b.org.org_id])
+    assert _events(cloud, "grant") == base + 1
+    assert len(_open_stops(cloud)) == 1                                          # the grant arrived before the stop and lifts nothing

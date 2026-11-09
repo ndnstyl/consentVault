@@ -582,7 +582,7 @@ def _record(writer, conn, enter, view: PostView, outcome: Outcome) -> Outcome:
             Fact("vault", "event_not_derived", outcome.reason)
         writer.append_facts(conn, enter, view.org_id, view.post_id, view.facts.get(("__key__", "data_key")),
                             [fact, Fact("vault", "projection_code_version", CODE_VERSION)])
-    except (ConsentVaultError, psycopg.Error) as exc:
+    except Exception as exc:  # loud-failure-exempt: logged by name; the post is not dropped and no other post of the organisation waits on this record
         _log.error("the outcome of a stored post could not be recorded beside it", error=type(exc).__name__)
     return outcome
 

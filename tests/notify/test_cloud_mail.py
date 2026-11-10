@@ -19,7 +19,7 @@ from consentvault.notify.ses import HttpResponse, SesSender
 from consentvault.providers.rds_iam import AwsCredentials
 
 NOW = datetime(2026, 10, 31, 12, 0, 0, tzinfo=timezone.utc)
-TOPIC = "arn:aws:sns:us-east-1:845282034766:consentvault-alerts"
+TOPIC = "arn:aws:sns:us-east-1:123456789012:consentvault-alerts"
 ENV = {
     "AWS_REGION": "us-east-1",
     "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/credentials/x",
@@ -210,7 +210,7 @@ def test_no_task_role_access_refuses_by_name():
     (ENV_PORTAL_URL, "https://app.consentvault.ai/?x=1"),
     (ENV_PORTAL_URL, "https://user@app.consentvault.ai"),
     ("CONSENTVAULT_ALERTS_TOPIC_ARN", "consentvault-alerts"),
-    ("CONSENTVAULT_ALERTS_TOPIC_ARN", "arn:aws:sns:us-west-2:845282034766:consentvault-alerts"),
+    ("CONSENTVAULT_ALERTS_TOPIC_ARN", "arn:aws:sns:us-west-2:123456789012:consentvault-alerts"),
 ])
 def test_a_malformed_setting_refuses_by_name(name, value):
     with pytest.raises(ConfigError, match=name):

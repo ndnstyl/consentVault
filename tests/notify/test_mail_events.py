@@ -27,7 +27,7 @@ from consentvault.notify.ses import HttpResponse, SesSender
 from consentvault.providers.rds_iam import AwsCredentials
 
 NOW = datetime(2026, 10, 31, 12, 0, tzinfo=timezone.utc)
-QUEUE = "https://sqs.us-east-1.amazonaws.com/845282034766/cv-mail-events"
+QUEUE = "https://sqs.us-east-1.amazonaws.com/123456789012/cv-mail-events"
 
 
 class Creds:
@@ -194,8 +194,8 @@ def test_the_cloud_relay_needs_the_events_queue_and_the_self_host_has_none():
             events_queue(env, cloud=True)
 
 
-@pytest.mark.parametrize("url", ["http://sqs.us-east-1.amazonaws.com/845282034766/q", "https://evil.example.com/845282034766/q",
-                                 "https://sqs.us-west-2.amazonaws.com/845282034766/q", "https://sqs.us-east-1.amazonaws.com/q"])
+@pytest.mark.parametrize("url", ["http://sqs.us-east-1.amazonaws.com/123456789012/q", "https://evil.example.com/123456789012/q",
+                                 "https://sqs.us-west-2.amazonaws.com/123456789012/q", "https://sqs.us-east-1.amazonaws.com/q"])
 def test_a_queue_url_outside_this_region_or_not_sqs_is_refused(url):
     with pytest.raises(ConfigError, match="CONSENTVAULT_SES_EVENTS_QUEUE_URL"):
         events_queue({**ENV, "CONSENTVAULT_SES_EVENTS_QUEUE_URL": url}, cloud=True)
@@ -206,7 +206,7 @@ def test_the_cloud_mailer_needs_its_configuration_set():
 
     env = {"AWS_REGION": "us-east-1", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/x", "CONSENTVAULT_MAIL_FROM": "no-reply@consentvault.ai",
            "CONSENTVAULT_PORTAL_URL": "https://app.consentvault.ai",
-           "CONSENTVAULT_ALERTS_TOPIC_ARN": "arn:aws:sns:us-east-1:845282034766:cv-alerts", "CONSENTVAULT_DB_AUTH": "iam",
+           "CONSENTVAULT_ALERTS_TOPIC_ARN": "arn:aws:sns:us-east-1:123456789012:cv-alerts", "CONSENTVAULT_DB_AUTH": "iam",
            "CONSENTVAULT_DB_HOST": "h", "CONSENTVAULT_DB_NAME": "n", "CONSENTVAULT_DB_USER": "u"}
     with pytest.raises(ConfigError, match="CONSENTVAULT_SES_CONFIGURATION_SET"):
         SesNotifier.from_environment(env)

@@ -2,6 +2,8 @@
 # wrangler.portal.toml and edit; it is published the same way as the capture Worker.
 # Secrets are never written here; set each as a Worker secret with the Cloudflare CLI:
 #   ACCESS_CLIENT_SECRET   the Access service token's secret toward the vault origin
+#   CV_WAKE_KEY            the shared secret that signs the request to the cv-wake function (the same value as the AWS secret cv/wake-hmac);
+#                          without it, and CV_WAKE_URL below, a parked vault cannot be started and the page says so.
 #   AUTH_CLIENT_SECRET     the identity provider's server key (used only for the code exchange and refresh)
 #   ASSERTION_KEY_JWK      the edge's private P-256 key (JWK with a kid); required: without it every sign-in route answers 500.
 #                          The vault is configured with the public half (CONSENTVAULT_EDGE_ASSERTION_KEYS, key id to PEM).
@@ -35,6 +37,8 @@ new_sqlite_classes = ["SessionGate"]
 
 [vars]
 ORIGIN_URL = "https://vault.example.com"
+# The cv-wake function's URL (the tofu output wake_function_url). Called once per cold period when the vault is parked.
+CV_WAKE_URL = "https://replace-with-the-wake-function-url.lambda-url.us-east-1.on.aws/"
 ACCESS_CLIENT_ID = "replace-with-the-access-service-token-id"
 # The identity provider's user-management base (WorkOS: https://api.workos.com/user_management).
 AUTH_BASE_URL = "https://api.workos.com/user_management"

@@ -6,6 +6,6 @@
   "description": "Capture edge for the consentvault consent vault",
   "license": "MIT",
   "scripts": {
-    "test": "node --test test/worker.test.ts test/capture.test.ts test/gateway.test.ts test/egress.test.ts test/egress-call.test.ts test/gateway-twenty.test.ts test/gateway-stripe.test.ts test/egress-ipv6.test.ts test/auth.test.ts test/gateway-session.test.ts test/portal.test.ts test/session-store.test.ts test/assertion.test.ts"
+    "test": "node --test test/wake.test.ts test/portal-wake.test.ts test/worker.test.ts test/capture.test.ts test/gateway.test.ts test/egress.test.ts test/egress-call.test.ts test/gateway-twenty.test.ts test/gateway-stripe.test.ts test/egress-ipv6.test.ts test/auth.test.ts test/gateway-session.test.ts test/portal.test.ts test/session-store.test.ts test/assertion.test.ts"
   }
 }

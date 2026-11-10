@@ -163,24 +163,13 @@ export function createClient(opts: ClientOptions = {}) {
     erasure: {
       request: (contact: string, reason: string) => post<T.ErasureAccepted>('/v1/contacts:erase', { contact, reason }),
     },
-    // policy.md
+    // reference lists
     channels: (q?: Paged) => get<T.Page<T.Channel>>('/v1/channels', q),
     purposes: (q?: Paged) => get<T.Page<T.Purpose>>('/v1/purposes', q),
     disclosures: {
       list: (q?: Paged & { brand_id?: string; channel?: string; purpose?: string; state?: 'current' | 'superseded' }) => get<T.Page<T.Disclosure>>('/v1/disclosures', q),
       get: (sha256: string) => get<T.Disclosure>(`/v1/disclosures/${enc(sha256)}`),
       register: (b: { body: string; label: string; channels: string[]; purposes: string[]; brand_ids: string[]; supersedes_sha256?: string; effective_from: string }) => post<T.Disclosure>('/v1/disclosures', b),
-    },
-    policies: {
-      list: (q?: Paged & { status?: string }) => get<T.Page<T.PolicyItem>>('/v1/policies', q),
-      get: (version: number | string) => get<T.PolicyDetail>(`/v1/policies/${enc(String(version))}`),
-      create: (b: { rules: T.PolicyRules; template_ref?: string; based_on_version?: number }) => post<{ version: number; status: 'draft' }>('/v1/policies', b),
-      replace: (version: number, rules: T.PolicyRules) => put<T.PolicyDetail>(`/v1/policies/${version}`, { rules }),
-      approve: (version: number, attestation_version: number, attestation_sha256: string) =>
-        post<{ version: number; status: 'approved'; approved_by: string; approved_at: string; retired: { version: number; retired_at: string } | null }>(
-          `/v1/policies/${version}:approve`, { attestation_version, attestation_sha256, accepted: true }),
-      templates: (q?: Paged) => get<T.Page<T.PolicyTemplate>>('/v1/policy-templates', q),
-      attestation: () => get<T.Attestation>('/v1/attestations/current'),
     },
     checklists: {
       list: (q?: Paged & { kind?: string; status?: string }) => get<T.Page<T.ChecklistItem>>('/v1/checklists', q),

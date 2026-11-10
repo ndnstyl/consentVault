@@ -435,7 +435,7 @@ export function Records() {
               {(summary.status === 'error' || (sum && sum.by_channel === null)) && <p className="na">{NA}</p>}
               {sum && sum.by_channel && <><ShareBars by={sum.by_channel} call={sum.call} />
                 {filters.state === 'erased' && <p className="hint mt4">These records are erased. Each stop shown was written by the erasure request, on the channels it was recorded on.</p>}
-                <p className="hint mt4">Each record counts once per channel, as the records show it. Where a stop and a consent are both recorded for a channel, the count shows the stop, as read under the rule-set in use. Whether a record is complete against your documentation checklist depends on your policy, and shows on each contact's evidence lookup page, not here. A record is one phone number or one email address, so an email record reads No record for Text and Call, and a phone record reads No record for Email. A stop is recorded on the channel it arrived on. How far a stop reaches is set by the rule-set in use, which your counsel may replace. This portal does not name the rule-set yet; each contact's evidence lookup page lists the stop with the channel it arrived on.</p></>}
+                <p className="hint mt4">Each record counts once per channel, as the records show it. Where a stop and a consent are both recorded for a channel, the count shows the stop, as read under the rule-set in use. Whether a record is complete against your documentation checklist depends on the checklist, and shows on each contact's evidence lookup page, not here. A record is one phone number or one email address, so an email record reads No record for Text and Call, and a phone record reads No record for Email. A stop is recorded on the channel it arrived on. How far a stop reaches is set by the rule-set in use, which your counsel may replace. This portal does not name the rule-set yet; each contact's evidence lookup page lists the stop with the channel it arrived on.</p></>}
             </div>
           </div>
 
@@ -500,7 +500,7 @@ export function Records() {
           )}
           {rows.length > 0 && (
             <>
-              <DataTable caption="Records, newest event first. Status chips show evidence status, not your policy." rows={rows} rowKey={(r) => r.record_id} columns={columns} />
+              <DataTable caption="Records, newest event first. Status chips show the evidence status as recorded." rows={rows} rowKey={(r) => r.record_id} columns={columns} />
               {!found && (
                 <div className="between mt4">
                   <p className="hint">{total === null ? `Showing ${pageIdx * PAGE + 1} to ${pageIdx * PAGE + rows.length}. Total not available.` : `Showing ${pageIdx * PAGE + 1} to ${pageIdx * PAGE + rows.length} of ${fmtNum(total)}`}</p>

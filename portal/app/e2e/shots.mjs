@@ -14,8 +14,8 @@ const base = `http://127.0.0.1:${server.address().port}`;
 const setScenario = (s) => fetch(`${base}/__mock/scenario`, { method: 'POST', body: JSON.stringify(s) });
 const browser = await chromium.launch();
 const list = [
-  ['overview', '/', {}, 1440], ['overview-m', '/', {}, 375], ['overview-new', '/', { setup: 'new', firstEvent: 'none', policyInForce: false, orgStatus: 'trial' }, 1440],
-  ['policy-edit', '/policies/4', {}, 1440], ['approve', '/policies/4/approve', {}, 1440], ['creds', '/credentials', {}, 1440], ['cred-new-m', '/credentials/new', {}, 375],
+  ['overview', '/', {}, 1440], ['overview-m', '/', {}, 375], ['overview-new', '/', { setup: 'new', firstEvent: 'none', orgStatus: 'trial' }, 1440],
+  ['creds', '/credentials', {}, 1440], ['cred-new-m', '/credentials/new', {}, 375],
   ['system', '/systems/sys_dialer', {}, 1440], ['sign-in', '/sign-in', {}, 1440], ['first-event', '/setup/first-event', { firstEvent: 'none' }, 1440], ['sources-m', '/sources', {}, 375], ['audit', '/audit', {}, 1440],
 ];
 const only = process.argv[2];

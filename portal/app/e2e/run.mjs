@@ -73,7 +73,7 @@ const cases = [
   ['choose-org', '/choose-org', { orgs: 'two', preselected: false }], ['choose-org partial', '/choose-org', { orgs: 'two', preselected: false, nulls: ['org2_status'] }], ['choose-org error', '/choose-org', { orgs: 'two', preselected: false, ...fail('GET /v1/session') }, true],
   ['plan', '/start/plan', { orgStatus: 'trial' }], ['plan empty', '/start/plan', { orgStatus: 'trial', empty: ['plans'] }], ['plan error', '/start/plan', { orgStatus: 'trial', ...fail('GET /v1/billing/plans') }, true], ['plan not admin', '/start/plan', { role: 'compliance_viewer' }],
   ['checkout cancel', '/billing/return?result=cancel', { orgStatus: 'trial' }], ['checkout confirming', '/billing/return?result=success', { orgStatus: 'trial' }], ['checkout active', '/billing/return?result=success', {}],
-  ['overview', '/', {}], ['overview new org', '/', { setup: 'new', firstEvent: 'none', policyInForce: false, orgStatus: 'trial' }], ['overview blank', '/', { setup: 'blank', firstEvent: 'none', policyInForce: false }], ['overview partial', '/', { nulls: ['usage', 'health'] }], ['overview error', '/', gone, true],
+  ['overview', '/', {}], ['overview new org', '/', { setup: 'new', firstEvent: 'none', orgStatus: 'trial' }], ['overview blank', '/', { setup: 'blank', firstEvent: 'none' }], ['overview partial', '/', { nulls: ['usage', 'health'] }], ['overview error', '/', gone, true],
   ['overview past due', '/', { orgStatus: 'past_due' }], ['overview suspended', '/', { orgStatus: 'suspended' }], ['overview trial', '/', { orgStatus: 'trial' }], ['overview offboarding', '/', { orgStatus: 'offboarding' }], ['overview closed', '/', { orgStatus: 'closed' }],
   ['overview viewer', '/', { role: 'compliance_viewer' }], ['overview developer', '/', { role: 'developer' }], ['overview two orgs', '/', { orgs: 'two' }],
   ['overview alarms', '/', { alarms: ['reveal_volume', 'sending_account_failing', 'something_new'] }], ['overview alarms viewer', '/', { role: 'compliance_viewer', alarms: ['reveal_volume'] }],
@@ -81,11 +81,9 @@ const cases = [
   ['brands', '/brands', {}], ['brands empty', '/brands', { empty: ['brands'] }], ['brands partial', '/brands', { nulls: ['source_counts'] }], ['brands error', '/brands', fail('GET /v1/brands'), true], ['brands developer', '/brands', { role: 'developer' }],
   ['sources', '/sources', {}], ['sources empty', '/sources', { empty: ['sources'] }], ['sources no brand', '/sources', { empty: ['brands', 'sources'] }], ['sources partial', '/sources', { nulls: ['last_event'] }], ['sources error', '/sources', fail('GET /v1/sources'), true], ['source detail', '/sources/src_web', {}], ['source detail not found', '/sources/zzz', {}, true],
   ['credentials', '/credentials', {}], ['credentials empty', '/credentials', { empty: ['credentials'] }], ['credentials partial', '/credentials', fail('GET /v1/sources'), true], ['credentials error', '/credentials', fail('GET /v1/credentials'), true], ['credentials suspended', '/credentials', { orgStatus: 'suspended' }], ['credentials developer', '/credentials', { role: 'developer' }],
-  ['credential new', '/credentials/new', {}], ['credential new no policy', '/credentials/new', { policyInForce: false }], ['credential new suspended', '/credentials/new', { orgStatus: 'suspended' }], ['credential new developer', '/credentials/new', { role: 'developer' }],
+  ['credential new', '/credentials/new', {}], ['credential new suspended', '/credentials/new', { orgStatus: 'suspended' }], ['credential new developer', '/credentials/new', { role: 'developer' }],
   ['wording', '/wording', {}], ['wording empty', '/wording', { empty: ['disclosures'] }], ['wording error', '/wording', fail('GET /v1/disclosures'), true], ['wording viewer', '/wording', { role: 'compliance_viewer' }], ['wording new', '/wording/new', {}], ['wording detail', `/wording/${SHA}`, {}], ['wording detail not found', '/wording/nope', {}, true],
-  ['policies', '/policies', {}], ['policies empty', '/policies', { empty: ['policies'] }], ['policies none in force', '/policies', { policyInForce: false }], ['policies partial', '/policies', { nulls: ['approver'] }], ['policies error', '/policies', fail('GET /v1/policies'), true], ['policies viewer', '/policies', { role: 'compliance_viewer' }],
-  ['policy new', '/policies/new', {}], ['policy draft', '/policies/4', {}], ['policy in force', '/policies/3', {}], ['policy in force viewer', '/policies/3', { role: 'compliance_viewer' }], ['policy approve', '/policies/4/approve', {}],
-  ['checklists', '/checklists', {}], ['checklists empty', '/checklists', { empty: ['checklists'] }], ['checklists partial', '/checklists', fail('GET /v1/policies/3'), true], ['checklists error', '/checklists', fail('GET /v1/checklists'), true], ['checklist approved', '/checklists/2', {}], ['checklist draft', '/checklists/3', {}],
+  ['checklists', '/checklists', {}], ['checklists empty', '/checklists', { empty: ['checklists'] }], ['checklists error', '/checklists', fail('GET /v1/checklists'), true], ['checklist approved', '/checklists/2', {}], ['checklist draft', '/checklists/3', {}],
   ['evidence', '/evidence', {}], ['evidence viewer', '/evidence', { role: 'compliance_viewer' }], ['evidence suspended', '/evidence', { orgStatus: 'suspended' }], ['evidence developer refused', '/evidence', { role: 'developer' }],
   ['exports', '/exports', {}], ['exports suspended', '/exports', { orgStatus: 'suspended' }], ['exports error', '/exports', fail('GET /v1/exports'), true], ['exports viewer', '/exports', { role: 'compliance_viewer' }],
   ['systems', '/systems', {}], ['systems empty', '/systems', { empty: ['systems'] }], ['systems partial', '/systems', { nulls: ['system_counts'] }], ['systems error', '/systems', fail('GET /v1/systems'), true], ['systems viewer', '/systems', { role: 'compliance_viewer' }], ['system new', '/systems/new', {}], ['system detail', '/systems/sys_dialer', {}], ['system detail crm', '/systems/sys_crm', {}],
@@ -101,9 +99,9 @@ const cases = [
   ['records erased', '/records?state=erased', {}], ['records partial masks', '/records', { nulls: ['rec_mask'] }], ['records partial names', '/records', { nulls: ['rec_person'] }], ['records partial total', '/records', { nulls: ['rec_total'] }],
   ['records partial chart', '/records', { nulls: ['rec_chart'] }], ['records summary failed', '/records', fail('GET /v1/records/summary'), true], ['records error', '/records', fail('GET /v1/records'), true],
   ['records audit unavailable', '/records', fail('GET /v1/records', 503, 'audit_unavailable'), true], ['records viewer', '/records', { role: 'compliance_viewer' }], ['records developer', '/records', { role: 'developer' }], ['records suspended', '/records', { orgStatus: 'suspended' }],
-  ['setup welcome', '/setup', { setup: 'blank', firstEvent: 'none', policyInForce: false }], ['setup resumed', '/setup', { setup: 'new', firstEvent: 'none', policyInForce: false }], ['setup waiting for event', '/setup?step=first_event', { setup: 'almost', firstEvent: 'none' }],
-  ['setup partial', '/setup', { setup: 'new', firstEvent: 'none', policyInForce: false, nulls: ['setup.credential'] }], ['setup policy step', '/setup?step=policy', { setup: 'new', firstEvent: 'none', policyInForce: false }], ['setup optional step', '/setup?step=system', { setup: 'almost' }],
-  ['setup developer', '/setup', { role: 'developer', setup: 'new', firstEvent: 'none', policyInForce: false }], ['setup suspended', '/setup?step=credential', { setup: 'almost', orgStatus: 'suspended', empty: ['credentials'] }], ['setup error', '/setup', fail('GET /v1/setup'), true],
+  ['setup welcome', '/setup', { setup: 'blank', firstEvent: 'none' }], ['setup resumed', '/setup', { setup: 'new', firstEvent: 'none' }], ['setup waiting for event', '/setup?step=first_event', { setup: 'almost', firstEvent: 'none' }],
+  ['setup partial', '/setup', { setup: 'new', firstEvent: 'none', nulls: ['setup.credential'] }], ['setup optional step', '/setup?step=system', { setup: 'almost' }],
+  ['setup developer', '/setup', { role: 'developer', setup: 'new', firstEvent: 'none' }], ['setup suspended', '/setup?step=credential', { setup: 'almost', orgStatus: 'suspended', empty: ['credentials'] }], ['setup error', '/setup', fail('GET /v1/setup'), true],
   ['setup viewer refused', '/setup', { role: 'compliance_viewer' }], ['setup complete', '/setup', {}],
   ['confirmations', '/confirmations', {}], ['confirmations empty', '/confirmations', { confirmations: 'empty' }], ['confirmations texts off', '/confirmations', { confirmations: 'texts_off' }], ['confirmations awaiting test reply', '/confirmations', { confirmations: 'awaiting' }],
   ['confirmations link host unset', '/confirmations', { confirmations: 'link_unset' }], ['confirmations account failing', '/confirmations', { confirmations: 'failing' }], ['confirmations partial counts', '/confirmations', { nulls: ['conf_counts'] }],
@@ -296,15 +294,15 @@ async function flows() {
   await page.getByRole('button', { name: 'Choose Growth' }).click(); await page.waitForURL(/__mock\/stripe\/checkout/, { timeout: 4000 }).catch(() => undefined);
   ok('04-1 checkout posts once and navigates to Stripe', page.url().includes('/__mock/stripe/checkout') && (await log()).filter((r) => r.url === '/v1/billing/checkout').length === 1);
   // 05-1: new org checklist
-  await go('/', { setup: 'new', firstEvent: 'none', policyInForce: false, orgStatus: 'trial' });
-  ok('05-1 the checklist is the eight steps the service reports, one primary button', (await page.locator('ol.steps > li').count()) === 8 && (await page.locator('ol.steps .btn-primary').count()) === 1);
+  await go('/', { setup: 'new', firstEvent: 'none', orgStatus: 'trial' });
+  ok('05-1 the checklist is the seven steps the service reports, one primary button', (await page.locator('ol.steps > li').count()) === 7 && (await page.locator('ol.steps .btn-primary').count()) === 1);
   ok('05-1 primary is the first not-done item', (await page.locator('ol.steps .btn-primary').innerText()) === 'Register your consent wording');
   const stepLis = await page.locator('ol.steps > li').allInnerTexts();
-  ok('05-1 the checklist names the two optional steps and each step status word', /Done/.test(stepLis[0]) && /Done/.test(stepLis[1]) && /To do/.test(stepLis[2]) && /Connect a system that receives stops \(optional\)/.test(stepLis[6]) && /Turn on confirmation messages \(optional\)/.test(stepLis[7]), stepLis.join(' | '));
+  ok('05-1 the checklist names the two optional steps and each step status word', /Done/.test(stepLis[0]) && /Done/.test(stepLis[1]) && /To do/.test(stepLis[2]) && /Connect a system that receives stops \(optional\)/.test(stepLis[5]) && /Turn on confirmation messages \(optional\)/.test(stepLis[6]), stepLis.join(' | '));
   ok('05-1 the checklist is driven by GET /v1/setup and not by five separate list reads', (await log()).filter((r) => r.url === '/v1/setup').length === 1 && (await log()).filter((r) => /^\/v1\/(brands|sources|credentials|disclosures)(\?|$)/.test(r.url)).length === 0);
-  await go('/', { role: 'compliance_viewer', setup: 'new', firstEvent: 'none', policyInForce: false });
-  ok('05-4 a compliance viewer sees the same eight steps read only, with no button', (await page.locator('ol.steps > li').count()) === 8 && (await page.locator('ol.steps .btn-primary').count()) === 0 && (await page.locator('ol.steps a').count()) === 0);
-  await go('/', { setup: 'new', firstEvent: 'none', policyInForce: false, nulls: ['setup.credential'] });
+  await go('/', { role: 'compliance_viewer', setup: 'new', firstEvent: 'none' });
+  ok('05-4 a compliance viewer sees the same seven steps read only, with no button', (await page.locator('ol.steps > li').count()) === 7 && (await page.locator('ol.steps .btn-primary').count()) === 0 && (await page.locator('ol.steps a').count()) === 0);
+  await go('/', { setup: 'new', firstEvent: 'none', nulls: ['setup.credential'] });
   ok('05-5 a step the service could not read says Not available, never To do', /Not available/.test((await page.locator('ol.steps > li').allInnerTexts())[3]));
   await go('/', fail('GET /v1/setup'));
   ok('05-6 a setup read that failed is named and no checklist is invented', /Setup progress/.test(await text()) && (await page.locator('ol.steps > li').count()) === 0);
@@ -349,8 +347,8 @@ async function flows() {
   await go('/sources', { empty: ['brands', 'sources'] });
   ok('08-2 no brand: Add a brand first and no add-source button', (await text()).includes('Add a brand first') && (await page.getByRole('button', { name: 'Add a capture source' }).count()) === 0);
   // 09: credentials
-  await go('/credentials/new', { policyInForce: false });
-  ok('09-1 gate option disabled with its reason visible', (await page.getByLabel(/^Gate check/).isDisabled()) && (await text()).includes('Gate check credentials need a policy in force'));
+  await go('/credentials/new', {});
+  ok('09-1 contact check option is open and names no policy', !(await page.getByLabel(/^Contact check/).isDisabled()) && !/polic/i.test(await text()));
   await go('/credentials/new', {});
   await page.getByLabel('Name').fill('Salesforce key'); await page.getByLabel(/^Public key for a server/).check(); await page.getByRole('button', { name: 'Next' }).click();
   await page.getByLabel('Public key (PEM)').fill('-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----');
@@ -386,20 +384,6 @@ async function flows() {
   await page.getByRole('checkbox', { name: 'SMS' }).check(); await page.getByRole('checkbox', { name: 'Marketing' }).check(); await page.getByRole('checkbox', { name: 'Acme Lending' }).check();
   await page.getByRole('button', { name: 'Register wording' }).click(); await settle(page);
   ok('10-3 disclosure_exists links to the existing version', (await page.getByRole('link', { name: /^Open version 2026-11/ }).count()) === 1);
-  // 11: policies
-  await go('/policies/4/approve', {});
-  const approve = page.getByRole('button', { name: 'Approve version 4' });
-  ok('11-1 approve disabled until ticked, reason visible', (await approve.isDisabled()) && (await text()).includes('Approve turns on after the box is ticked'));
-  await page.getByLabel(/^I accept this attestation/).check(); await approve.click(); await page.waitForURL(/\/policies\/4\?approved=1/, { timeout: 4000 }).catch(() => undefined); await settle(page);
-  const ap = (await log()).find((r) => r.url.includes('/policies/4:approve'));
-  ok('11-2 approve request carries no name field', ap && !('name' in ap.body) && !('approved_by' in ap.body) && ap.body.accepted === true, JSON.stringify(ap?.body));
-  ok('11 success names the new version', (await text()).includes('Policy version 4 is in force.'));
-  await go('/policies/3', {});
-  ok('11-3 approved version has no editable control', (await page.locator('main select').count()) === 0);
-  await go('/policies/4', {});
-  const names = await page.locator('main select[aria-label]').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
-  ok('11-4 every matrix select names its status and channel', names.length > 0 && names.every((n) => /,/.test(n)) && names.includes('No record, SMS'), names.slice(0, 3).join('|'));
-  ok('11 stop on record cells are locked', !names.some((n) => n.startsWith('Stop on record')));
   // 12: checklist keyboard
   await go('/checklists/3', {});
   const n0 = await page.getByRole('button', { name: /^Remove element/ }).count();
@@ -790,9 +774,9 @@ async function narrowRoleGating() {
   ok('23 at 375px the numbers are gone again', !/\(555\) 555-\d{4}/.test(await page.locator('main').innerText()));
   await go('/setup', { role: 'compliance_viewer' });
   ok('24-6 at 375px a compliance viewer is refused and offered the overview', /This page is for admins and developers/.test(await page.locator('main').innerText()) && (await page.getByRole('link', { name: /^Go to Overview/ }).count()) === 1);
-  await go('/setup', { role: 'developer', setup: 'new', firstEvent: 'none', policyInForce: false });
+  await go('/setup', { role: 'developer', setup: 'new', firstEvent: 'none' });
   const sel = await page.locator('#step-select').count();
-  ok('24 at 375px the step rail is a select and says which steps wait on an admin', sel === 1 && /Steps 3, 6 and 8 need an admin\./.test(await page.locator('main').innerText()));
+  ok('24 at 375px the step rail is a select and says which steps wait on an admin', sel === 1 && /Steps 3 and 7 need an admin\./.test(await page.locator('main').innerText()));
   await go('/confirmations', { role: 'developer' });
   const dt = await page.locator('main').innerText();
   ok('25 at 375px a developer sees no replies and no registration or disconnect buttons', /Replies are personal data/.test(dt) && (await page.getByRole('button', { name: /Mark texting|Withdraw|Disconnect/ }).count()) === 0 && !/no more of these thanks/.test(await html()));
@@ -805,11 +789,11 @@ async function setupScreen() {
   const { ctx, page } = await newPage(1440);
   const go = async (p, sc) => { if (sc) await scenario(sc); await page.goto(base + p); await settle(page); };
   const text = () => page.locator('main').innerText();
-  const NEW = { setup: 'new', firstEvent: 'none', policyInForce: false };
+  const NEW = { setup: 'new', firstEvent: 'none' };
 
-  await go('/setup', { setup: 'blank', firstEvent: 'none', policyInForce: false });
+  await go('/setup', { setup: 'blank', firstEvent: 'none' });
   let t = await text();
-  ok('24 welcome: names the person and the eight steps, offers step 1 or the overview', /Welcome to ConsentVault, Dana/.test(t) && /Add a brand/.test(t) && /Turn on confirmation messages \(optional\)/.test(t) && (await page.getByRole('button', { name: 'Start with step 1' }).count()) + (await page.getByRole('link', { name: 'Start with step 1' }).count()) === 1 && (await page.getByRole('link', { name: 'Go to the overview instead' }).count()) === 1);
+  ok('24 welcome: names the person and the seven steps, offers step 1 or the overview', /Welcome to ConsentVault, Dana/.test(t) && /Add a brand/.test(t) && /Turn on confirmation messages \(optional\)/.test(t) && (await page.getByRole('button', { name: 'Start with step 1' }).count()) + (await page.getByRole('link', { name: 'Start with step 1' }).count()) === 1 && (await page.getByRole('link', { name: 'Go to the overview instead' }).count()) === 1);
   await page.getByRole('button', { name: 'Start with step 1' }).click().catch(() => page.getByRole('link', { name: 'Start with step 1' }).click());
   await settle(page);
   ok('24 welcome: Start opens step 1, the brand form', /Add a brand/.test(await page.locator('main h2').first().innerText()) && (await page.getByLabel('Brand name').count()) === 1);
@@ -818,7 +802,7 @@ async function setupScreen() {
   t = await text();
   ok('24-1 loading with steps 1 and 2 done opens step 3', /3\. Register your consent wording/.test(await page.locator('main h2').first().innerText()) && /Welcome back/.test(t) && /Steps 1 and 2 are done\. You are on step 3\./.test(t));
   const rail = await page.locator('ol[aria-label="Setup steps"] li').allInnerTexts();
-  ok('24 rail: eight steps in order with their status words', rail.length === 8 && /Done/.test(rail[0]) && /Done/.test(rail[1]) && /To do/.test(rail[2]) && /\(optional\)/.test(rail[6]) && /\(optional\)/.test(rail[7]), rail.join(' | '));
+  ok('24 rail: seven steps in order with their status words', rail.length === 7 && /Done/.test(rail[0]) && /Done/.test(rail[1]) && /To do/.test(rail[2]) && /\(optional\)/.test(rail[5]) && /\(optional\)/.test(rail[6]), rail.join(' | '));
   ok('24 rail: the current step is marked', (await page.locator('ol[aria-label="Setup steps"] [aria-current=step]').count()) === 1);
   ok('24 progress saves as you go is stated, and Leave setup is offered', /Progress saves as you go\./.test(t) && (await page.getByRole('link', { name: 'Leave setup' }).count()) === 1);
   ok('24-3 Skip appears on neither step 3 nor any required step', (await page.getByRole('button', { name: 'Skip for now' }).count()) === 0);
@@ -826,7 +810,7 @@ async function setupScreen() {
   await page.waitForTimeout(150);
   ok('24 rail: choosing a step opens it and moves focus to its heading', /Add a brand/.test(await page.locator('main h2').first().innerText()) && (await page.evaluate(() => document.activeElement?.tagName)) === 'H2');
   // brand: a refusal is shown in the form and keeps what was typed; a new name is saved and the walkthrough moves on
-  await go('/setup?step=brand', { setup: 'blank', firstEvent: 'none', policyInForce: false, fail: { 'POST /v1/brands': { status: 409, error: 'brand_exists' } } });
+  await go('/setup?step=brand', { setup: 'blank', firstEvent: 'none', fail: { 'POST /v1/brands': { status: 409, error: 'brand_exists' } } });
   await page.getByLabel('Brand name').fill('Acme Lending');
   await page.getByRole('button', { name: 'Add brand' }).click(); await settle(page);
   t = await text();
@@ -839,7 +823,7 @@ async function setupScreen() {
   await go('/setup?step=wording', NEW);
   ok('24 step 3: shows the wording form in place and Back is offered', (await page.getByLabel('Exact wording').count()) === 1 && (await page.getByRole('button', { name: 'Back' }).count()) === 1);
   await go('/setup?step=policy', NEW);
-  ok('24 step 6: explains proceed and hold and says the policy is applied as written', /proceed or hold/.test(await text()) && /does not decide what the law allows/.test(await text()));
+  ok('24 an old policy step address opens no policy form', !/proceed or hold/.test(await text()) && (await page.getByRole('button', { name: 'Save draft' }).count()) === 0);
   // resume on any device: nothing in client storage decides the step
   await go('/setup', NEW);
   const stor = await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }));
@@ -862,12 +846,12 @@ async function setupScreen() {
   await page.getByRole('dialog').getByLabel(/^Reason/).fill('Using the export for now');
   await page.getByRole('dialog').getByRole('button', { name: 'Skip for now' }).click(); await settle(page);
   const sk = (await log()).filter((r) => /setup\/steps\/system:skip/.test(r.url));
-  ok('24 skip: posts once with the reason, and the step now reads Skipped', sk.length === 1 && sk[0].body.reason === 'Using the export for now' && /Skipped/.test((await page.locator('ol[aria-label="Setup steps"] li').allInnerTexts())[6]));
+  ok('24 skip: posts once with the reason, and the step now reads Skipped', sk.length === 1 && sk[0].body.reason === 'Using the export for now' && /Skipped/.test((await page.locator('ol[aria-label="Setup steps"] li').allInnerTexts())[5]));
   await go('/setup?step=brand', { setup: 'almost' });
   ok('24-3 a required step offers no Skip', (await page.getByRole('button', { name: 'Skip for now' }).count()) === 0);
 
   // each step's own form is drawn inside the walkthrough, with its own success and error states
-  const EMB = { setup: 'new', firstEvent: 'none', policyInForce: false };
+  const EMB = { setup: 'new', firstEvent: 'none' };
   const railOf = async (i) => (await page.locator('ol[aria-label="Setup steps"] li').allInnerTexts())[i];
   const inSetup = () => new URL(page.url()).pathname === '/setup';
   await go('/setup?step=wording', EMB);
@@ -888,37 +872,30 @@ async function setupScreen() {
   await go('/setup?step=credential', { ...EMB, fail: { 'POST /v1/credentials': { status: 503, error: 'service_unavailable' } } });
   await page.getByLabel('Name').fill('Setup key'); await page.getByRole('button', { name: 'Issue credential' }).click(); await settle(page);
   ok('24 credential step error: names the cause on the setup page and leaves step 4 to do', /The credential was not issued/.test(await text()) && /503 service_unavailable/.test(await text()) && inSetup() && /To do/.test(await railOf(3)));
-  await go('/setup?step=policy', EMB);
-  ok('24 policy step: the editor is on the setup page', (await page.getByRole('button', { name: 'Save draft' }).count()) === 1 && inSetup());
-  await page.getByRole('button', { name: 'Save draft' }).click(); await settle(page);
-  ok('24 policy step success: the draft is saved in place and a link leads to approving it', (await log()).filter((r) => r.method === 'POST' && r.url === '/v1/policies').length === 1 && inSetup() && /Draft saved as version \d+\./.test(await text()) && (await page.getByRole('link', { name: 'Review and approve this draft' }).count()) === 1);
-  await go('/setup?step=policy', { ...EMB, fail: { 'POST /v1/policies': { status: 503, error: 'service_unavailable' } } });
-  await page.getByRole('button', { name: 'Save draft' }).click(); await settle(page);
-  ok('24 policy step error: names the cause on the setup page', /The draft was not saved/.test(await text()) && /503 service_unavailable/.test(await text()) && inSetup());
   await go('/setup?step=system', { setup: 'almost' });
   ok('24 system step: the form is on the setup page', (await page.getByLabel(/^Endpoint address/).count()) === 1 && (await page.getByRole('link', { name: 'Connect a system' }).count()) === 0 && inSetup());
   await page.getByLabel('Name').fill('Setup CRM'); await page.getByLabel(/^Endpoint address/).fill('https://crm.example.com/hook');
   await page.getByRole('button', { name: 'Connect and send a test push' }).click(); await settle(page);
   ok('24 system step success: the test push result shows in place with a Done button', (await log()).filter((r) => r.method === 'POST' && r.url === '/v1/systems').length === 1 && inSetup() && (await page.getByRole('button', { name: 'Done' }).count()) === 1);
   await page.getByRole('button', { name: 'Done' }).click(); await settle(page);
-  ok('24 system step: Done returns to the walkthrough with the connection named and the step done', inSetup() && /Setup CRM connected\./.test(await text()) && /Done/.test(await railOf(6)));
+  ok('24 system step: Done returns to the walkthrough with the connection named and the step done', inSetup() && /Setup CRM connected\./.test(await text()) && /Done/.test(await railOf(5)));
   await go('/setup?step=system', { setup: 'almost', fail: { 'POST /v1/systems': { status: 503, error: 'service_unavailable' } } });
   await page.getByLabel('Name').fill('Setup CRM'); await page.getByLabel(/^Endpoint address/).fill('https://crm.example.com/hook');
   await page.getByRole('button', { name: 'Connect and send a test push' }).click(); await settle(page);
   ok('24 system step error: names the cause on the setup page', /The system was not connected/.test(await text()) && /503 service_unavailable/.test(await text()) && inSetup() && /To do/.test(await railOf(6)));
 
   // turning a skipped step back on follows the role: a developer may turn back on the system step only
-  await go('/setup?step=confirmations', { setup: 'new', firstEvent: 'none', policyInForce: false, role: 'developer', nulls: ['skipped.confirmations'] });
+  await go('/setup?step=confirmations', { setup: 'new', firstEvent: 'none', role: 'developer', nulls: ['skipped.confirmations'] });
   ok('24 developer: a skipped confirmations step shows Skipped and no Turn it back on button', /Skipped/.test(await text()) && (await page.getByRole('button', { name: 'Turn it back on' }).count()) === 0);
   const unskipStatus = await page.evaluate(async () => (await fetch('/v1/setup/steps/confirmations:unskip', { method: 'POST' })).status);
   ok('24 contract: the service refuses a developer turning confirmations back on', unskipStatus === 403);
-  await go('/setup?step=confirmations', { setup: 'new', firstEvent: 'none', policyInForce: false, nulls: ['skipped.confirmations'] });
+  await go('/setup?step=confirmations', { setup: 'new', firstEvent: 'none', nulls: ['skipped.confirmations'] });
   ok('24 admin: the skipped confirmations step offers Turn it back on', (await page.getByRole('button', { name: 'Turn it back on' }).count()) === 1);
   await go('/setup?step=system', { setup: 'almost', role: 'developer', nulls: ['skipped.system'] });
   ok('24 developer: the system step may be turned back on', (await page.getByRole('button', { name: 'Turn it back on' }).count()) === 1);
   await go('/setup?step=system', { setup: 'almost', nulls: ['skipped.system'], fail: { 'POST /v1/setup/steps/system:unskip': { status: 403, error: 'role_not_allowed' } } });
   await page.getByRole('button', { name: 'Turn it back on' }).click(); await settle(page);
-  ok('24 a refused turn back on shows the error and the step stays skipped', /The step was not turned back on/.test(await text()) && /403 role_not_allowed/.test(await text()) && /Skipped/.test(await railOf(6)));
+  ok('24 a refused turn back on shows the error and the step stays skipped', /The step was not turned back on/.test(await text()) && /403 role_not_allowed/.test(await text()) && /Skipped/.test(await railOf(5)));
 
   // waiting for the first event
   await go('/setup?step=first_event', { setup: 'almost', firstEvent: 'none' });
@@ -931,9 +908,9 @@ async function setupScreen() {
   // developer: admin steps wait
   await go('/setup', { ...NEW, role: 'developer' });
   const railD = await page.locator('ol[aria-label="Setup steps"] li').allInnerTexts();
-  ok('24-4 developer: steps 3, 6 and 8 read Waiting on an admin', /Waiting on an admin/.test(railD[2]) && /Waiting on an admin/.test(railD[5]) && /Waiting on an admin/.test(railD[7]) && !/Waiting on an admin/.test(railD[3]), railD.join(' | '));
+  ok('24-4 developer: steps 3 and 7 read Waiting on an admin', /Waiting on an admin/.test(railD[2]) && /Waiting on an admin/.test(railD[6]) && !/Waiting on an admin/.test(railD[3]), railD.join(' | '));
   t = await text();
-  ok('24-4 developer: says which steps need an admin and which the person can do, with no form on the waiting step', /Steps 3, 6 and 8 need an admin\./.test(t) && /You can do steps 4, 5 and 7\./.test(t) && (await page.getByRole('link', { name: 'Register wording' }).count()) === 0 && (await page.getByLabel('Exact wording').count()) === 0);
+  ok('24-4 developer: says which steps need an admin and which the person can do, with no form on the waiting step', /Steps 3 and 7 need an admin\./.test(t) && /You can do steps 4, 5 and 6\./.test(t) && (await page.getByRole('link', { name: 'Register wording' }).count()) === 0 && (await page.getByLabel('Exact wording').count()) === 0);
   await page.getByRole('button', { name: /^4\. Issue a capture credential/ }).click(); await page.waitForTimeout(150);
   ok('24 developer: the steps they own show their action', (await page.getByRole('button', { name: 'Issue credential' }).count()) === 1 && (await page.getByLabel('Name').count()) === 1);
 
@@ -954,7 +931,7 @@ async function setupScreen() {
   // complete
   await go('/setup', {});
   t = await text();
-  ok('24 complete: says setup is complete, lists every step as Done or Skipped, offers Open records', /Setup is complete/.test(t) && (await page.locator('main li', { hasText: /Done|Skipped/ }).count()) >= 8 && (await page.getByRole('link', { name: 'Open records' }).count()) === 1);
+  ok('24 complete: says setup is complete, lists every step as Done or Skipped, offers Open records', /Setup is complete/.test(t) && (await page.locator('main li', { hasText: /Done|Skipped/ }).count()) >= 7 && (await page.getByRole('link', { name: 'Open records' }).count()) === 1);
   await ctx.close();
 }
 

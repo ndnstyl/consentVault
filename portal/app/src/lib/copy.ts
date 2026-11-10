@@ -5,7 +5,6 @@ import type { OrgStatus, Role } from './api/types.ts';
 
 export const GATE_NOTICE = "Evidence status as recorded. Not a legal determination.";
 export const PACKAGE_COVER = 'Its cover page states that the records are evidence for an investigation or dispute, and that storing a record does not by itself establish valid consent.';
-export const ATTESTATION_TEMPLATE = "I am an admin of [Organization]. [Organization] is responsible for whether this policy is legally sufficient for its marketing. ConsentVault recommends that [Organization]'s counsel review it before approval. ConsentVault applies this policy as written and does not decide whether any communication is permitted by law.";
 export const NOT_LEGAL_ADVICE = 'Not legal advice';
 export const NOT_A_LEGAL_TEST = 'not a legal test';
 
@@ -35,12 +34,6 @@ export function evidenceLabel(status: string): Label {
   return { text: `Not available: the service answered ${status}`, kind: 'na', icon: 'i-warn' };
 }
 
-export function policyLabel(action: 'proceed' | 'hold' | null, version: number | null): { text: string; cls: string; icon: string } {
-  if (action === 'proceed') return { text: 'Your policy: proceed', cls: 'pol-proceed', icon: 'i-arrow' };
-  if (action === 'hold') return { text: 'Your policy: hold', cls: 'pol-hold', icon: 'i-pause' };
-  return { text: version === null ? 'No policy in force' : 'No action in policy', cls: 'pol-none', icon: 'i-dash' };
-}
-
 export const ORG_STATUS_LABEL: Record<OrgStatus, string> = { trial: 'Trial', active: 'Active', past_due: 'Past due', suspended: 'Suspended', offboarding: 'Offboarding', closed: 'Closed' };
 export const ORG_STATUS_TONE: Record<OrgStatus, string> = { trial: 'st-info', active: 'st-success', past_due: 'st-warning', suspended: 'st-danger', offboarding: 'st-warning', closed: 'st-neutral' };
 export const ORG_STATUS_ICON: Record<OrgStatus, string> = { trial: 'i-info', active: 'i-ok', past_due: 'i-warn', suspended: 'i-err', offboarding: 'i-warn', closed: 'i-dash' };
@@ -55,11 +48,11 @@ export const EVENT_LABEL: Record<string, string> = { grant: 'Grant', revoke: 'St
 export const KIND_LABEL: Record<string, string> = { crm: 'CRM', dialer: 'Dialer', sms: 'Texting', email: 'Email', ai_agent: 'AI agent', webhook: 'Other webhook' };
 export const SOURCE_KIND_LABEL: Record<string, string> = { site_key: 'Website (site key)', server: 'Server (public key)' };
 export const CRED_KIND_LABEL: Record<string, string> = { edge_site_key: 'Site key', jwt_public_key: 'Public key', hmac_fallback: 'Signed webhook secret' };
-export const CRED_SCOPE_LABEL: Record<string, string> = { capture: 'Capture', gate_read: 'Gate check', proof_read: 'Evidence read' };
+export const CRED_SCOPE_LABEL: Record<string, string> = { capture: 'Capture', gate_read: 'Contact check', proof_read: 'Evidence read' };
 export const CHANNEL_FALLBACK: Record<string, string> = { sms: 'SMS', voice: 'Voice', artificial_voice: 'Artificial or prerecorded voice', email: 'Email' };
 
 export const ROLE_DESCRIPTION: Record<Role, string> = {
-  admin: 'Admin: everything, including policies, members and billing',
+  admin: 'Admin: everything, including members and billing',
   developer: 'Developer: sources, credentials, connected systems, test events. No personal records.',
   compliance_viewer: 'Compliance viewer: look up records and build evidence packages. Changes nothing.',
 };
@@ -87,9 +80,7 @@ const CAUSES: Record<string, string> = {
   system_exists: 'a connected system with this name already exists',
   invalid_origin: 'an origin has no path',
   private_key_refused: 'that text is a private key and only a public key may be added',
-  policy_required: 'a gate check credential needs a policy in force first',
   disclosure_exists: 'this exact text is already registered',
-  policy_superseded: 'another admin approved a newer version first',
   below_platform_minimum: 'that value is below the platform minimum',
   last_admin: 'that would leave the organization with no admin',
   already_member: 'that person is already a member or has an open invitation',
@@ -106,14 +97,11 @@ const CAUSES: Record<string, string> = {
   validation_failed: 'a field is missing or not in the expected form',
   invalid_cursor: 'the page link expired',
   version_not_draft: 'that version is no longer a draft',
-  attestation_mismatch: 'the attestation was updated while you were reading it',
   acknowledgement_required: 'the acknowledgement was not accepted',
   unknown_brand: 'a brand does not belong to this organization',
   UnknownPurposeError: 'a purpose is not on your purpose list',
   UnknownDisclosureError: 'that wording is not registered for your organization',
   invalid_channel: 'a channel is not one your organization has',
-  stop_cannot_proceed: 'a stop on record cannot be set to proceed',
-  policy_incomplete: 'the policy lacks a cell for an evidence status, channel and purpose',
   invite_wrong_account: 'you are signed in with a different address than the one invited',
   second_factor_required: 'your sign-in shows no passkey or second factor',
   not_a_member: 'you are not a member of that organization',

@@ -5,7 +5,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 const { PermissionsTable, chainLine, statusOf } = await import('../src/screens/evidence.tsx');
-const { SuccessLine, firstNameOf } = await import('../src/screens/setup.tsx');
+const { SuccessLine, firstNameOf, ORDER } = await import('../src/screens/setup.tsx');
 const { sessionUser } = await import('../src/lib/session.tsx');
 const { evidenceLabel, RECORDS_NOTICE, GATE_NOTICE } = await import('../src/lib/copy.ts');
 
@@ -110,4 +110,9 @@ test('no reading of a rule-set is written as a fact in the portal copy', async (
     const t = readFileSync(new URL(f, import.meta.url), 'utf8');
     assert.doesNotMatch(t, /most protective status|keeps being honored|did not lift a stop|covers texts and calls|never when a stop is on record/, f);
   }
+});
+
+test('setup has no policy step', () => {
+  assert.equal(ORDER.includes('policy'), false);
+  assert.equal(ORDER.length, 7);
 });

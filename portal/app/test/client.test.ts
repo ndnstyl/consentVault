@@ -160,7 +160,7 @@ test('setup: skip is for the optional steps only', async () => {
   const api = createClient({ baseUrl: base });
   await scenario({ setup: 'almost' });
   const s = await api.setup.get();
-  assert.equal(s.steps.length, 8);
+  assert.equal(s.steps.length, 7);
   await assert.rejects(api.setup.skip('brand'), (e: unknown) => e instanceof ApiError && e.code === 'step_not_skippable');
   const k = await api.setup.skip('system', 'later');
   assert.equal(k.status, 'skipped');

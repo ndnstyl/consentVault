@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { ApiError } from '../lib/api/client.ts';
 import { allPages } from '../lib/api/client.ts';
-import type { Billing, Health, PolicyItem, SetupAnswer, SetupStepName, System } from '../lib/api/types.ts';
+import type { Billing, Health, SetupAnswer, SetupStepName, System } from '../lib/api/types.ts';
 import { alarmCopy } from '../lib/alarms.ts';
 import { CAPTURE_REFUSALS, NA } from '../lib/copy.ts';
 import { FLAGS } from '../lib/flags.ts';
@@ -18,13 +18,12 @@ async function got<T>(p: Promise<T>): Promise<Got<T>> {
 }
 
 const STEP_HREF: Record<SetupStepName, string> = {
-  brand: '/brands', source: '/sources', wording: '/wording/new', credential: '/credentials/new', first_event: '/setup/first-event', policy: '/policies', system: '/systems/new', confirmations: '/confirmations',
+  brand: '/brands', source: '/sources', wording: '/wording/new', credential: '/credentials/new', first_event: '/setup/first-event', system: '/systems/new', confirmations: '/confirmations',
 };
 
 interface Setup {
   health: Got<Health>;
   setup: Got<SetupAnswer>;
-  policy: Got<PolicyItem[]>;
   billing: Got<Billing> | null;
   systems: Got<System[]> | null;
 }
@@ -34,14 +33,13 @@ export function Overview() {
   const { api, role, org, orgName, orgId } = useSession();
   const setupRole = canDo(role, 'first-event.send');
   const res = useResource<Setup>(async () => {
-    const [health, setup, policy, billing, systems] = await Promise.all([
+    const [health, setup, billing, systems] = await Promise.all([
       got(api.session.health()),
       got(api.setup.get()),
-      got(api.policies.list({ status: 'approved' }).then((p) => p.items)),
       role === 'admin' ? got(api.billing.get()) : null,
       got(allPages((c) => api.systems.list({ cursor: c }))),
     ]);
-    return { health, setup, policy, billing, systems } as Setup;
+    return { health, setup, billing, systems } as Setup;
   }, [api, role]);
   const flagKey = `cv.setup.done.${orgId}`;
   const [celebrate, setCelebrate] = useState(false);
@@ -85,19 +83,17 @@ function OverviewBody({ v, celebrate, role }: { v: OverviewView; celebrate: bool
   const { d, items } = v;
   const failed: string[] = [];
   const note = (name: string, g: Got<unknown> | null) => { if (g && !g.ok) failed.push(name); };
-  note('Health counts', d.health); note('Setup progress', d.setup); note('Policy', d.policy); note('Usage', d.billing); note('Systems', d.systems);
+  note('Health counts', d.health); note('Setup progress', d.setup); note('Usage', d.billing); note('Systems', d.systems);
   const h = d.health.ok ? d.health.v : null;
-  const policy = d.policy.ok ? d.policy.v[0] ?? null : undefined;
   const noSystems = !!d.systems && d.systems.ok && d.systems.v.length === 0;
   const dead = h ? (h.dead_deliveries ?? (noSystems ? 0 : null)) : null;
   const deadSystem = d.systems && d.systems.ok ? [...d.systems.v].sort((a, b) => (b.counts?.dead ?? 0) - (a.counts?.dead ?? 0))[0] : null;
   const showUsage = role === 'admin';
-  const showPolicy = role !== 'developer';
   const billing = d.billing && d.billing.ok ? d.billing.v : null;
   const usageNA = !billing || !billing.used || !billing.included;
   const usageFailed = !!d.billing && (!d.billing.ok || (billing !== null && billing.plan !== null && usageNA));
   const incomplete = !!v.answer && !v.answer.complete;
-  const nullTiles = (h && (h.unsealed_events_over_1h === null || dead === null)) || !d.health.ok || (showUsage && usageFailed) || (showPolicy && policy === undefined);
+  const nullTiles = (h && (h.unsealed_events_over_1h === null || dead === null)) || !d.health.ok || (showUsage && usageFailed);
   return (
     <>
       {celebrate && v.firstEventAt && <SuccessBanner>{`Setup is complete. Your first test event was recorded on ${fmtDateTime(v.firstEventAt)}.`}</SuccessBanner>}
@@ -120,21 +116,17 @@ function OverviewBody({ v, celebrate, role }: { v: OverviewView; celebrate: bool
       {items && (incomplete || celebrate) && <div className="mb5"><SetupChecklist items={items} readOnly={role === 'compliance_viewer'} /></div>}
       {items && !incomplete && !celebrate && null}
       <div className="grid g4">
-        {showPolicy && (policy === undefined
-          ? <Tile label="Policy in force" value={null} sub="The policy list did not load" />
-          : policy ? <Tile label="Policy in force" value={`Version ${policy.version}`} sub={<>Approved by {policy.approved_by ?? NA}{policy.approved_at && <>, <Time iso={policy.approved_at} date /></>}</>} />
-            : <Tile label="Policy in force" value="None" sub="Gate checks return evidence status only until you approve a policy." />)}
         <Tile label="Events not yet sealed after 1 hour" value={h && h.unsealed_events_over_1h !== null ? <span className="num">{h.unsealed_events_over_1h}</span> : null} sub={h && h.unsealed_events_over_1h !== null ? <>Checked <Time iso={h.evaluated_at} /></> : 'Count did not load'} />
         <Tile label="Undelivered stops (dead)" alert={!!dead && dead > 0} value={dead !== null ? <span className="num">{dead}</span> : null}
           sub={dead === null ? 'Count did not load' : h && h.dead_deliveries === null ? 'No systems are connected, so no stops are waiting' : dead > 0 && deadSystem ? `${deadSystem.name}: review and redrive` : dead > 0 ? 'Review in Connected systems' : 'Nothing waiting'}
           href={dead && dead > 0 ? (deadSystem ? `/systems/${deadSystem.system_id}` : '/systems') : undefined} action={dead && dead > 0 ? 'Review in Connected systems' : undefined} />
         {showUsage && <Tile label="Events this period" value={!usageNA ? <span className="num">{billing!.used!.events.toLocaleString('en-US')}</span> : billing && billing.plan === null ? 'No plan yet' : null} of={!usageNA ? `of ${billing!.included!.events.toLocaleString('en-US')}` : undefined}
-          sub={!usageNA ? `Gate checks: ${billing!.used!.gate_checks.toLocaleString('en-US')} of ${billing!.included!.gate_checks.toLocaleString('en-US')}` : billing && billing.plan === null ? 'Usage counts once you choose a plan' : 'Usage count did not load'} />}
+          sub={!usageNA ? `Contact checks: ${billing!.used!.gate_checks.toLocaleString('en-US')} of ${billing!.included!.gate_checks.toLocaleString('en-US')}` : billing && billing.plan === null ? 'Usage counts once you choose a plan' : 'Usage count did not load'} />}
       </div>
       {showUsage && !usageNA && (
         <div className="card mt5"><h2>Usage this period</h2>
           <Meter label="Events this period" used={billing!.used!.events} included={billing!.included!.events} />
-          <Meter label="Gate checks this period" used={billing!.used!.gate_checks} included={billing!.included!.gate_checks} />
+          <Meter label="Contact checks this period" used={billing!.used!.gate_checks} included={billing!.included!.gate_checks} />
         </div>
       )}
       {failed.length > 0 && <p className="hint mt4">{`Not loaded: ${failed.join(', ')}.`}</p>}

@@ -73,9 +73,6 @@
   --ev-stop-fg: #7A2E63;        --ev-stop-bg: #F6E4F0;        --ev-stop-border: #BE86AE;
   --ev-none-fg: #4A5560;        --ev-none-bg: #EEF1F3;        --ev-none-border: #8D9AA6;
   --ev-incomplete-fg: #0F5F5C;  --ev-incomplete-bg: #DDF0EE;  --ev-incomplete-border: #6BB5AF;
-  /* Policy action: neutral ink, outline vs solid. Not good/bad colors. */
-  --pol-proceed-fg: #2A3845;    --pol-proceed-bg: transparent; --pol-proceed-border: #2A3845;
-  --pol-hold-fg: #FFFFFF;       --pol-hold-bg: #2A3845;        --pol-hold-border: #2A3845;
 
   /* Elevation */
   --shadow-1: 0 1px 2px rgba(42, 56, 69, 0.06), 0 1px 1px rgba(42, 56, 69, 0.04);
@@ -121,8 +118,6 @@
     --ev-stop-fg: #EBB8DC;        --ev-stop-bg: #45213A;        --ev-stop-border: #9A5F88;
     --ev-none-fg: #C2CCD5;        --ev-none-bg: #2A3540;        --ev-none-border: #6C7B88;
     --ev-incomplete-fg: #8FD5CF;  --ev-incomplete-bg: #123F3C;  --ev-incomplete-border: #3F8C86;
-    --pol-proceed-fg: #E6ECF1;    --pol-proceed-bg: transparent; --pol-proceed-border: #E6ECF1;
-    --pol-hold-fg: #131C25;       --pol-hold-bg: #E6ECF1;        --pol-hold-border: #E6ECF1;
 
     --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
     --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.4), 0 8px 20px -8px rgba(0, 0, 0, 0.5);
@@ -163,8 +158,6 @@
   --ev-stop-fg: #EBB8DC;        --ev-stop-bg: #45213A;        --ev-stop-border: #9A5F88;
   --ev-none-fg: #C2CCD5;        --ev-none-bg: #2A3540;        --ev-none-border: #6C7B88;
   --ev-incomplete-fg: #8FD5CF;  --ev-incomplete-bg: #123F3C;  --ev-incomplete-border: #3F8C86;
-  --pol-proceed-fg: #E6ECF1;    --pol-proceed-bg: transparent; --pol-proceed-border: #E6ECF1;
-  --pol-hold-fg: #131C25;       --pol-hold-bg: #E6ECF1;        --pol-hold-border: #E6ECF1;
 
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.4), 0 8px 20px -8px rgba(0, 0, 0, 0.5);

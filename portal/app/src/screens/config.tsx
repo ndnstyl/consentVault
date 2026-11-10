@@ -311,8 +311,8 @@ export function CredentialNew({ embedded }: { embedded?: Embedded } = {}) {
   const { api, role, orgName, status } = useSession();
   const { search, navigate } = useRouter();
   const res = useResource(async () => {
-    const [sources, policy] = await Promise.all([allPages((c) => api.sources.list({ cursor: c })), api.policies.list({ status: 'approved' }).then((p) => p.items.length > 0).catch(() => false)]);
-    return { sources, policy };
+    const sources = await allPages((c) => api.sources.list({ cursor: c }));
+    return { sources };
   }, [api]);
   const [draft, setDraft] = useDraft('credential-new', { scope: 'capture', kind: 'edge_site_key', source: search.get('source') ?? '', name: '', algorithm: 'ES256' });
   const [step, setStep] = useState(1);
@@ -337,7 +337,6 @@ export function CredentialNew({ embedded }: { embedded?: Embedded } = {}) {
   const kindsFor = scope === 'capture' ? (['edge_site_key', 'jwt_public_key', 'hmac_fallback'] as CredentialKind[]) : (['jwt_public_key', 'hmac_fallback'] as CredentialKind[]);
   useEffect(() => { if (!kindsFor.includes(kind)) setDraft({ kind: 'jwt_public_key' }); // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope]);
-  const gateBlocked = !!d && !d.policy;
   const nameErr = touched && !draft.name.trim() ? 'Enter a name.' : null;
   const finish = async () => {
     const body: Parameters<typeof api.credentials.issue>[0] = { name: draft.name.trim(), kind, scope, ...(needsSource ? { source_id: draft.source } : {}), ...(kind === 'jwt_public_key' ? { public_key: key, algorithm: draft.algorithm } : {}) };
@@ -377,14 +376,13 @@ export function CredentialNew({ embedded }: { embedded?: Embedded } = {}) {
       {d && step === 1 && (
         <form className="card" onSubmit={(e) => { e.preventDefault(); next1(); }} noValidate>
           <h2 ref={heading} tabIndex={-1}>What it does</h2>
-          {issue.error && <ErrorBlock title="The credential was not issued" err={issue.error} override={issue.error.code === 'policy_required' ? 'a gate check credential needs a policy in force first' : undefined} next="Fix the field and try again. Nothing was changed." headingLevel={3} />}
+          {issue.error && <ErrorBlock title="The credential was not issued" err={issue.error} next="Fix the field and try again. Nothing was changed." headingLevel={3} />}
           <fieldset>
             <legend>Scope</legend>
             <Radio name="scope" label="Capture: send consents and stops. Cannot read anything." checked={scope === 'capture'} onChange={() => setDraft({ scope: 'capture' })} />
             {canDo(role, 'credential.issue.gate_read') && (
               <>
-                <Radio name="scope" label="Gate check: ask what the records show for a contact. Issued after your organization approves a policy." checked={scope === 'gate_read'} disabled={gateBlocked} onChange={() => setDraft({ scope: 'gate_read' })} />
-                {gateBlocked && <p className="hint" id="gate-reason">Gate check credentials need a policy in force. <Link href="/policies/new">Draft a policy</Link></p>}
+                <Radio name="scope" label="Contact check: read what the records show for a contact, before you contact them." checked={scope === 'gate_read'} onChange={() => setDraft({ scope: 'gate_read' })} />
               </>
             )}
             {canDo(role, 'credential.issue.proof_read') && <Radio name="scope" label="Evidence read: look up records and build evidence packages." checked={scope === 'proof_read'} onChange={() => setDraft({ scope: 'proof_read' })} />}

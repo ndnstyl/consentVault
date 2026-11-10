@@ -146,7 +146,7 @@ export function EvidenceLookup() {
       {proof && !proof.found && (
         <div className="mt5">
           <h2 ref={heading} tabIndex={-1} className="sec">{`No records for ${shown} in ${orgName}`}</h2>
-          <p>{`${orgName} has recorded no consent, stop or gate check for this contact point. Check the number, or try the email address the person used.`}</p>
+          <p>{`${orgName} has recorded no consent, stop or contact check for this contact point. Check the number, or try the email address the person used.`}</p>
           <p className="notice">{proof.notice || GATE_NOTICE}</p>
         </div>
       )}
@@ -190,16 +190,16 @@ export function EvidenceLookup() {
           )}
           {proof.timeline?.next_cursor && <Btn size="sm" busy={more === 'timeline'} busyLabel="Loading" onClick={() => loadMore('timeline', proof.timeline!.next_cursor)}>Load more events</Btn>}
 
-          <h3 className="sec mt5">Gate checks for this contact</h3>
-          {proof.gate_decisions === null ? <Banner kind="warning" title="Gate checks did not load">Shown as Not available. The rest of this page is complete.</Banner> : proof.gate_decisions.items.length === 0 ? <p className="hint">No gate checks on record.</p> : (
-            <DataTable caption="Gate checks" rows={proof.gate_decisions.items} rowKey={(g) => g.decision_id}
+          <h3 className="sec mt5">Contact checks for this contact</h3>
+          {proof.gate_decisions === null ? <Banner kind="warning" title="Contact checks did not load">Shown as Not available. The rest of this page is complete.</Banner> : proof.gate_decisions.items.length === 0 ? <p className="hint">No contact checks on record.</p> : (
+            <DataTable caption="Contact checks" rows={proof.gate_decisions.items} rowKey={(g) => g.decision_id}
               columns={[
                 { key: 't', header: 'Checked', render: (g) => <Time iso={g.at} />, primary: true },
                 { key: 'c', header: 'Channel', render: (g) => chLabel(g.channel) },
                 { key: 'e', header: 'Evidence status', render: (g) => <EvidenceChip status={g.evidence_status ?? g.status ?? ''} /> },
               ]} />
           )}
-          {proof.gate_decisions?.next_cursor && <Btn size="sm" busy={more === 'gate_decisions'} busyLabel="Loading" onClick={() => loadMore('gate_decisions', proof.gate_decisions!.next_cursor)}>Load more gate checks</Btn>}
+          {proof.gate_decisions?.next_cursor && <Btn size="sm" busy={more === 'gate_decisions'} busyLabel="Loading" onClick={() => loadMore('gate_decisions', proof.gate_decisions!.next_cursor)}>Load more contact checks</Btn>}
 
           <h3 className="sec mt5">Stops sent to your connected systems</h3>
           {lists.systems === null ? <p>Not available. <Btn size="sm" onClick={() => contact && run(contact)}>Try again</Btn></p> : lists.systems.length === 0 ? <p className="hint">No systems are connected.</p> : <Deliveries contact={contact!} systems={lists.systems} />}
@@ -231,7 +231,7 @@ function Deliveries({ contact, systems }: { contact: string; systems: System[] }
   const rows = res.data.flatMap((r) => (r.rows ?? []).map((d) => ({ ...d, system_name: d.system_name || r.sys.name })));
   return (
     <>
-      {failed.length > 0 && <Banner kind="warning" title="Stops sent to connected systems did not load">{`${failed.map((f) => f.sys.name).join(', ')}: not available. Status, timeline and gate checks on this page are complete.`}</Banner>}
+      {failed.length > 0 && <Banner kind="warning" title="Stops sent to connected systems did not load">{`${failed.map((f) => f.sys.name).join(', ')}: not available. Status, timeline and contact checks on this page are complete.`}</Banner>}
       {rows.length > 0 && (
         <DataTable caption="Stops sent to connected systems" rows={rows} rowKey={(r) => `${r.system_id}:${r.sent_at}`}
           columns={[

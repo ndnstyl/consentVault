@@ -87,7 +87,7 @@ function StatusBanner() {
   const name = s.orgName;
   let node: React.ReactNode = null;
   if (s.status === 'trial') node = <Banner kind="info" action={admin ? <LinkBtn href="/start/plan" size="sm">Choose a plan</LinkBtn> : undefined}>{`${name} is in trial. Records are test data until you choose a plan.`}</Banner>;
-  else if (s.status === 'past_due') node = <Banner kind="warning" action={admin ? <LinkBtn href="/billing" size="sm">Open billing</LinkBtn> : undefined}>{`Payment failed. Capture keeps recording and gate checks keep answering. ${admin ? 'Update your payment method to avoid suspension.' : 'Ask an admin to update the payment method to avoid suspension.'}`}</Banner>;
+  else if (s.status === 'past_due') node = <Banner kind="warning" action={admin ? <LinkBtn href="/billing" size="sm">Open billing</LinkBtn> : undefined}>{`Payment failed. Capture keeps recording and contact checks keep answering. ${admin ? 'Update your payment method to avoid suspension.' : 'Ask an admin to update the payment method to avoid suspension.'}`}</Banner>;
   else if (s.status === 'suspended') node = <Banner kind="danger" role="status" action={admin ? <LinkBtn href="/billing" size="sm">Open billing</LinkBtn> : undefined}>{`${name} is suspended. Capture keeps recording, because evidence is never refused for non-payment. Evidence packages and new credentials are paused until billing is resolved.`}</Banner>;
   else if (s.status === 'offboarding') node = <Banner kind="warning" action={<LinkBtn href="/settings" size="sm">Open settings</LinkBtn>}>{offboardingSummary(s.org)}</Banner>;
   if (!node) return null;

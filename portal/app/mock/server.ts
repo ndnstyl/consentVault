@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type * as T from '../src/lib/api/types.ts';
-import { ATTESTATION, CHANNELS, DEFAULT_SCENARIO, newStore, nid, ORG_ID, ORG_NAME, PLANS, PURPOSES, REFERENCES } from './data.ts';
+import { CHANNELS, DEFAULT_SCENARIO, newStore, nid, ORG_ID, ORG_NAME, PLANS, PURPOSES, REFERENCES } from './data.ts';
 import { isEd25519, isHmac } from '../src/lib/signature.ts';
 import { registerRecords } from './records.ts';
 import { registerConfirmations } from './confirmations.ts';
@@ -52,16 +52,13 @@ function proofFor(st: Store, contactKey: string): Res {
   const unsealed = digits.endsWith('0101');
   const review = digits.endsWith('0102');
   const partial = digits.endsWith('0103') || sc.nulls.includes('proof_gate');
-  const inForce = st.policies.find((p) => p.status === 'approved');
-  const pv = inForce ? inForce.version : null;
-  const act = (a: 'proceed' | 'hold') => (inForce ? a : null);
   return OK({
     found: true, evaluated_at: nowIso(), notice: "The records held for this contact point, as recorded. ConsentVault records consent and does not decide.",
     permissions: [
-      { channel: 'sms', purpose: 'marketing', evidence_status: 'stop_on_record', policy_action: act('hold'), policy_version: pv, basis_event_ids: ['evt_9'] },
-      { channel: 'voice', purpose: 'marketing', evidence_status: 'stop_on_record', policy_action: act('hold'), policy_version: pv, basis_event_ids: ['evt_9'] },
-      { channel: 'email', purpose: 'marketing', evidence_status: 'no_record', policy_action: act('proceed'), policy_version: pv, basis_event_ids: [] },
-      { channel: 'artificial_voice', purpose: 'marketing', evidence_status: 'record_incomplete:not_a_condition_of_purchase', policy_action: act('hold'), policy_version: pv, basis_event_ids: ['evt_1'] },
+      { channel: 'sms', purpose: 'marketing', evidence_status: 'stop_on_record', basis_event_ids: ['evt_9'] },
+      { channel: 'voice', purpose: 'marketing', evidence_status: 'stop_on_record', basis_event_ids: ['evt_9'] },
+      { channel: 'email', purpose: 'marketing', evidence_status: 'no_record', basis_event_ids: [] },
+      { channel: 'artificial_voice', purpose: 'marketing', evidence_status: 'record_incomplete:not_a_condition_of_purchase', basis_event_ids: ['evt_1'] },
     ],
     timeline: { items: [
       { event_id: 'evt_1', seq: 1, event_type: 'grant', at: '2026-10-31T14:42:07Z', channels: ['sms', 'voice'], purposes: ['marketing'], source_id: 'src_web', brand_ids: ['brd_acme'], disclosure_sha256: '9f2c4d5e6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6ee1', sealed: !unsealed, sealed_at: unsealed ? null : '2026-10-31T14:58:00Z', recorded_during_trial: sc.orgStatus === 'trial' },
@@ -69,8 +66,8 @@ function proofFor(st: Store, contactKey: string): Res {
     ], next_cursor: null },
     disclosures: [{ sha256: '9f2c4d5e6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6ee1', label: '2026-10', version_label: '2026-10' }],
     gate_decisions: partial ? null : { items: [
-      { decision_id: 'gd_2', at: '2026-11-02T21:00:00Z', channel: 'sms', purpose: 'marketing', evidence_status: 'stop_on_record', policy_action: act('hold'), policy_version: pv },
-      { decision_id: 'gd_1', at: '2026-11-01T14:00:00Z', channel: 'sms', purpose: 'marketing', evidence_status: 'consent_record_found', policy_action: act('proceed'), policy_version: pv },
+      { decision_id: 'gd_2', at: '2026-11-02T21:00:00Z', channel: 'sms', purpose: 'marketing', evidence_status: 'stop_on_record' },
+      { decision_id: 'gd_1', at: '2026-11-01T14:00:00Z', channel: 'sms', purpose: 'marketing', evidence_status: 'consent_record_found' },
     ], next_cursor: null },
     contact_log: { items: [], next_cursor: null },
     reviews: review ? { items: [{ review_id: 'rv_1', at: '2026-11-03T15:00:00Z', kind: 'contact_control_unverified', event_id: 'evt_12' }], next_cursor: null } : { items: [], next_cursor: null },
@@ -292,7 +289,6 @@ route('POST', '/v1/credentials', (c) => {
   if (c.st.role === 'developer' && b.scope !== 'capture') return refuse(c);
   const sus = suspendedBlock(c); if (sus) return sus;
   if (typeof b.public_key === 'string' && /PRIVATE KEY/.test(b.public_key)) return E(422, 'private_key_refused', 'The pasted material contains a private key.');
-  if (b.scope === 'gate_read' && !c.st.policies.some((p) => p.status === 'approved')) return E(409, 'policy_required');
   if (!b.name || !b.kind || !b.scope) return E(422, 'validation_failed');
   const id = nid('crd');
   c.st.credentials.unshift({ credential_id: id, name: b.name, kind: b.kind, scope: b.scope, source_id: b.source_id ?? null, algorithm: b.algorithm ?? null, created_by: 'Dana Ruiz', created_at: nowIso(), revoked_at: null, last_used_at: null });
@@ -340,7 +336,7 @@ route('POST', '/v1/contacts\\:erase', (c) => {
   return OK({ erasure_id: nid('ers'), status: 'pending_operator_confirmation' }, 202);
 });
 
-// ---- policy ----
+// ---- reference lists, wording ----
 route('GET', '/v1/channels', (c) => OK(page(CHANNELS, c.query)));
 route('GET', '/v1/purposes', (c) => OK(page(PURPOSES, c.query)));
 route('GET', '/v1/disclosures', (c) => OK(page(c.st.disclosures.map(({ body: _b, ...r }) => r), c.query)));
@@ -356,42 +352,6 @@ route('POST', '/v1/disclosures', async (c) => {
   if (d.supersedes_sha256) { const o = c.st.disclosures.find((y) => y.sha256 === d.supersedes_sha256); if (o) o.superseded_by_sha256 = sha; }
   c.st.disclosures.unshift(d); return OK(d, 201);
 });
-route('GET', '/v1/policies', (c) => {
-  let items = c.st.policies.map(({ rules: _r, attestation: _a, ...r }) => r) as T.PolicyItem[];
-  const s = c.query.get('status'); if (s) items = items.filter((p) => p.status === s);
-  if (c.st.scenario.nulls.includes('approver')) items = items.map((p) => ({ ...p, approved_by: null }));
-  return OK(page(items, c.query));
-});
-route('GET', '/v1/policies/:v', (c) => { const p = c.st.policies.find((y) => String(y.version) === c.m.groups!.v); return p ? OK(p) : E(404, 'not_found'); });
-route('POST', '/v1/policies', (c) => {
-  const x = allow(c, 'admin'); if (x) return x;
-  const v = Math.max(0, ...c.st.policies.map((p) => p.version)) + 1;
-  c.st.policies.unshift({ version: v, status: 'draft', template_ref: c.body.template_ref ?? null, based_on_version: c.body.based_on_version ?? null, created_by: 'Dana Ruiz', created_at: nowIso(), approved_by: null, approved_at: null, retired_at: null, retired_by_version: null, rules: c.body.rules });
-  return OK({ version: v, status: 'draft' }, 201);
-});
-route('PUT', '/v1/policies/:v', (c) => {
-  const x = allow(c, 'admin'); if (x) return x;
-  const p = c.st.policies.find((y) => String(y.version) === c.m.groups!.v); if (!p) return E(404, 'not_found');
-  if (p.status !== 'draft') return E(409, 'version_not_draft'); p.rules = c.body.rules; return OK(p);
-});
-route('POST', '/v1/policies/:v\\:approve', (c) => {
-  const x = allow(c, 'admin'); if (x) return x;
-  const p = c.st.policies.find((y) => String(y.version) === c.m.groups!.v); if (!p) return E(404, 'not_found');
-  if (c.body?.accepted !== true) return E(422, 'acknowledgement_required');
-  if (c.body.attestation_version !== ATTESTATION.version) return E(409, 'attestation_mismatch');
-  if (p.status !== 'draft') return E(409, 'version_not_draft');
-  const cur = c.st.policies.find((y) => y.status === 'approved');
-  if (p.based_on_version && cur && cur.version !== p.based_on_version) return E(409, 'policy_superseded', 'A newer version is in force.', { newer_version: cur.version });
-  let retired = null as null | { version: number; retired_at: string };
-  if (cur) { cur.status = 'retired'; cur.retired_at = nowIso(); cur.retired_by_version = p.version; retired = { version: cur.version, retired_at: cur.retired_at }; }
-  p.status = 'approved'; p.approved_by = 'Dana Ruiz'; p.approved_at = nowIso(); p.attestation = { version: 1, sha256: ATTESTATION.sha256 };
-  return OK({ version: p.version, status: 'approved', approved_by: 'Dana Ruiz', approved_at: p.approved_at, retired });
-});
-route('GET', '/v1/policy-templates', (c) => {
-  const p = (hold: boolean): T.PolicyRules => ({ schema_version: 1, purposes: { marketing: { checklist_version: null, cells: (['consent_record_found', 'stop_on_record', 'no_record', 'record_incomplete', 'unavailable'] as const).flatMap((st) => ['sms', 'voice', 'artificial_voice', 'email'].map((ch) => ({ evidence_status: st, channel: ch, action: (st === 'consent_record_found' ? 'proceed' : hold ? 'hold' : st === 'stop_on_record' ? 'hold' : 'proceed') as 'proceed' | 'hold' }))) } } });
-  return OK(page([{ template_ref: 'hold_unless_found', label: 'Template: hold unless a consent record is found', description: 'Hold everything except a found record.', rules: p(true) }], c.query));
-});
-route('GET', '/v1/attestations/current', () => OK(ATTESTATION));
 route('GET', '/v1/checklists', (c) => OK(page(c.st.checklists.map(({ elements: _e, ...r }) => r), c.query)));
 route('GET', '/v1/checklists/:v', (c) => { const p = c.st.checklists.find((y) => String(y.version) === c.m.groups!.v); return p ? OK(p) : E(404, 'not_found'); });
 route('GET', '/v1/checklist-templates', (c) => OK(page([{ template_ref: 'pewc_example', kind: 'pewc', label: 'PEWC example', elements: [
@@ -585,7 +545,7 @@ export function createMock() {
         return OK({ ok: true, scenario: st.scenario });
       }
       if (url.pathname === '/__mock/log') return OK(st.log);
-      if (url.pathname === '/__mock/state') return OK({ currentOrg: st.currentOrg, status: st.status, brands: st.brands, sources: st.sources, disclosures: st.disclosures, credentials: st.credentials, members: st.members, policies: st.policies.map((p) => ({ version: p.version, status: p.status })), exports: st.exports.length, scenario: st.scenario });
+      if (url.pathname === '/__mock/state') return OK({ currentOrg: st.currentOrg, status: st.status, brands: st.brands, sources: st.sources, disclosures: st.disclosures, credentials: st.credentials, members: st.members, exports: st.exports.length, scenario: st.scenario });
       if (url.pathname.startsWith('/__mock/download/')) { const e = st.exports.find((y) => url.pathname.endsWith(y.item.export_id)); if (e) { e.downloaded = true; e.item.downloaded_at = nowIso(); } return { status: 200, body: { package: 'mock' } }; }
       if (url.pathname.startsWith('/__mock/stripe/')) return { status: 200, body: { stripe: 'mock' } };
       return E(404, 'not_found');
@@ -609,7 +569,7 @@ export function createMock() {
   }
 
   const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.txt': 'text/plain' };
-  const DYNAMIC = ['/sources/', '/wording/', '/policies/', '/checklists/', '/exports/', '/systems/', '/confirmations/'];
+  const DYNAMIC = ['/sources/', '/wording/', '/checklists/', '/exports/', '/systems/', '/confirmations/'];
 
   function serveStatic(root: string, pathname: string, res: http.ServerResponse): void {
     const clean = path.posix.normalize(decodeURIComponent(pathname)).replace(/^(\.\.\/)+/, '');

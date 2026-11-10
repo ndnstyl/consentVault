@@ -32,7 +32,7 @@ export function Systems() {
       <PageHead title="Connected systems" lede="Every stop is pushed to each system below, retried for 24 hours, then marked undelivered and alerted." actions={rows.length > 0 ? connect : null} />
       {res.status === 'loading' && <Skeleton what="connected systems" variant="table" />}
       {res.status === 'error' && <ErrorBlock title="Connected systems did not load" err={res.error} next="Try again. Pushes keep running while this page is down." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
-      {res.status === 'ok' && rows.length === 0 && <StateBlock kind="empty" title="No systems connected" actions={connect}>Stops are recorded and gate checks honor them, but nothing is pushed to your CRM, dialer or texting platform until you connect them.</StateBlock>}
+      {res.status === 'ok' && rows.length === 0 && <StateBlock kind="empty" title="No systems connected" actions={connect}>Stops are recorded and contact checks show them, but nothing is pushed to your CRM, dialer or texting platform until you connect them.</StateBlock>}
       {rows.length > 0 && (
         <>
           {rows.some((s) => s.counts === null) && <Banner kind="warning" title="Undelivered counts did not load">Shown as Not available, never as zero.</Banner>}
@@ -228,7 +228,7 @@ export function SystemDetail({ id }: { id: string }) {
       <div className="btn-row mt5"><LinkBtn href="/systems" variant="quiet">Back to connected systems</LinkBtn></div>
       {dialog && (
         <ConfirmDialog title={`Redrive ${deadN} undelivered stop${deadN === 1 ? '' : 's'} to ${s.name}?`} confirmLabel="Redrive now" busyLabel="Redriving" reasonLabel="Reason (recorded in the audit log)" reasonRequired destructive
-          body={`Do this after ${s.name} is fixed. Each stop is sent again in order. Gate checks have answered "Stop on record" for these people the whole time.`}
+          body={`Do this after ${s.name} is fixed. Each stop is sent again in order. Contact checks have answered "Stop on record" for these people the whole time.`}
           failTitle="The redrive did not start" failNext="Try again. Nothing was changed."
           onClose={() => setDialog(false)}
           onConfirm={async (reason) => { try { const r = await api.systems.redrive(s.system_id, reason); setRedrive({ id: r.redrive_id, n: r.requeued }); res.refresh(); return null; } catch (e) { return e as ApiError; } }} />

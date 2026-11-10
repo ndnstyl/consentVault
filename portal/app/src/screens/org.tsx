@@ -290,10 +290,10 @@ export function BillingScreen() {
           <KV rows={[
             ['Plan', b.plan.name], ['Status', <OrgChip key="s" status={b.status} />],
             ['Events this period', b.used && b.included ? `${fmtNum(b.used.events)} of ${fmtNum(b.included.events)} included` : <NotAvailable key="e" />],
-            ['Gate checks this period', b.used && b.included ? `${fmtNum(b.used.gate_checks)} of ${fmtNum(b.included.gate_checks)} included` : <NotAvailable key="g" />],
+            ['Contact checks this period', b.used && b.included ? `${fmtNum(b.used.gate_checks)} of ${fmtNum(b.included.gate_checks)} included` : <NotAvailable key="g" />],
             ['Usage last reported', b.last_reported_at ? <Time key="l" iso={b.last_reported_at} /> : <NotAvailable key="l" />],
           ]} />
-          {b.used && b.included && <div className="mt5"><Meter label="Events this period" used={b.used.events} included={b.included.events} /><Meter label="Gate checks this period" used={b.used.gate_checks} included={b.included.gate_checks} /></div>}
+          {b.used && b.included && <div className="mt5"><Meter label="Events this period" used={b.used.events} included={b.included.events} /><Meter label="Contact checks this period" used={b.used.gate_checks} included={b.included.gate_checks} /></div>}
           <p className="mt4">Invoices, payment method and cancellation are on Stripe&apos;s secure page.</p>
           <div className="btn-row">{btn}</div>
           <p className="hint mt4">Going over a plan limit bills overage. Capture is never refused.</p>
@@ -403,7 +403,7 @@ export function References() {
   return (
     <>
       <PageHead title="Rule references" />
-      <Banner kind="info">Citations and official links only. Not legal advice. A reference never changes a gate check unless your organization writes it into its approved policy.</Banner>
+      <Banner kind="info">Citations and official links only. Not legal advice. A reference never changes what a contact check returns.</Banner>
       {res.status === 'loading' && <Skeleton what="rule references" variant="table" />}
       {res.status === 'error' && <ErrorBlock title="References did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {res.status === 'ok' && rows.length === 0 && <StateBlock kind="empty" title="No references yet">None are listed yet.</StateBlock>}

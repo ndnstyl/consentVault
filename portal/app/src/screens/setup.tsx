@@ -11,18 +11,17 @@ import { ConfirmDialog } from '../components/Dialog.tsx';
 import type { Embedded } from '../components/ui.tsx';
 import { WordingNew } from './wording.tsx';
 import { CredentialNew } from './config.tsx';
-import { PolicyNew } from './policies.tsx';
 import { SystemNew } from './systems.tsx';
 import { Banner, Btn, Chip, ErrorBlock, LinkBtn, PageHead, Skeleton, StateBlock, SuccessBanner, TextField } from '../components/ui.tsx';
 
-export const ORDER: SetupStepName[] = ['brand', 'source', 'wording', 'credential', 'first_event', 'policy', 'system', 'confirmations'];
+export const ORDER: SetupStepName[] = ['brand', 'source', 'wording', 'credential', 'first_event', 'system', 'confirmations'];
 const LABEL: Record<SetupStepName, string> = {
   brand: 'Add a brand', source: 'Add a capture source', wording: 'Register your consent wording', credential: 'Issue a capture credential',
-  first_event: 'Send a test event', policy: 'Approve a policy', system: 'Connect a system that receives stops', confirmations: 'Turn on confirmation messages',
+  first_event: 'Send a test event', system: 'Connect a system that receives stops', confirmations: 'Turn on confirmation messages',
 };
 export const RAIL_LABEL = (s: SetupStepName) => (s === 'system' || s === 'confirmations' ? `${LABEL[s]} (optional)` : LABEL[s]);
 const PARTIAL_CAUSE: Record<SetupStepName, string> = {
-  brand: 'the brand list', source: 'the source list', wording: 'the wording list', credential: 'the credential list', first_event: 'the first event check', policy: 'the policy list', system: 'the connected systems list', confirmations: 'the confirmation rules',
+  brand: 'the brand list', source: 'the source list', wording: 'the wording list', credential: 'the credential list', first_event: 'the first event check', system: 'the connected systems list', confirmations: 'the confirmation rules',
 };
 const num = (s: SetupStepName) => ORDER.indexOf(s) + 1;
 const done = (s: SetupStep) => s.status === 'done' || s.status === 'skipped';
@@ -143,11 +142,10 @@ function DeveloperNote({ steps, role }: { steps: SetupStep[]; role: string }) {
 
 function Complete({ a }: { a: SetupAnswer }) {
   const fe = a.steps.find((s) => s.step === 'first_event');
-  const pol = a.steps.find((s) => s.step === 'policy');
   const conf = a.steps.find((s) => s.step === 'confirmations');
   return (
     <>
-      <p>{fe?.evidence ? `Your first event was recorded and sealed on ${fmtDateTime(fe.evidence.at)}.` : ''}{pol?.evidence?.id ? ` Policy version ${pol.evidence.id} is in force.` : ''}</p>
+      <p>{fe?.evidence ? `Your first event was recorded and sealed on ${fmtDateTime(fe.evidence.at)}.` : ''}</p>
       <ul className="stack card" style={{ listStyle: 'none' }}>
         {a.steps.map((s) => <li key={s.step}><Chip tone={s.status === 'done' ? 'st-success' : 'st-neutral'} icon={s.status === 'done' ? 'i-ok' : 'i-dash'}>{s.status === 'done' ? 'Done' : 'Skipped'}</Chip> {LABEL[s.step]}</li>)}
       </ul>
@@ -231,7 +229,7 @@ export function SuccessLine({ step }: { step: SetupStep }) {
   const e = step.evidence;
   const word: Record<SetupStepName, string> = {
     brand: 'A brand is set up.', source: 'A capture source is set up.', wording: 'Your consent wording is registered.', credential: 'A capture credential is active.',
-    first_event: 'Your first event was recorded.', policy: 'A policy is in force.', system: 'A connected system answered its test push.', confirmations: 'A confirmation message rule is on.',
+    first_event: 'Your first event was recorded.', system: 'A connected system answered its test push.', confirmations: 'A confirmation message rule is on.',
   };
   return <p><Chip tone="st-success" icon="i-ok">Done</Chip> {word[step.step]}{e ? ` ${fmtDateTime(e.at)}.` : ''}</p>;
 }
@@ -244,7 +242,6 @@ function StepBody({ step, a, refresh, setAnswer, go, suspended, onNotice, embedd
     case 'wording': return <><p>Paste the exact words shown beside your consent checkbox. Register every version your forms have shown, oldest first, so older records point at the words those people saw. Wording is stored byte for byte; a change is a new version.</p><WordingNew embedded={embedded} /></>;
     case 'credential': return suspended ? null : <><p>A credential lets one source send events. A site key goes in your web form; a public key is for a server.</p><CredentialNew embedded={embedded} /></>;
     case 'first_event': return <FirstEvent setAnswer={setAnswer} refresh={refresh} />;
-    case 'policy': return <><p>Your policy says what your systems do with each evidence status: proceed or hold. Until one is approved, gate checks return evidence status only. ConsentVault applies the policy as written and does not decide what the law allows.</p><PolicyNew embedded={embedded} /></>;
     case 'system': return suspended ? null : <><p>A connected system hears about stops so it stops contacting the person. Connect your dialer, CRM or texting platform.</p><SystemNew embedded={embedded} /></>;
     case 'confirmations': return <><p>When a new consent arrives, send the person one message from your own email domain or texting number that repeats what they agreed to, when, and how to stop.</p><LinkBtn href="/confirmations" variant="primary">Turn on confirmation messages</LinkBtn></>;
   }

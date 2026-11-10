@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ApiError } from '../lib/api/client.ts';
 import { SYMBOLS, reactAttrs } from '../lib/sprite.ts';
-import { DELIVERY_LABEL, DELIVERY_TONE, NA, ORG_STATUS_ICON, ORG_STATUS_LABEL, ORG_STATUS_TONE, causeLine, evidenceLabel, policyLabel } from '../lib/copy.ts';
+import { DELIVERY_LABEL, DELIVERY_TONE, NA, ORG_STATUS_ICON, ORG_STATUS_LABEL, ORG_STATUS_TONE, causeLine, evidenceLabel } from '../lib/copy.ts';
 import { fmtDate, fmtDateTime } from '../lib/format.ts';
 import type { OrgStatus } from '../lib/api/types.ts';
 import { Link, useRouter } from '../lib/router.tsx';
@@ -55,10 +55,6 @@ export function Chip({ tone, icon, children, title }: { tone: string; icon?: str
 export function EvidenceChip({ status }: { status: string }) {
   const l = evidenceLabel(status);
   return <Chip tone={`ev-${l.kind}`} icon={l.icon}>{l.text}</Chip>;
-}
-export function PolicyChip({ action, version }: { action: 'proceed' | 'hold' | null; version: number | null }) {
-  const l = policyLabel(action, version);
-  return <Chip tone={l.cls} icon={l.icon}>{l.text}</Chip>;
 }
 export function OrgChip({ status }: { status: OrgStatus | null }) {
   if (!status) return <span className="na">{NA}</span>;

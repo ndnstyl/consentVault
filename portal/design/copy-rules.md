@@ -1,8 +1,8 @@
 # Copy rules
 
-The portal shows records as evidence and the client's own policy outcome. It never states a legal conclusion
-(spec: foundational principle; requirements on no legal conclusions, evidence-not-proof, and separate evidence status
-and policy action). No em dashes and no en dashes anywhere.
+The portal shows records as evidence. It never states a legal conclusion (spec: foundational principle; requirements on
+no legal conclusions and evidence-not-proof). The policy feature was removed on 2026-11-10: no screen shows a proceed or
+hold outcome, a policy, or an attestation. No em dashes and no en dashes anywhere.
 
 ## 1. Banned in any portal string
 
@@ -14,28 +14,24 @@ Matched case-insensitively by the copy check (acceptance criterion G-3 in handof
 | compliant, compliance status, non-compliant, in compliance | legal conclusion | "what the records show", "documentation completeness" |
 | valid consent, consent is valid, invalid consent | legal conclusion | "consent record found", "no record" |
 | prove, proves, proven, proof (as a claim) | storage does not establish consent | "records", "evidence", "verified (integrity)" |
-| lawful, legally sufficient, permitted to / allowed to (contact, call, text, email, dial) | legal conclusion | "your policy: proceed", "your policy: hold" |
+| lawful, legally sufficient, permitted to / allowed to (contact, call, text, email, dial) | legal conclusion | "what the records show" |
 | PEWC satisfied, EBR qualifies, meets TCPA | legal conclusion | "checklist: 5 of 5 elements present", "relationship dates on record" |
-| safe to call, cleared to text, OK to contact | legal conclusion | "your policy: proceed" |
+| safe to call, cleared to text, OK to contact | legal conclusion | "what the records show" |
 | guaranteed, holds up in court, court-ready, litigation-proof | claim the site already refuses | "checkable offline by anyone" |
 | Something went wrong (alone) | unnamed failure | cause plus next action, section 4 |
 
 The noun "proof" is not used in labels. The contract's `/v1/proof` is labelled **Evidence lookup**, and the export is an
 **evidence package**.
 
-## 2. The only three strings allowed to contain a banned word
+## 2. The only two strings allowed to contain a banned word
 
 They are fixed, versioned, and allowlisted by exact match. Changing one is a copy change with Mike's sign-off.
 
 1. Gate notice (contracts/gate.md), shown under every evidence status:
-   "Evidence status and the outcome of your organization's approved policy. Not a legal determination."
+   "Evidence status as recorded. Not a legal determination."
 2. Package cover sentence (contracts/proof-export.md), shown on screen 14:
    "Its cover page states that the records are evidence for an investigation or dispute, and that storing a record does
    not by itself establish valid consent."
-3. Attestation text, version 1 (screen 11). **Draft; needs Mike's ruling on final wording:**
-   "I am an admin of [Organization]. [Organization] is responsible for whether this policy is legally sufficient for its
-   marketing. ConsentVault recommends that [Organization]'s counsel review it before approval. ConsentVault applies this
-   policy as written and does not decide whether any communication is permitted by law."
 
 ## 3. Label dictionary (API value to screen words)
 
@@ -46,9 +42,6 @@ They are fixed, versioned, and allowlisted by exact match. Changing one is a cop
 | `no_record` | No record | hollow diamond |
 | `record_incomplete:<elements>` | Record incomplete: missing <element names> | half diamond |
 | `unavailable:<cause>` | Not available: <cause in plain words, table in section 5> | warning triangle |
-| `policy_action: proceed` | Your policy: proceed | arrow |
-| `policy_action: hold` | Your policy: hold | pause bars |
-| `policy_action: null` + `no_policy_configured` | No policy in force | dash |
 | push `state: denied` | Suppress | |
 | push `state: permitted` | Release suppression | |
 | delivery `sent` / `acknowledged` / `failed` / `dead` / `superseded` | Sending / Acknowledged / Retrying / Undelivered (dead) / Replaced by a newer change | |
@@ -137,7 +130,7 @@ Label dictionary additions:
 
 Fixed sentences (used exactly):
 - Records search hint: "Whole number or address only. Each contact is stored encrypted, so partial search is not possible."
-- Records notice: "Evidence status describes the records held. Your policy outcome for a contact is on its evidence lookup page."
+- Records notice: "Evidence status describes the records held."
 - Reveal dialog: "Each page you open this way writes one audit row with your name and the records shown."
 - Texting registration dialog: "ConsentVault records who marked it and when. It does not check your registration with carriers or your provider."
 - Text messages (fixed, every word): see contracts/confirmations.md sections 6 and 7; the portal shows them, never edits them.

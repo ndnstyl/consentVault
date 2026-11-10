@@ -13,12 +13,12 @@ test('admin sees every navigation item', () => {
 test('developer never sees personal-data, members, audit, billing or retention screens', () => {
   const d = ids('developer');
   for (const hidden of ['evidence', 'exports', 'members', 'audit', 'billing', 'retention'] as const) assert.equal(d.includes(hidden), false, hidden);
-  for (const shown of ['overview', 'first-event', 'brands', 'sources', 'credentials', 'systems', 'wording', 'policies', 'checklists', 'settings', 'references'] as const) assert.equal(d.includes(shown), true, shown);
+  for (const shown of ['overview', 'first-event', 'brands', 'sources', 'credentials', 'systems', 'wording', 'checklists', 'settings', 'references'] as const) assert.equal(d.includes(shown), true, shown);
 });
 
 test('compliance viewer sees evidence, packages, audit, retention and read pages only', () => {
   const v = ids('compliance_viewer');
-  assert.deepEqual(v, ['overview', 'records', 'evidence', 'exports', 'wording', 'policies', 'checklists', 'systems', 'confirmations', 'retention', 'audit', 'settings', 'references']);
+  assert.deepEqual(v, ['overview', 'records', 'evidence', 'exports', 'wording', 'checklists', 'systems', 'confirmations', 'retention', 'audit', 'settings', 'references']);
 });
 
 test('write actions follow the role matrix', () => {
@@ -52,8 +52,8 @@ test('route matching prefers static segments over params', () => {
   assert.equal(matchRoute('/wording/new')?.route.id, 'wording-new');
   assert.equal(matchRoute('/wording/9f2c')?.route.id, 'wording-detail');
   assert.equal(matchRoute('/wording/9f2c')?.params.sha256, '9f2c');
-  assert.equal(matchRoute('/policies/4/approve')?.route.id, 'policy-approve');
-  assert.equal(matchRoute('/policies/new')?.route.id, 'policy-new');
+  assert.equal(matchRoute('/policies/4/approve'), null);
+  assert.equal(matchRoute('/policies/new'), null);
   assert.equal(matchRoute('/systems/new')?.route.id, 'system-new');
   assert.equal(matchRoute('/sources/src_1/')?.params.source_id, 'src_1');
   assert.equal(matchRoute('/nope'), null);
@@ -97,4 +97,10 @@ test('the new routes match, and the dynamic edit route reads source and channel'
   assert.deepEqual(m?.params, { source_id: 'src_web', channel: 'sms' });
   assert.equal(staticPaths().includes('/records') && staticPaths().includes('/setup') && staticPaths().includes('/confirmations'), true);
   assert.equal(staticPaths().some((p) => p.includes(':')), false);
+});
+
+test('no policy route or nav item', () => {
+  for (const id of ['policies', 'policy-new', 'policy-detail', 'policy-approve']) assert.equal(ROUTES.some((r) => r.id === (id as never)), false, id);
+  assert.equal(NAV.flatMap((g) => g.items).some((i) => /polic/i.test(i.label) || /polic/i.test(i.href)), false);
+  assert.equal(matchRoute('/policies'), null);
 });

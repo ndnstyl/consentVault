@@ -1,4 +1,4 @@
-import { ATTESTATION_TEMPLATE, GATE_NOTICE, NOT_A_LEGAL_TEST, NOT_LEGAL_ADVICE, PACKAGE_COVER } from './copy.ts';
+import { GATE_NOTICE, NOT_A_LEGAL_TEST, NOT_LEGAL_ADVICE, PACKAGE_COVER } from './copy.ts';
 
 // G-3 (design/handoff.md): rendered strings may not match any of these. The three fixed strings in
 // copy-rules.md section 2, "Not legal advice" and "not a legal test" are allowlisted by exact match.
@@ -10,18 +10,15 @@ export const BANNED: RegExp[] = [
   /hold(s)? up in court/i, /court-ready/i, /qualifies/i, /satisfied/i, /meets (the )?TCPA/i, /something went wrong/i,
   /—/, /–/,
   // copy-rules.md section 8 (2026-10-30)
+  // 2026-11-10: the policy feature is removed, the screens name contact checks
+  /gate check/i, /your policy/i,
   /consent confirmed/i, /confirmed consent/i, /verified consent/i, /\bopted in\b/i, /\b(has|with|without) consent\b/i,
 ];
-
-function esc(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-
-const ATTEST_RE = new RegExp(esc(ATTESTATION_TEMPLATE).replace(/\\\[Organization\\\]/g, '[^.]{1,80}?'), 'g');
 
 export function stripAllowlisted(text: string): string {
   return text
     .split(GATE_NOTICE).join('')
     .split(PACKAGE_COVER).join('')
-    .replace(ATTEST_RE, '')
     .split(NOT_LEGAL_ADVICE).join('')
     .split(NOT_LEGAL_ADVICE.toLowerCase()).join('')
     .split(NOT_A_LEGAL_TEST).join('');

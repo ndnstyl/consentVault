@@ -75,7 +75,7 @@ export function conf(st: Store): ConfState {
   return st.ext.conf;
 }
 
-const STEPS: T.SetupStepName[] = ['brand', 'source', 'wording', 'credential', 'first_event', 'policy', 'system', 'confirmations'];
+const STEPS: T.SetupStepName[] = ['brand', 'source', 'wording', 'credential', 'first_event', 'system', 'confirmations'];
 const DEV_STEPS: T.SetupStepName[] = ['source', 'credential', 'first_event', 'system'];
 const ago = (m: number) => new Date(Date.now() - m * 60e3).toISOString();
 
@@ -88,7 +88,6 @@ export function setupAnswer(st: Store): T.SetupAnswer {
     wording: st.disclosures[0] ? { kind: 'disclosure', id: st.disclosures[0].sha256, at: st.disclosures[0].registered_at } : null,
     credential: st.credentials.find((x) => x.scope === 'capture' && !x.revoked_at) ? { kind: 'credential', id: st.credentials.find((x) => x.scope === 'capture' && !x.revoked_at)!.credential_id, at: ago(900) } : null,
     first_event: sc.firstEvent !== 'none' ? { kind: 'event', id: 'evt_1', at: '2026-10-31T14:42:07Z' } : null,
-    policy: st.policies.find((p) => p.status === 'approved') ? { kind: 'policy', id: String(st.policies.find((p) => p.status === 'approved')!.version), at: ago(800) } : null,
     system: st.systems.find((y) => y.last_test && y.last_test.result === 'accepted') ? { kind: 'system', id: st.systems.find((y) => y.last_test && y.last_test.result === 'accepted')!.system_id, at: ago(700) } : null,
     confirmations: c.rules.some((r) => r.enabled) ? { kind: 'confirmation_rule', id: `${c.rules.find((r) => r.enabled)!.source_id}/${c.rules.find((r) => r.enabled)!.channel}`, at: ago(600) } : null,
   };

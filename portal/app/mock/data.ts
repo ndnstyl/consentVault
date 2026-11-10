@@ -19,7 +19,6 @@ export interface Scenario {
   sso: 'none' | 'pending' | 'verified';
   fail: Record<string, FailRule>;
   delayMs: number;
-  policyInForce: boolean;
   offboarding: boolean;
   exportMode: 'normal' | 'large' | 'fail';
   inviteMode: 'ok' | 'expired' | 'used' | 'withdrawn' | 'wrong_account';
@@ -29,7 +28,7 @@ export interface Scenario {
 
 export const DEFAULT_SCENARIO: Scenario = {
   role: 'admin', orgStatus: 'active', orgs: 'one', preselected: true, signedOut: false, noSecondFactor: false, setup: 'full',
-  firstEvent: 'sealed', empty: [], nulls: [], alarms: [], sso: 'none', fail: {}, delayMs: 0, policyInForce: true, offboarding: false, exportMode: 'normal', inviteMode: 'ok', records: 'full', confirmations: 'full',
+  firstEvent: 'sealed', empty: [], nulls: [], alarms: [], sso: 'none', fail: {}, delayMs: 0, offboarding: false, exportMode: 'normal', inviteMode: 'ok', records: 'full', confirmations: 'full',
 };
 
 const iso = (d: string) => new Date(d).toISOString();
@@ -50,7 +49,6 @@ export interface Store {
   fieldMaps: Record<string, T.FieldMapVersion[]>;
   credentials: T.Credential[];
   disclosures: T.Disclosure[];
-  policies: (T.PolicyDetail)[];
   checklists: T.ChecklistDetail[];
   systems: T.System[];
   deliveries: Record<string, T.Delivery[]>;
@@ -93,22 +91,6 @@ export function newStore(s: Scenario): Store {
     { sha256: '41ab0000000000000000000000000000000000000000000000000000000000c7', label: '2026-07', version_label: '2026-07', channels: ['sms', 'voice'], purposes: ['marketing'], brand_ids: ['brd_acme'],
       supersedes_sha256: null, superseded_by_sha256: '9f2c4d5e6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6ee1', effective_from: iso('2026-07-01T00:00:00Z'), registered_by: 'Dana Ruiz', registered_at: iso('2026-07-01T13:00:00Z'), body: 'By checking this box, I agree that Acme Lending may contact me by text message and calls about marketing.' },
   ] : [];
-  const statuses: T.EvidenceStatusKey[] = ['consent_record_found', 'stop_on_record', 'no_record', 'record_incomplete', 'unavailable'];
-  const channels = ['sms', 'voice', 'artificial_voice', 'email'];
-  const rules = (hold: (st: string, ch: string) => boolean): T.PolicyRules => ({
-    schema_version: 1,
-    purposes: { marketing: { cells: statuses.flatMap((st) => channels.map((ch) => ({ evidence_status: st, channel: ch, action: (hold(st, ch) ? 'hold' : 'proceed') as 'hold' | 'proceed' }))), checklist_version: 2 } },
-  });
-  const strict = (st: string, ch: string) => st === 'consent_record_found' ? false : !(ch === 'email' && (st === 'no_record' || st === 'record_incomplete'));
-  const base = (v: number, status: T.PolicyItem['status']): T.PolicyItem => ({
-    version: v, status, template_ref: null, based_on_version: v === 4 ? 3 : null, created_by: 'Dana Ruiz', created_at: iso(`2026-10-${10 + v}T14:00:00Z`),
-    approved_by: status === 'draft' ? null : 'Dana Ruiz', approved_at: status === 'draft' ? null : iso(v === 3 ? '2026-10-30T14:00:00Z' : '2026-10-02T14:00:00Z'), retired_at: status === 'retired' ? iso('2026-10-30T14:00:00Z') : null, retired_by_version: status === 'retired' ? 3 : null,
-  });
-  const policies: T.PolicyDetail[] = s.setup === 'blank' || !s.policyInForce && s.setup === 'new' ? [] : [
-    ...(s.policyInForce ? [{ ...base(3, 'approved'), rules: rules(strict), attestation: { version: 1, sha256: 'a1' } }] : []),
-    { ...base(4, 'draft'), rules: rules(strict) },
-    ...(s.policyInForce ? [{ ...base(2, 'retired'), rules: rules(strict), attestation: { version: 1, sha256: 'a1' } }] : []),
-  ];
   const els = (): T.ChecklistElement[] => [
     { element_id: 'el_seller', name: 'Seller named', description: 'Acme Lending', required: true, rule_reference_id: 'ref_fed' },
     { element_id: 'el_channels', name: 'Channels named', description: 'texts and calls', required: true, rule_reference_id: 'ref_fed' },
@@ -155,7 +137,7 @@ export function newStore(s: Scenario): Store {
   return {
     scenario: s, currentOrg: s.preselected && s.orgs !== 'none' ? ORG_ID : null, status: s.orgStatus, role: s.role,
     brands: s.empty.includes('brands') ? [] : brands, sources: s.empty.includes('sources') ? [] : sources, credentials: s.empty.includes('credentials') ? [] : credentials,
-    disclosures: s.empty.includes('disclosures') ? [] : disclosures, policies: s.empty.includes('policies') ? [] : policies,
+    disclosures: s.empty.includes('disclosures') ? [] : disclosures,
     checklists: s.empty.includes('checklists') ? [] : checklists, systems: s.empty.includes('systems') ? [] : systems, deliveries,
     fieldMaps: {}, redrives: {}, members, audit: s.empty.includes('audit') ? [] : audit, retention: s.empty.includes('retention') ? retention.slice(1).slice(0, 0) : retention,
     exports: [], invites: {}, log: [], failCount: {}, offboardingRequested: false, firstEventPolls: 0, testPushes: {}, ext: {},
@@ -177,10 +159,5 @@ export const CHANNELS: T.Channel[] = [
   { channel: 'artificial_voice', label: 'Artificial or prerecorded voice' }, { channel: 'email', label: 'Email' }, { channel: 'sms', label: 'SMS' }, { channel: 'voice', label: 'Voice' },
 ];
 export const PURPOSES: T.Purpose[] = [{ purpose: 'marketing', label: 'Marketing', description: 'Marketing messages from the brand' }];
-
-export const ATTESTATION: T.Attestation = {
-  version: 1, sha256: 'a1f0c2d3e4b5a6978877665544332211', published_at: iso('2026-10-29T00:00:00Z'),
-  text: "I am an admin of [Organization]. [Organization] is responsible for whether this policy is legally sufficient for its marketing. ConsentVault recommends that [Organization]'s counsel review it before approval. ConsentVault applies this policy as written and does not decide whether any communication is permitted by law.",
-};
 
 export function nowIso(): string { return now(); }

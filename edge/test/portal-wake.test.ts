@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { handlePortal, type PortalEnv } from "../src/portal.ts";
-import { AUTH_ENV_BASE, NOW_MS, memKV } from "./support/portal.ts";
+import { AUTH_ENV_BASE, NOW_MS, memKV, nowSec } from "./support/portal.ts";
+import { saveSession, SESSION_COOKIE, type SessionRecord } from "../src/session.ts";
 
 const JWK = JSON.stringify({ ...crypto.generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" }), kid: "e" });
 const WAKE = "https://wake.example.test/";
@@ -31,12 +32,17 @@ function mk(opts: { origin: "down-throw" | "down-530" | "up"; wake?: "ok" | "fai
   };
   return { env, deps, calls, kv };
 }
-const nav = (p: string) => new Request("https://app.example.com" + p, { headers: { accept: "text/html,application/xhtml+xml" } });
-const api = (p: string) => new Request("https://app.example.com" + p, { headers: { accept: "application/json" } });
+const SID = "sid-test-1";
+const REC: SessionRecord = { token: "t", token_exp: nowSec() + 300, refresh: "r", provider_sid: "p", org_id: null, tenant: null, until: nowSec() + 28800, iat: nowSec(), amr: ["hwk"], method: "Passkey", email: null, email_verified: false };
+async function signedIn(m: { kv: ReturnType<typeof memKV> }) { await saveSession(m.kv, SID, REC, NOW_MS); }
+const cookie = { cookie: `${SESSION_COOKIE}=${SID}` };
+const nav = (p: string, c: Record<string, string> = cookie) => new Request("https://app.example.com" + p, { headers: { accept: "text/html,application/xhtml+xml", ...c } });
+const api = (p: string, c: Record<string, string> = cookie) => new Request("https://app.example.com" + p, { headers: { accept: "application/json", ...c } });
 const wakes = (c: string[]) => c.filter((x) => x === "wake").length;
 
 test("a page visit with the vault parked wakes it and shows the starting page that refreshes itself", async () => {
   const m = mk({ origin: "down-530" });
+  await signedIn(m);
   const res = await handlePortal(nav("/brands"), m.env, m.deps);
   assert.equal(res.status, 503);
   assert.match(res.headers.get("content-type") ?? "", /text\/html/);
@@ -52,6 +58,7 @@ test("a page visit with the vault parked wakes it and shows the starting page th
 
 test("a thrown origin call (tunnel gone) counts as unreachable too", async () => {
   const m = mk({ origin: "down-throw" });
+  await signedIn(m);
   const res = await handlePortal(nav("/"), m.env, m.deps);
   assert.equal(res.status, 503);
   assert.match(await res.text(), /ConsentVault is starting/);
@@ -60,6 +67,7 @@ test("a thrown origin call (tunnel gone) counts as unreachable too", async () =>
 
 test("wake is called once per cold period, not once per request", async () => {
   const m = mk({ origin: "down-530" });
+  await signedIn(m);
   for (let i = 0; i < 5; i++) await handlePortal(nav("/brands"), m.env, m.deps);
   await handlePortal(api("/v1/session"), m.env, m.deps);
   assert.equal(wakes(m.calls), 1);
@@ -68,6 +76,7 @@ test("wake is called once per cold period, not once per request", async () => {
 
 test("an API call with the vault parked answers a 503 the dashboard can read, not a 502", async () => {
   const m = mk({ origin: "down-throw" });
+  await signedIn(m);
   const res = await handlePortal(api("/v1/session/orgs"), m.env, m.deps);
   assert.equal(res.status, 503);
   assert.match(res.headers.get("content-type") ?? "", /application\/json/);
@@ -93,6 +102,7 @@ test("a static asset is passed straight through with no probe of the vault", asy
 
 test("a failed wake is logged loudly and the page says it could not be started, never 'starting'", async () => {
   const m = mk({ origin: "down-530", wake: "fail" });
+  await signedIn(m);
   const logged: unknown[][] = [];
   const orig = console.error; console.error = (...a: unknown[]) => { logged.push(a); };
   try {
@@ -109,6 +119,7 @@ test("a failed wake is logged loudly and the page says it could not be started, 
 
 test("wake settings not set is the same loud failure", async () => {
   const m = mk({ origin: "down-530", wake: "unset" });
+  await signedIn(m);
   const orig = console.error; const logged: string[] = []; console.error = (...a: unknown[]) => { logged.push(String(a[0])); };
   try {
     const res = await handlePortal(nav("/brands"), m.env, m.deps);
@@ -125,4 +136,41 @@ test("the vault's own 503 (gate fails closed) is an answer, not a parked vault",
   const res = await handlePortal(api("/v1/session"), m.env, m.deps);
   assert.equal(wakes(m.calls), 0);
   assert.notEqual(((await res.clone().json().catch(() => ({}))) as { error?: string }).error, "vault_starting");
+});
+
+test("an anonymous visitor, a crawler and a visitor whose session is gone see the starting page and never trigger a wake", async () => {
+  for (const c of [{}, { cookie: `${SESSION_COOKIE}=not-a-session` }, { cookie: "other=1" }]) {
+    const m = mk({ origin: "down-530" });
+    await signedIn(m);
+    const res = await handlePortal(nav("/brands", c), m.env, m.deps);
+    assert.equal(res.status, 503);
+    assert.match(await res.text(), /ConsentVault is starting/);
+    assert.equal(wakes(m.calls), 0);
+    const j = await handlePortal(api("/v1/session", c), m.env, m.deps);
+    assert.equal(j.status, 503);
+    assert.equal(wakes(m.calls), 0);
+  }
+});
+
+test("an expired session does not wake the vault", async () => {
+  const m = mk({ origin: "down-530" });
+  await saveSession(m.kv, SID, { ...REC, until: nowSec() - 10 }, NOW_MS);
+  await handlePortal(nav("/brands"), m.env, m.deps);
+  assert.equal(wakes(m.calls), 0);
+});
+
+test("the edge asks for at most 20 wakes a day, logs when the cap is hit, and says it could not start", async () => {
+  const m = mk({ origin: "down-530" });
+  await signedIn(m);
+  const orig = console.error; const logged: string[] = []; console.error = (...a: unknown[]) => { logged.push(String(a[0])); };
+  let capped = "";
+  try {
+    for (let i = 0; i < 25; i++) { await m.kv.delete("cv:wake:requested"); capped = await (await handlePortal(nav("/brands"), m.env, m.deps)).text(); }
+  } finally { console.error = orig; }
+  assert.match(capped, /could not be started/);
+  assert.equal(wakes(m.calls), 20);
+  assert.ok(logged.some((l) => l.includes("WAKE_CAP_REACHED")));
+  const day = [...m.kv.data.keys()].find((k) => k.startsWith("cv:wake:day:"));
+  assert.ok(day, "the counter is a key per day");
+  assert.ok((m.kv.ttl.get(day!) ?? 0) >= 86400, "it outlives the day");
 });

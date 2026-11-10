@@ -3,7 +3,7 @@
 
 import { handleAuth } from "./auth.ts";
 import { handleGateway, vaultCaller, type GatewayDeps, type GatewayEnv } from "./gateway.ts";
-import type { KV } from "./session.ts";
+import { loadSession, type KV } from "./session.ts";
 import { callWake, type WakeEnv } from "./wake.ts";
 
 export { SessionGate } from "./session-gate.ts";
@@ -22,6 +22,8 @@ const PARKED_STATUSES = new Set([502, 504, 520, 521, 522, 523, 524, 525, 526, 52
 export const WAKE_MARKER = "cv:wake:requested";
 export const WAKE_MARKER_SECONDS = 120; // Workers KV accepts no expiry under 60 seconds
 export const UP_CACHE_MS = 60_000;
+export const WAKE_DAILY_CAP = 20;
+const WAKE_DAY_KEY = "cv:wake:day:";
 const lastUp = new WeakMap<object, number>();
 const clean = (u: string) => u.replace(/\/+$/, "");
 
@@ -62,14 +64,35 @@ function startingResponse(wantsHtml: boolean, started: boolean, detail: string):
   return new Response(body, { status: 503, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", ...(started ? { "retry-after": "15" } : {}) } });
 }
 
+async function signedInPerson(request: Request, env: PortalEnv, nowMs: number): Promise<boolean> {
+  try {
+    const got = await loadSession(env.SESSIONS, request.headers.get("cookie"));
+    return !!got && got.rec.until * 1000 > nowMs;
+  } catch (e) {
+    console.error(`consentvault portal SESSION_UNREADABLE: ${(e as Error).name}; treated as not signed in, no wake asked`);
+    return false;
+  }
+}
+
 // The vault is parked: ask for it once per cold period (a marker in the session store, which expires), say so, and never
 // pretend a failed wake is a start. A failed wake is logged by name and leaves no marker, so the next request tries again.
 async function whileParked(request: Request, env: PortalEnv, deps: GatewayDeps, nowMs: number): Promise<Response> {
   const wantsHtml = (request.headers.get("accept") ?? "").includes("text/html") && !new URL(request.url).pathname.startsWith("/v1/");
   lastUp.delete(env);
+  // Only a person with a live sign-in may start the servers. A visitor without one, and a crawler, are shown the page and
+  // trigger nothing; the servers start when a signed-in person (or the signup retry worker) asks.
+  if (!(await signedInPerson(request, env, nowMs))) return startingResponse(wantsHtml, true, "");
   let marked: string | null = null;
   try { marked = await env.SESSIONS.get(WAKE_MARKER); } catch (e) { console.error(`consentvault portal WAKE_MARKER_UNREADABLE: ${(e as Error).name}; asking for a wake anyway`); }
   if (!marked) {
+    const day = WAKE_DAY_KEY + new Date(nowMs).toISOString().slice(0, 10);
+    let used = 0;
+    try { used = Number(await env.SESSIONS.get(day)) || 0; } catch (e) { console.error(`consentvault portal WAKE_COUNTER_UNREADABLE: ${(e as Error).name}; the daily cap cannot be checked, no wake was asked`); return startingResponse(wantsHtml, false, "the daily wake counter could not be read"); }
+    if (used >= WAKE_DAILY_CAP) {
+      console.error(`consentvault portal WAKE_CAP_REACHED: ${used} wakes already asked today (cap ${WAKE_DAILY_CAP}); no further wake until tomorrow`);
+      return startingResponse(wantsHtml, false, `the daily cap of ${WAKE_DAILY_CAP} wakes was reached`);
+    }
+    try { await env.SESSIONS.put(day, String(used + 1), { expirationTtl: 2 * 86400 }); } catch (e) { console.error(`consentvault portal WAKE_COUNTER_UNWRITABLE: ${(e as Error).name}; no wake was asked`); return startingResponse(wantsHtml, false, "the daily wake counter could not be written"); }
     const woke = await callWake(env, deps.fetch, nowMs);
     if (!woke.ok) {
       console.error(`consentvault portal WAKE_FAILED: ${woke.reason}`);

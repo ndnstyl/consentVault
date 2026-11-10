@@ -575,10 +575,6 @@ def issue_credential(ctx: Ctx, body: Any, *, custody=None) -> dict:
     if scope != "capture" and ctx.actor.role != ROLE_ADMIN:
         raise ApiError("role_not_allowed", "only an admin issues read credentials", {"role": ctx.actor.role})
     require_can_add(ctx)
-    if scope == "gate_read" and ctx.conn.execute(
-            "SELECT 1 FROM consentvault.policy WHERE org_id = (SELECT consentvault.current_org()) AND status = 'approved'"
-    ).fetchone() is None:
-        raise ApiError("policy_required", "a gate credential needs an approved policy in force first")
     return _issue(ctx, name=b.get("name"), kind=b.get("kind"), scope=scope, source_id=b.get("source_id"),
                   public_key=b.get("public_key"), algorithm=b.get("algorithm"),
                   custody=custody if custody is not None else ctx.custody)

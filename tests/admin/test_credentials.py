@@ -120,11 +120,9 @@ def test_role_limits_on_scopes(world):
     boss.ok("POST", "/v1/credentials", body={"name": "proof", "kind": "hmac_fallback", "scope": "proof_read", "source_id": src})
 
 
-def test_production_check_credentials_only_after_a_policy_is_approved(world):
+def test_contact_check_credential_is_issued_with_no_policy(world):
     vault, org, boss, dev, viewer, src = world
     body = {"name": "gate", "kind": "hmac_fallback", "scope": "gate_read", "source_id": src}
-    boss.err("POST", "/v1/credentials", body=body, name="policy_required", status=409)
-    approve_a_policy(boss)
     assert boss.ok("POST", "/v1/credentials", body=body)["scope"] == "gate_read"
 
 

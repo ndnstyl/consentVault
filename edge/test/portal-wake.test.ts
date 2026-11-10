@@ -174,3 +174,17 @@ test("the edge asks for at most 20 wakes a day, logs when the cap is hit, and sa
   assert.ok(day, "the counter is a key per day");
   assert.ok((m.kv.ttl.get(day!) ?? 0) >= 86400, "it outlives the day");
 });
+
+test("a sign-in held only in the session's Durable Object still wakes the vault on a dashboard API call", async () => {
+  const m = mk({ origin: "down-throw" });
+  const ops: string[] = [];
+  const ns = { idFromName: (n: string) => n, get: () => ({ fetch: async (q: Request) => { const b = (await q.json()) as { op: string }; ops.push(b.op); return new Response(JSON.stringify(b.op === "load" ? REC : null)); } }) };
+  const env = { ...m.env, SESSION_GATE: ns };
+  const res = await handlePortal(api("/v1/session"), env, m.deps);
+  assert.equal(res.status, 503);
+  assert.equal(((await res.json()) as { error: string }).error, "vault_starting");
+  assert.equal(wakes(m.calls), 1);
+  await handlePortal(api("/v1/session"), env, m.deps);
+  assert.equal(wakes(m.calls), 1, "once per cold period");
+  assert.ok(ops.includes("load"));
+});

@@ -208,7 +208,7 @@ export function Shell() {
   const titled = (node: React.ReactNode, t = title) => <><PageHead title={t} />{node}</>;
   if (s.phase === 'idle' || s.phase === 'loading' || s.phase === 'choose') body = titled(<Skeleton what="your organization" rows={3} variant="tiles" />);
   else if (s.phase === 'noorg') body = titled(<StateBlock kind="error" title="Your account is not a member of any organization" cause="Your membership may have been removed, or the organization was closed." next="Ask your admin for an invitation, or sign in with another account." actions={<Btn variant="secondary" onClick={s.signOut}>Sign out</Btn>} />, 'Your organizations');
-  else if (s.phase === 'error' && s.error) body = titled(<ErrorBlock title={`The ${title.toLowerCase()} did not load`} err={s.error} override="your organization's status could not be read" next="Try again. Capture from your website and systems is not affected by this page." actions={<Btn variant="secondary" onClick={s.reload}>Try again</Btn>} />);
+  else if (s.phase === 'error' && s.error) body = titled(<ErrorBlock title={`The ${title.toLowerCase()} did not load`} err={s.error} onRetry={s.reload} override="your organization's status could not be read" next="Try again. Capture from your website and systems is not affected by this page." actions={<Btn variant="secondary" onClick={s.reload}>Try again</Btn>} />);
   else if (!m) body = titled(<NotFound />);
   else if (!allowed) body = titled(<RoleRefusal id={m.route.id} />);
   else body = <Screen key={`${s.orgId}:${m.route.id}:${router.path}`} route={m.route} params={m.params} />;

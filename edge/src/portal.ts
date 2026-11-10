@@ -3,7 +3,8 @@
 
 import { handleAuth } from "./auth.ts";
 import { handleGateway, vaultCaller, type GatewayDeps, type GatewayEnv } from "./gateway.ts";
-import { loadSession, type KV } from "./session.ts";
+import { cookieValue, SESSION_COOKIE, type KV } from "./session.ts";
+import { sessionStoreFor } from "./session-store.ts";
 import { callWake, type WakeEnv } from "./wake.ts";
 
 export { SessionGate } from "./session-gate.ts";
@@ -64,10 +65,13 @@ function startingResponse(wantsHtml: boolean, started: boolean, detail: string):
   return new Response(body, { status: 503, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", ...(started ? { "retry-after": "15" } : {}) } });
 }
 
-async function signedInPerson(request: Request, env: PortalEnv, nowMs: number): Promise<boolean> {
+async function signedInPerson(request: Request, env: PortalEnv, deps: GatewayDeps, nowMs: number): Promise<boolean> {
   try {
-    const got = await loadSession(env.SESSIONS, request.headers.get("cookie"));
-    return !!got && got.rec.until * 1000 > nowMs;
+    const sid = cookieValue(request.headers.get("cookie"), SESSION_COOKIE);
+    if (!sid) return false;
+    // The record lives wherever the session store keeps it (the session's Durable Object in production), never assumed to be the key-value copy.
+    const rec = await sessionStoreFor({ SESSIONS: env.SESSIONS, SESSION_GATE: env.SESSION_GATE, AUTH_BASE_URL: env.AUTH_BASE_URL!, AUTH_CLIENT_ID: env.AUTH_CLIENT_ID!, AUTH_CLIENT_SECRET: env.AUTH_CLIENT_SECRET }, deps.fetch).load(sid, nowMs);
+    return !!rec && rec.until * 1000 > nowMs;
   } catch (e) {
     console.error(`consentvault portal SESSION_UNREADABLE: ${(e as Error).name}; treated as not signed in, no wake asked`);
     return false;
@@ -81,7 +85,7 @@ async function whileParked(request: Request, env: PortalEnv, deps: GatewayDeps, 
   lastUp.delete(env);
   // Only a person with a live sign-in may start the servers. A visitor without one, and a crawler, are shown the page and
   // trigger nothing; the servers start when a signed-in person (or the signup retry worker) asks.
-  if (!(await signedInPerson(request, env, nowMs))) return startingResponse(wantsHtml, true, "");
+  if (!(await signedInPerson(request, env, deps, nowMs))) return startingResponse(wantsHtml, true, "");
   let marked: string | null = null;
   try { marked = await env.SESSIONS.get(WAKE_MARKER); } catch (e) { console.error(`consentvault portal WAKE_MARKER_UNREADABLE: ${(e as Error).name}; asking for a wake anyway`); }
   if (!marked) {

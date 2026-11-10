@@ -72,7 +72,7 @@ export function Overview() {
         lede={view?.items && !complete ? (role === 'compliance_viewer' ? 'Setup is still in progress. An admin finishes these steps.' : 'Finish these steps to record your first test event. About 15 minutes.') : 'Where your organization stands: policy, sealing, deliveries and usage.'}
         meta={<>{orgName} · <OrgChip status={org?.status ?? null} />{plan && <> · {plan} plan</>}</>} />
       {res.status === 'loading' && <Skeleton what="overview" rows={4} variant="tiles" />}
-      {res.status === 'error' && <ErrorBlock title="The overview did not load" err={res.error} override="your organization's status could not be read" next="Try again. Capture from your website and systems is not affected by this page." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
+      {res.status === 'error' && <ErrorBlock title="The overview did not load" err={res.error} onRetry={res.reload} override="your organization's status could not be read" next="Try again. Capture from your website and systems is not affected by this page." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {view && <OverviewBody v={view} celebrate={celebrate} role={role} />}
     </>
   );

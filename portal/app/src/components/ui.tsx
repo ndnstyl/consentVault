@@ -145,8 +145,24 @@ export function StateBlock({ kind, title, children, cause, next, actions, icon, 
   );
 }
 
+/** The cloud servers are parked and the edge has asked for them: say so and ask again every 15 seconds until the vault answers. */
+export function StartingBlock({ onRetry }: { onRetry: () => void }) {
+  useEffect(() => {
+    const t = setInterval(onRetry, 15000);
+    return () => clearInterval(t);
+  }, [onRetry]);
+  return (
+    <div className="empty" role="status" aria-live="polite">
+      <Icon name="i-vault" className="big" />
+      <h2>ConsentVault is starting</h2>
+      <p>This takes about two minutes. This page refreshes itself and shows your dashboard as soon as it is ready. Capture from your website and systems is not affected.</p>
+    </div>
+  );
+}
+
 /** Error formula (copy-rules.md section 4): what did not happen, cause with status and name, one next step. */
-export function ErrorBlock({ title, err, next, actions, override, headingLevel }: { title: string; err: ApiError; next: React.ReactNode; actions?: React.ReactNode; override?: string; headingLevel?: 2 | 3 }) {
+export function ErrorBlock({ title, err, next, actions, override, headingLevel, onRetry }: { title: string; err: ApiError; next: React.ReactNode; actions?: React.ReactNode; override?: string; headingLevel?: 2 | 3; onRetry?: () => void }) {
+  if (err.code === 'vault_starting' && onRetry) return <StartingBlock onRetry={onRetry} />;
   return <StateBlock kind="error" title={title} cause={causeLine(err.status, err.code, override)} next={next} actions={actions} headingLevel={headingLevel} />;
 }
 

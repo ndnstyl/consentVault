@@ -95,7 +95,7 @@ export interface AuditRow {
   target: { kind: string; id: string | null }; reason: string | null; request_id: string;
 }
 
-// policy.md
+// reference lists
 export interface Channel { channel: string; label: string }
 export interface Purpose { purpose: string; label: string; description: string }
 export interface Disclosure {
@@ -104,16 +104,7 @@ export interface Disclosure {
   body?: string;
 }
 export type EvidenceStatusKey = 'consent_record_found' | 'stop_on_record' | 'no_record' | 'record_incomplete' | 'unavailable';
-export interface PolicyCell { evidence_status: EvidenceStatusKey; channel: string; action: 'proceed' | 'hold' }
-export interface PolicyRules { schema_version: 1; purposes: Record<string, { cells: PolicyCell[]; checklist_version: number | null }> }
-export interface PolicyItem {
-  version: number; status: 'draft' | 'approved' | 'retired'; template_ref: string | null; based_on_version: number | null;
-  created_by: string; created_at: string; approved_by: string | null; approved_at: string | null; retired_at: string | null; retired_by_version: number | null;
-}
-export interface PolicyDetail extends PolicyItem { rules: PolicyRules; attestation?: { version: number; sha256: string } }
-export interface PolicyTemplate { template_ref: string; label: string; description: string; rules: PolicyRules }
-export interface Attestation { version: number; text: string; sha256: string; published_at: string }
-export interface ChecklistItem { version: number; kind: 'pewc' | 'custom'; label: string; status: 'draft' | 'approved'; element_count: number; created_at: string; approved_by: string | null; approved_at: string | null }
+export interface ChecklistItem { version: number; kind: 'pewc' | 'custom'; label: string; status: 'draft' | 'approved' | 'retired'; element_count: number; created_at: string; approved_by: string | null; approved_at: string | null }
 export interface ChecklistElement { element_id: string; name: string; description: string; required: boolean; rule_reference_id: string | null }
 export interface ChecklistDetail extends ChecklistItem { elements: ChecklistElement[] }
 export interface ChecklistTemplate { template_ref: string; kind: 'pewc' | 'custom'; label: string; elements: ChecklistElement[] }
@@ -168,7 +159,7 @@ export interface ExportDetail {
 }
 
 // billing.md
-export interface Plan { plan_id: string; name: string; interval: string; unit_amount: number; currency: string; included_events: number; included_gate_checks: number; orgs_brands: number }
+export interface Plan { plan_id: string; name: string; interval: string; unit_amount: number; currency: string; included_events: number; included_gate_checks: number; orgs_brands?: number | null }
 export interface Billing {
   status: OrgStatus; plan: { plan_id: string; name: string } | null; period: { start: string; end: string } | null;
   included: { events: number; gate_checks: number } | null; used: { events: number; gate_checks: number } | null; last_reported_at: string | null;
@@ -225,7 +216,7 @@ export interface RecordsExportItem {
 export interface RecordsExportDetail extends RecordsExportItem { progress: { done: number; total: number } | null; download_url: string | null }
 
 // setup.md
-export type SetupStepName = 'brand' | 'source' | 'wording' | 'credential' | 'first_event' | 'policy' | 'system' | 'confirmations';
+export type SetupStepName = 'brand' | 'source' | 'wording' | 'credential' | 'first_event' | 'system' | 'confirmations';
 export interface SetupStep {
   step: SetupStepName;
   status: 'done' | 'to_do' | 'skipped' | 'blocked' | null;

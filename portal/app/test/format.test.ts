@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkContact, maskContact, prettyContact, shortId } from '../src/lib/format.ts';
+import { checkContact, maskContact, prettyContact, shortId, orgsBrandsLine } from '../src/lib/format.ts';
 import { scanCopy, stripAllowlisted } from '../src/lib/copycheck.ts';
-import { ATTESTATION_TEMPLATE, GATE_NOTICE, PACKAGE_COVER, evidenceLabel, fillOrg, policyLabel } from '../src/lib/copy.ts';
+import { GATE_NOTICE, PACKAGE_COVER, evidenceLabel } from '../src/lib/copy.ts';
 
 test('contact check accepts a ten digit phone and a full email, refuses an incomplete entry', () => {
   assert.deepEqual(checkContact('(555) 555-0100'), { ok: true, value: '+15555550100', kind: 'phone' });
@@ -27,7 +27,6 @@ test('copy check refuses legal conclusions and dashes, and allows only the fixed
   }
   assert.deepEqual(scanCopy(GATE_NOTICE), []);
   assert.deepEqual(scanCopy(PACKAGE_COVER), []);
-  assert.deepEqual(scanCopy(fillOrg(ATTESTATION_TEMPLATE, 'Acme Lending')), []);
   assert.deepEqual(scanCopy('Citations and official links only. Not legal advice.'), []);
   assert.deepEqual(scanCopy('It reports documentation completeness and is not a legal test.'), []);
   assert.ok(scanCopy(`${GATE_NOTICE} but also compliant`).length > 0);
@@ -39,7 +38,11 @@ test('label dictionary words carry no banned phrasing', () => {
   for (const l of labels) assert.deepEqual(scanCopy(l), [], l);
   assert.equal(evidenceLabel('record_incomplete:seller').text, 'Record incomplete: missing seller');
   assert.equal(evidenceLabel('unavailable:key_unavailable').text, "Not available: your organization's encryption key did not answer");
-  assert.equal(policyLabel('proceed', 3).text, 'Your policy: proceed');
-  assert.equal(policyLabel('hold', 3).text, 'Your policy: hold');
-  assert.equal(policyLabel(null, null).text, 'No policy in force');
+});
+
+test('the plan card limit line is omitted when the plan carries no limit, never NaN', () => {
+  assert.equal(orgsBrandsLine(undefined), null);
+  assert.equal(orgsBrandsLine(null), null);
+  assert.equal(orgsBrandsLine(NaN), null);
+  assert.equal(orgsBrandsLine(5), 'Up to 5 organizations and brands');
 });

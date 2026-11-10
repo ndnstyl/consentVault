@@ -127,3 +127,13 @@ def test_health_counts_only_and_null_when_unknown(vault):
     h = boss.ok("GET", "/v1/health")
     assert h["unsealed_events_over_1h"] == 0 and h["first_event"] is None
     assert h["dead_deliveries"] is None and h["last_chain_verification"] is None  # never a default zero
+
+
+def test_operator_marks_a_trial_org_active_without_a_charge_audited_and_needs_the_operator_role(vault):
+    org, boss = vault.org_with_admin("Internal Co", "boss@internal.example")
+    oid = org["org_id"]
+    out = _status(vault, oid, "active", reason="operator's own organisation, internal and no-charge")
+    assert out["previous_status"] == "trial" and out["status"] == "active"
+    rows = boss.ok("GET", "/v1/audit", {"action": "org.status_changed"})["items"]
+    assert len(rows) == 1 and rows[0]["actor"]["kind"] == "operator" and rows[0]["reason"].startswith("trial to active")
+    assert boss.ok("GET", "/v1/org")["status"] == "active"

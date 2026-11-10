@@ -6,7 +6,7 @@ import { useAction, usePoll, useResource } from '../lib/hooks.ts';
 import { Link, useRouter } from '../lib/router.tsx';
 import { ROLE_LABEL } from '../lib/roles.ts';
 import { safeReturn, useSession } from '../lib/session.tsx';
-import { fmtDate, fmtMoney, fmtNum } from '../lib/format.ts';
+import { fmtDate, fmtMoney, fmtNum, orgsBrandsLine } from '../lib/format.ts';
 import { Banner, Btn, Chip, ErrorBlock, KV, LinkBtn, NotAvailable, OrgChip, Skeleton, StateBlock, Time } from '../components/ui.tsx';
 
 function CenteredCard({ children, wide }: { children: React.ReactNode; wide?: boolean }) {
@@ -281,8 +281,8 @@ export function Plan() {
               <p className="hl">{fmtMoney(p.unit_amount, p.currency)} a {p.interval}</p>
               <ul>
                 <li>{fmtNum(p.included_events)} events a month</li>
-                <li>{fmtNum(p.included_gate_checks)} gate checks a month</li>
-                <li>{`Up to ${fmtNum(p.orgs_brands)} organizations and brands`}</li>
+                <li>{fmtNum(p.included_gate_checks)} contact checks a month</li>
+                {orgsBrandsLine(p.orgs_brands) && <li>{orgsBrandsLine(p.orgs_brands)}</li>}
               </ul>
               <p className="hint">Overage billed per event and per check. Capture is never refused for going over.</p>
               <Btn variant="primary" busy={checkout.busy && picked === p.plan_id} busyLabel="Opening checkout" disabled={checkout.busy} onClick={() => choose(p)}>{`Choose ${p.name}`}</Btn>

@@ -37,7 +37,7 @@ DEFAULT_CHANNELS = (("voice", "Voice call"), ("artificial_voice", "Artificial or
 DEFAULT_PURPOSES = (("marketing", "Marketing", "Marketing contact"),)
 ORG_STATUSES = ("trial", "active", "past_due", "suspended", "offboarding", "closed")
 OPERATOR_STATUS_TARGETS = ("suspended", "active", "offboarding", "closed")
-_TRANSITIONS = {"trial": {"suspended", "offboarding"}, "active": {"suspended", "offboarding"},
+_TRANSITIONS = {"trial": {"active", "suspended", "offboarding"}, "active": {"suspended", "offboarding"},
                 "past_due": {"suspended", "offboarding"}, "suspended": {"active", "offboarding", "suspended"}, "offboarding": {"closed"}}
 _ORIGIN = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$")
 

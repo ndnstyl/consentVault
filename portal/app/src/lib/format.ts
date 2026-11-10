@@ -22,6 +22,7 @@ export function fmtTime(iso: string): string {
   return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short' }).format(d);
 }
 export function fmtNum(n: number): string { return new Intl.NumberFormat('en-US').format(n); }
+export function orgsBrandsLine(n: number | null | undefined): string | null { return typeof n === 'number' && Number.isFinite(n) ? `Up to ${fmtNum(n)} organizations and brands` : null; }
 export function fmtMoney(cents: number, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: currency.toUpperCase(), maximumFractionDigits: 0 }).format(cents / 100);
 }

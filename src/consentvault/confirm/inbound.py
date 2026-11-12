@@ -46,7 +46,7 @@ def twilio_signature(auth_token: str, url: str, pairs: list[tuple[str, str]]) ->
     """Twilio's request signature: base64 HMAC-SHA1, keyed with the account auth token, over the full URL followed by the POST
     parameters sorted by name and concatenated as name then value."""
     data = url + "".join(k + v for k, v in sorted(pairs))
-    mac = hmac.new(auth_token.encode("utf-8"), data.encode("utf-8"), hashlib.sha1)  # nosec B324  (the provider's own scheme)
+    mac = hmac.new(auth_token.encode("utf-8"), data.encode("utf-8"), hashlib.sha1)  # nosec B324 -- Twilio's own request-signature scheme is HMAC-SHA1; not ours to change
     return base64.b64encode(mac.digest()).decode("ascii")
 
 

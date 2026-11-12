@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import uuid
 from dataclasses import dataclass, field
@@ -449,7 +450,7 @@ def verify_raw_chain(conn: psycopg.Connection) -> list[dict]:
         arrival = [(f["arrival_ordinal"], f["source"], f["name"], f["value_ct"]) for f in conn.execute(
             "SELECT arrival_ordinal, source, name, value_ct FROM consentvault.raw_post_fact WHERE org_id = %s AND post_id = %s"
             " AND arrival_ordinal IS NOT NULL ORDER BY arrival_ordinal", (r["org_id"], r["post_id"]))]
-        if facts_digest(arrival) != r["facts_sha256"]:
+        if not hmac.compare_digest(facts_digest(arrival), str(r["facts_sha256"])):
             breaks.append({"seq": r["seq"], "post_id": str(r["post_id"]), "reason": "the facts known at arrival do not match the row's facts digest"})
         prev, expect = r["row_hash"], r["seq"] + 1
     return breaks
@@ -512,7 +513,7 @@ def verify_raw_bodies(conn: psycopg.Connection, store, crypto=None) -> list[dict
             except ProviderError as exc:  # loud-failure-exempt: recorded as a break in the returned list, which the job reports
                 breaks.append({**who, "reason": f"the stored body cannot be read: {type(exc).__name__}"})
                 continue
-            if hashlib.sha256(blob).hexdigest() != r["body_object_sha256"]:
+            if not hmac.compare_digest(hashlib.sha256(blob).hexdigest(), str(r["body_object_sha256"])):
                 breaks.append({**who, "reason": "the stored body differs from the digest in the row"})
                 continue
         else:
@@ -527,6 +528,6 @@ def verify_raw_bodies(conn: psycopg.Connection, store, crypto=None) -> list[dict
                 continue  # key erased: the digest comparison above is what can be checked
             plain = tc.decrypt_field(crypto.open_contact_key(org, WrappedKey(bytes(k["post_key_wrapped"]), k["key_version"])),
                                      org, str(r["post_id"]), COL_BODY, blob)
-        if hashlib.sha256(plain).hexdigest() != r["body_sha256"] or len(plain) != r["body_bytes"]:
+        if not hmac.compare_digest(hashlib.sha256(plain).hexdigest(), str(r["body_sha256"])) or len(plain) != r["body_bytes"]:
             breaks.append({**who, "reason": "the body does not match its fingerprint"})
     return breaks

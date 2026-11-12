@@ -71,6 +71,86 @@
       "reason": "concatenates the literal ' FOR UPDATE' only; dynamic columns go through psycopg.sql.Identifier",
       "expires": "2027-01-15",
       "count": 1
+    },
+    {
+      "tool": "semgrep",
+      "id": "cv-nonconstant-time-compare-py",
+      "path": "src/consentvault/safelog.py",
+      "reason": "compares a database error's source line number and type signature against a fixed table of known refusals; no secret, digest or token is involved",
+      "expires": "2027-01-15",
+      "count": 1
+    },
+    {
+      "tool": "semgrep",
+      "id": "cv-nonconstant-time-compare-py",
+      "path": "src/consentvault/cmd_match_repair.py",
+      "reason": "compares the edge-envelope verification status string to the literal 'verified'; no secret, digest or token is involved",
+      "expires": "2027-01-15",
+      "count": 1
+    },
+    {
+      "tool": "bandit",
+      "id": "B314",
+      "path": "src/consentvault/providers/evidence.py",
+      "reason": "parses the XML list answer of our own signed S3 request over TLS to the AWS endpoint; defusedxml is not a dependency",
+      "expires": "2027-01-15",
+      "count": 1
+    },
+    {
+      "tool": "bandit",
+      "id": "B314",
+      "path": "src/consentvault/providers/rds_restore.py",
+      "reason": "parses the XML answer of our own signed RDS request over TLS to the AWS endpoint; defusedxml is not a dependency",
+      "expires": "2027-01-15",
+      "count": 1
+    },
+    {
+      "tool": "bandit",
+      "id": "B608",
+      "path": "src/consentvault/confirm/reads.py",
+      "reason": "SELECT text is literal fragments plus a WHERE built from literal clauses; every value is a bound parameter",
+      "expires": "2027-01-15",
+      "count": 2
+    },
+    {
+      "tool": "bandit",
+      "id": "B608",
+      "path": "src/consentvault/extract.py",
+      "reason": "INSERT column names are checked against a fixed allowed set before the f-string, and the optional map_version clause is a literal; every value is a bound parameter",
+      "expires": "2027-01-15",
+      "count": 2
+    },
+    {
+      "tool": "bandit",
+      "id": "B608",
+      "path": "src/consentvault/gate.py",
+      "reason": "f-string pastes only the _LINE_COLUMNS and _ARRIVAL_ORDER module constants; contact kind and fingerprint are bound parameters",
+      "expires": "2027-01-15",
+      "count": 2
+    },
+    {
+      "tool": "bandit",
+      "id": "B608",
+      "path": "src/consentvault/notify/pg_log.py",
+      "reason": "appends the literal ' ON CONFLICT DO NOTHING' clause chosen from a fixed outcome; every value is a bound parameter",
+      "expires": "2027-01-15",
+      "count": 1
+    },
+    {
+      "tool": "bandit",
+      "id": "B608",
+      "path": "src/consentvault/tenancy/records_admin.py",
+      "reason": "SQL is literal fragments joined by role and a literal ASC or DESC; cursor keys and limit are bound parameters",
+      "expires": "2027-01-15",
+      "count": 5
+    },
+    {
+      "tool": "bandit",
+      "id": "B608",
+      "path": "src/consentvault/tenancy/setup.py",
+      "reason": "f-strings paste only the module constant _ORG (a current_org() subselect); step and every other value is a bound parameter",
+      "expires": "2027-01-15",
+      "count": 11
     }
   ]
 }

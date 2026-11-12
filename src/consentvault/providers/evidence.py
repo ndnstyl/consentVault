@@ -263,7 +263,7 @@ class S3ObjectLockEvidenceStore(EvidenceStore):
         path, digest = self._object_path(org_id, key), _sha256_hex(bytes(data))
         # S3 refuses an Object Lock write without an integrity header; the SHA-256 one is also checked by S3 on arrival.
         status, hdrs, body = self._request("PUT", path, {
-            "content-md5": base64.b64encode(hashlib.md5(bytes(data)).digest()).decode("ascii"),
+            "content-md5": base64.b64encode(hashlib.md5(bytes(data), usedforsecurity=False).digest()).decode("ascii"),
             "x-amz-checksum-sha256": base64.b64encode(hashlib.sha256(bytes(data)).digest()).decode("ascii"),
             "if-none-match": "*",
             "x-amz-object-lock-mode": "COMPLIANCE",

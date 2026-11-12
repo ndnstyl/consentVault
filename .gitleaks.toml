@@ -11,4 +11,7 @@ regexes = [
   '''sk_test_secretvalue''',  # fake key in tests/billing/test_stripe_client.py proving a key never reaches an error message
   '''whsec_mock_''',  # fake webhook secret returned by the dashboard's mock API (portal/app/mock/server.ts)
   '''BEGIN PRIVATE KEY-----\\nabc\\n-----END''',  # fake PEM the dashboard's browser test pastes to prove a private key is refused
+  '''secret=SECRET, token=TOKEN''',  # the door tests pass named module constants, not values (tests/test_door_*.py)
+  '''9d3a1c1e-7b1a-4c3e-9f6e-''',  # the log-scrub tests' fixture token, present only to prove it is masked (tests/test_log_scrub_providers.py)
+  '''api_key_secret=abcDEF123456''',  # same file: an obviously fake key proving the scrubber masks the value
 ]

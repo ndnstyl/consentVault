@@ -4,6 +4,7 @@ useDefault = true
 
 [allowlist]
 description = "AWS's own documented example credentials (Signature V4 test vectors) and obvious test strings"
+regexTarget = "line"  # the entries below name the fixture by the line it sits on, not by the matched value
 regexes = [
   '''AKIAIOSFODNN7EXAMPLE''',
   '''wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY''',
@@ -14,4 +15,5 @@ regexes = [
   '''secret=SECRET, token=TOKEN''',  # the door tests pass named module constants, not values (tests/test_door_*.py)
   '''9d3a1c1e-7b1a-4c3e-9f6e-''',  # the log-scrub tests' fixture token, present only to prove it is masked (tests/test_log_scrub_providers.py)
   '''api_key_secret=abcDEF123456''',  # same file: an obviously fake key proving the scrubber masks the value
+  '''\| gate9 \| `test_gate_[a-z_]+` in `test_gates\.py`''',  # a test's name in the projection index table (tests/projection/INDEX.md history), not a key
 ]

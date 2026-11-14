@@ -33,6 +33,8 @@ export interface GatewayEnv {
   PAGE_LIMITER?: RateLimiter;
   // D1 database the fallback door stores each post in until the vault has answered it with a 2xx (drainInboundSpool, on the cron).
   INBOUND_SPOOL?: D1Like;
+  // The operator's bearer for POST /ops/inbound-spool/replay (a Worker secret). Unset: the route does not exist (404).
+  OPS_REPLAY_SECRET?: string;
 }
 
 /** The few D1 calls the inbound store makes (prepare, bind, run or all). */
@@ -98,6 +100,8 @@ export const SPOOL_SQL = {
   markRefused: "UPDATE inbound_spool SET refused_at = ?, attempts = attempts + 1, last_status = ? WHERE id = ?",
   markDrained: "UPDATE inbound_spool SET drained_at = ?, attempts = attempts + 1, last_status = ? WHERE id = ?",
   markAttempt: "UPDATE inbound_spool SET attempts = attempts + 1, last_status = ? WHERE id = ?",
+  // Refused rows received in a window, for the replay after a Twilio auth-token change (the vault then refused real posts).
+  refusedInWindow: "SELECT id, number_key, received_at, path, body_b64, headers_json FROM inbound_spool WHERE refused_at IS NOT NULL AND drained_at IS NULL AND received_at >= ? AND received_at <= ? ORDER BY received_at LIMIT 1000",
   purge: "DELETE FROM inbound_spool WHERE drained_at IS NOT NULL AND drained_at < ?",
 } as const;
 const FALLBACK_MAX_BODY = 16 * 1024; // the vault refuses more (confirm/inbound.py MAX_BODY_BYTES), so the edge keeps no more
@@ -477,6 +481,72 @@ export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps): Pro
   return { delivered, kept };
 }
 
+const REPLAY_PATH = "/ops/inbound-spool/replay";
+const REPLAY_MAX_WINDOW_MS = 7 * 24 * 3600_000;
+
+async function sameSecret(given: string, want: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const [a, b] = await Promise.all([crypto.subtle.digest("SHA-256", enc.encode(given)), crypto.subtle.digest("SHA-256", enc.encode(want))]);
+  const x = new Uint8Array(a), y = new Uint8Array(b);
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+  return diff === 0;
+}
+
+// The operator's replay, after the Twilio auth token was changed: rows the vault refused (with the old token's signatures read
+// against the new one, or the reverse) inside the window are posted to the vault again; each is marked by the answer: 2xx
+// drained, the named refusal again refused (attempts counted), anything else left refused and counted as a fault.
+async function replayRefused(request: Request, env: GatewayEnv, deps: GatewayDeps): Promise<Response> {
+  const alarm = alarmOf(deps);
+  if (!env.OPS_REPLAY_SECRET) throw new Refusal(404, "not_found", "no such route");
+  const auth = request.headers.get("authorization") ?? "";
+  if (!auth.startsWith("Bearer ") || !(await sameSecret(auth.slice(7), env.OPS_REPLAY_SECRET))) throw new Refusal(401, "unauthenticated", "the operator bearer is required");
+  const db = env.INBOUND_SPOOL;
+  if (!db) throw new Refusal(503, "store_unavailable", "the INBOUND_SPOOL binding is not set");
+  const raw = await readCapped(request, 1024);
+  let from = NaN, to = NaN;
+  try {
+    const b = JSON.parse(new TextDecoder().decode(raw ?? new ArrayBuffer(0))) as { from?: string; to?: string };
+    from = Date.parse(String(b.from)); to = Date.parse(String(b.to));
+  } catch {
+    // named below
+  }
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from || to - from > REPLAY_MAX_WINDOW_MS) {
+    throw new Refusal(400, "invalid_window", "send {from, to} as ISO times, to after from, at most 7 days apart");
+  }
+  let rows: Record<string, unknown>[];
+  try {
+    rows = (await db.prepare(SPOOL_SQL.refusedInWindow).bind(new Date(from).toISOString(), new Date(to).toISOString()).all()).results ?? [];
+  } catch (e) {
+    alarm("confirmations.inbound_spool_unreadable", `the replay could not read the inbound store (${(e as Error).message.slice(0, 80)})`);
+    throw new Refusal(503, "store_unavailable", "the inbound store could not be read; nothing was replayed");
+  }
+  const nowIso = new Date((deps.now ?? Date.now)()).toISOString();
+  let delivered = 0, refused = 0, faults = 0;
+  for (const row of rows) {
+    let status = 0, named = false;
+    try {
+      const res = await deps.fetch(clean(env.ORIGIN_URL) + String(row.path), { method: "POST", headers: towardVault(new Headers(JSON.parse(String(row.headers_json)) as Record<string, string>), env), body: unb64(String(row.body_b64)) });
+      status = res.status;
+      if (taken(status)) await res.body?.cancel();
+      else named = await vaultRefused(res);
+    } catch {
+      status = 0;
+    }
+    try {
+      if (taken(status)) { await db.prepare(SPOOL_SQL.markDrained).bind(nowIso, status, String(row.id)).run(); delivered++; continue; }
+      if (named) { await db.prepare(SPOOL_SQL.markRefused).bind(nowIso, status, String(row.id)).run(); refused++; continue; }
+      if (status > 0) await db.prepare(SPOOL_SQL.markAttempt).bind(status, String(row.id)).run();
+    } catch (e) {
+      alarm("confirmations.inbound_spool_unwritable", `replayed post ${String(row.id)} could not be marked (${(e as Error).message.slice(0, 80)})`);
+    }
+    faults++;
+  }
+  if (refused) alarm("confirmations.inbound_spool_refused", `${refused} replayed post(s) were refused again; check the stored auth token`);
+  if (faults) alarm("confirmations.inbound_spool_vault_fault", `${faults} replayed post(s) got no answer or a fault; they stay refused for another replay`);
+  return new Response(JSON.stringify({ replayed: rows.length, delivered, refused, faults }), { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+}
+
 async function pageDoor(request: Request, url: URL, env: GatewayEnv, deps: GatewayDeps, key: string): Promise<Response> {
   if (!env.PAGE_LIMITER) {
     alarmOf(deps)("confirmations.page_rate_limit_unbound", "the PAGE_LIMITER binding is not set; the pages are not rate limited");
@@ -512,6 +582,7 @@ export async function handleGateway(request: Request, env: GatewayEnv, deps: Gat
     }
     const inbound = INBOUND_RE.exec(url.pathname);
     if (inbound && request.method === "POST") return await inboundDoor(request, url, env, deps, inbound[1]);
+    if (url.pathname === REPLAY_PATH && request.method === "POST") return await replayRefused(request, env, deps);
     const fallback = FALLBACK_RE.exec(url.pathname);
     if (fallback && request.method === "POST") return await fallbackDoor(request, url, env, deps, fallback[1]);
     const page = PAGE_RE.exec(url.pathname);

@@ -190,6 +190,7 @@ class FakeD1 implements D1Like {
         case "markDrained": { const r = db.rows.find((x) => x.id === args[2])!; r.drained_at = String(args[0]); r.attempts++; r.last_status = Number(args[1]); return { results: [] }; }
         case "markRefused": { const r = db.rows.find((x) => x.id === args[2])!; r.refused_at = String(args[0]); r.attempts++; r.last_status = Number(args[1]); return { results: [] }; }
         case "markAttempt": { const r = db.rows.find((x) => x.id === args[1])!; r.attempts++; r.last_status = Number(args[0]); return { results: [] }; }
+        case "refusedInWindow": return { results: db.rows.filter((r) => r.refused_at && r.drained_at === null && r.received_at >= String(args[0]) && r.received_at <= String(args[1])).sort((a, b) => a.received_at.localeCompare(b.received_at)) };
         case "purge": db.rows = db.rows.filter((r) => !(r.drained_at !== null && r.drained_at < String(args[0]))); return { results: [] };
       }
       throw new Error(name);
@@ -429,4 +430,46 @@ test("drained rows are purged after seven days", async () => {
   const { env } = mk({ INBOUND_SPOOL: db });
   await drainInboundSpool(env, { fetch: down(), alarm: () => {}, now: () => Date.parse("2026-11-14T12:00:00Z") });
   assert.deepEqual(db.rows.map((r) => r.id), ["new"]);
+});
+
+// ---- replay of refused rows (after a Twilio auth-token change) -------------------------------------------------------------------
+const OPS = "ops-replay-value-0123456789abcdef01234";
+function refusedRow(id: string, received_at: string): Row {
+  return { id, number_key: KEY, received_at, path: FPATH, body_b64: btoa(RAW), headers_json: JSON.stringify({ "x-twilio-signature": "sig" }), attempts: 1, last_status: 401, drained_at: null, refused_at: received_at };
+}
+const replayReq = (body: unknown, auth = `Bearer ${OPS}`) =>
+  at("api.consentvault.ai", "/ops/inbound-spool/replay", { method: "POST", headers: { authorization: auth, "content-type": "application/json" }, body: JSON.stringify(body) });
+
+test("the replay re-forwards refused rows received in the window, marks each by the vault's answer, and leaves the rest", async () => {
+  const db = new FakeD1();
+  db.rows.push(refusedRow("in1", "2026-11-14T10:05:00.000Z"), refusedRow("in2", "2026-11-14T10:20:00.000Z"), refusedRow("out", "2026-11-14T09:00:00.000Z"));
+  const calls: { url: string; init: RequestInit }[] = [];
+  let n = 0;
+  const vault = (async (url: string, init: RequestInit) => {
+    calls.push({ url: String(url), init });
+    return n++ === 0 ? new Response("{}", { status: 200 }) : new Response('{"error": "unauthenticated"}', { status: 401 });
+  }) as unknown as typeof fetch;
+  const { env } = mk({ INBOUND_SPOOL: db, OPS_REPLAY_SECRET: OPS });
+  const res = await handleGateway(replayReq({ from: "2026-11-14T10:00:00Z", to: "2026-11-14T11:00:00Z" }), env, { fetch: vault, alarm: () => {} });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { replayed: 2, delivered: 1, refused: 1, faults: 0 });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "https://origin.example.com" + FPATH);
+  assert.equal((calls[0].init.headers as Headers).get("x-twilio-signature"), "sig");
+  const by = Object.fromEntries(db.rows.map((r) => [r.id, r]));
+  assert.ok(by.in1.drained_at && by.in1.last_status === 200);
+  assert.ok(!by.in2.drained_at && by.in2.refused_at && by.in2.attempts === 2);
+  assert.equal(by.out.attempts, 1, "outside the window: untouched");
+});
+
+test("the replay needs the operator value, a window of at most 7 days, and the value to be configured", async () => {
+  const db = new FakeD1();
+  const { env } = mk({ INBOUND_SPOOL: db, OPS_REPLAY_SECRET: OPS });
+  const d = { fetch: down(), alarm: () => {} };
+  assert.equal((await handleGateway(replayReq({ from: "2026-11-14T10:00:00Z", to: "2026-11-14T11:00:00Z" }, "Bearer wrong"), env, d)).status, 401);
+  assert.equal((await handleGateway(replayReq({ from: "2026-11-14T10:00:00Z", to: "2026-11-14T11:00:00Z" }, ""), env, d)).status, 401);
+  assert.equal((await handleGateway(replayReq({ from: "2026-11-01T00:00:00Z", to: "2026-11-14T00:00:00Z" }), env, d)).status, 400);
+  assert.equal((await handleGateway(replayReq({ from: "x", to: "2026-11-14T00:00:00Z" }), env, d)).status, 400);
+  const off = mk({ INBOUND_SPOOL: db }).env;
+  assert.equal((await handleGateway(replayReq({ from: "2026-11-14T10:00:00Z", to: "2026-11-14T11:00:00Z" }), off, d)).status, 404);
 });

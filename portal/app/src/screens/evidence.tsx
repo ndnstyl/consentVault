@@ -27,14 +27,43 @@ function ContactInput({ onSubmit, busy, label = 'Look up records', busyLabel = '
   );
 }
 
-export function PermissionsTable({ permissions }: { permissions: ProofPermission[] }) {
+export interface WordingPairs { channels: string[]; purposes: string[] }
+const CHANNELS_FOR: Record<'phone' | 'email', string[]> = { email: ['email'], phone: ['sms', 'voice', 'artificial_voice'] };
+const NO_RECORD = new Set(['', 'no_record', 'no_record_found']);
+/**
+ * Only the rows that can mean something: pairs with any record first, then pairs a registered current wording offers
+ * on a channel that fits the contact point. `hidden` counts the rest. With no wording list, nothing is hidden.
+ */
+export function relevantPermissions(all: ProofPermission[], kind: 'phone' | 'email' | undefined, wordings: WordingPairs[] | null | undefined): { shown: ProofPermission[]; hidden: number } {
+  if (!wordings) return { shown: all, hidden: 0 };
+  const fits = (c: string) => !kind || CHANNELS_FOR[kind].includes(c);
+  const offered = (p: ProofPermission) => fits(p.channel) && wordings.some((w) => w.channels.includes(p.channel) && w.purposes.includes(p.purpose));
+  const recorded = all.filter((p) => !NO_RECORD.has(statusOf(p)));
+  const rest = all.filter((p) => NO_RECORD.has(statusOf(p)) && offered(p));
+  const shown = [...recorded, ...rest];
+  return { shown, hidden: all.length - shown.length };
+}
+export function PermissionsTable({ permissions, contactKind, wordings }: { permissions: ProofPermission[]; contactKind?: 'phone' | 'email'; wordings?: WordingPairs[] | null }) {
+  const [all, setAll] = useState(false);
+  const { shown, hidden } = useMemo(() => relevantPermissions(permissions, contactKind, wordings), [permissions, contactKind, wordings]);
+  const rows = all ? permissions : shown;
   return (
-    <DataTable caption="Evidence status by channel and purpose" rows={permissions} rowKey={(p) => `${p.channel}:${p.purpose}`}
-      columns={[
-        { key: 'c', header: 'Channel', render: (p) => CHANNEL_FALLBACK[p.channel] ?? p.channel, primary: true },
-        { key: 'p', header: 'Purpose', render: (p) => purposeWords(p.purpose) },
-        { key: 'e', header: 'Evidence status', render: (p) => <EvidenceChip status={statusOf(p)} /> },
-      ]} />
+    <>
+      <DataTable caption="Evidence status by channel and purpose" rows={rows} rowKey={(p) => `${p.channel}:${p.purpose}`}
+        columns={[
+          { key: 'c', header: 'Channel', render: (p) => CHANNEL_FALLBACK[p.channel] ?? p.channel, primary: true },
+          { key: 'p', header: 'Purpose', render: (p) => purposeWords(p.purpose) },
+          { key: 'e', header: 'Evidence status', render: (p) => <EvidenceChip status={statusOf(p)} /> },
+        ]} />
+      {hidden > 0 && (
+        <p className="hint">
+          {all
+            ? 'Showing every channel and purpose, including combinations with no wording and no record. '
+            : `Showing the channels and purposes your wording covers. ${hidden} other combination${hidden === 1 ? ' has' : 's have'} no wording and no record. `}
+          <Btn variant="quiet" size="sm" aria-pressed={all} onClick={() => setAll((v) => !v)}>{all ? 'Show fewer' : 'Show all'}</Btn>
+        </p>
+      )}
+    </>
   );
 }
 /** The same per-channel statuses the Records page shows, as lookup rows. */
@@ -75,6 +104,7 @@ export function EvidenceLookup() {
   const [more, setMore] = useState<string | null>(null);
   const [invalid, setInvalid] = useState<string | null>(null);
   const [recordRows, setRecordRows] = useState<ProofPermission[] | null>(null);
+  const [wordings, setWordings] = useState<WordingPairs[] | null>(null);
   const [masked, setMasked] = useState<string | null>(null);
   const openedFor = useRef<string | null>(null);
   const lookup = useAction((c: string) => api.evidence.lookup(c));
@@ -82,7 +112,7 @@ export function EvidenceLookup() {
   const heading = useRef<HTMLHeadingElement>(null);
   const suspended = status === 'suspended';
   const run = async (c: string) => {
-    setContact(c); setProof(null); setEraseDone(false); setInvalid(null); setRecordRows(null);
+    setContact(c); setProof(null); setEraseDone(false); setInvalid(null); setRecordRows(null); setWordings(null);
     const r = await lookup.run(c);
     if (r.ok) {
       setProof(r.value);
@@ -91,6 +121,7 @@ export function EvidenceLookup() {
       let systems: System[] | null = null;
       await Promise.all([
         api.records.search(c).then((x) => { const rec = x.items[0]; setRecordRows(rec ? permissionsFromRecord(rec) : null); }).catch(() => setRecordRows(null)),
+        allPages((x) => api.disclosures.list({ cursor: x, state: 'current' })).then((w) => setWordings(w.map((d) => ({ channels: d.channels, purposes: d.purposes })))).catch(() => setWordings(null)),
         allPages((x) => api.brandNames({ cursor: x })).then((b) => b.forEach((y) => names.set(y.brand_id, y.display_name))).catch(() => undefined),
         allPages((x) => api.sourceNames({ cursor: x })).then((s) => s.forEach((y) => names.set(y.source_id, y.name))).catch(() => undefined),
         allPages((x) => api.systems.list({ cursor: x })).then((s) => { systems = s; }).catch(() => { systems = null; }),
@@ -166,7 +197,7 @@ export function EvidenceLookup() {
           {review.length > 0 && <Banner kind="info" title="A later grant is recorded after a stop">{`A later grant was recorded after a stop on ${proof.permissions.find((p) => statusOf(p) === 'stop_on_record') ? chLabel(proof.permissions.find((p) => statusOf(p) === 'stop_on_record')!.channel) : 'a channel'}. The person's control of the contact point was not verified (contact_control_unverified), It is listed for review. Whether the grant changes how far the stop reaches is set by the rule-set in use.`}</Banner>}
 
           <h3 className="sec mt5">Evidence status now</h3>
-          <PermissionsTable permissions={recordRows ?? proof.permissions} />
+          <PermissionsTable permissions={recordRows ?? proof.permissions} contactKind={contact ? checkContact(contact).kind : undefined} wordings={wordings} />
           <p className="notice">{proof.notice || GATE_NOTICE}</p>
 
           <h3 className="sec mt5">Timeline (arrival order)</h3>

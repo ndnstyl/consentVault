@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { drainInboundSpool, handleGateway, LINK_HOST_HEADER, type GatewayEnv, type GatewayDeps, type RateLimiter, type SpoolKV } from "../src/gateway.ts";
+import { drainInboundSpool, handleGateway, SPOOL_PER_KEY, SPOOL_TOTAL, LINK_HOST_HEADER, type GatewayEnv, type GatewayDeps, type RateLimiter, type SpoolKV } from "../src/gateway.ts";
 
 // The confirmation service's two public doors (marketing/specs/confirmations-go-live):
 //  - the text provider's inbound posts, POST /v1/confirmations/inbound/<key>: admitted with no bearer (Twilio sends none; the
@@ -187,8 +187,8 @@ test("a fallback post while the vault is down is kept at the edge and Twilio is 
   const { env, alarms } = mk({ INBOUND_SPOOL: spool });
   const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: (n) => alarms.push(n) });
   assert.equal(res.status, 200);
-  assert.equal(spool.data.size, 1);
-  const kept = JSON.parse([...spool.data.values()][0]);
+  assert.equal([...spool.data.keys()].filter((k) => k.startsWith("inbound:")).length, 1);
+  const kept = JSON.parse([...spool.data.entries()].find(([k]) => k.startsWith("inbound:"))![1]);
   assert.equal(kept.path, FPATH);
   assert.equal(atob(kept.body_b64), RAW);
   assert.equal(kept.headers["x-twilio-signature"], TWILIO["x-twilio-signature"]);
@@ -201,7 +201,7 @@ test("a fallback post the vault answers at once is not left in the spool", async
   const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, d);
   assert.equal(res.status, 200);
   assert.equal(calls[0].url, "https://origin.example.com" + FPATH);
-  assert.equal(spool.data.size, 0);
+  assert.equal([...spool.data.keys()].filter((k) => k.startsWith("inbound:")).length, 0);
 });
 
 test("a fallback post that can be neither kept nor delivered answers 503 and alarms", async () => {
@@ -219,12 +219,12 @@ test("the drain delivers each kept post to the vault's fallback door byte for by
   await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {} });
   const left = await drainInboundSpool(env, { fetch: down(), alarm: () => {} });
   assert.equal(left.kept, 1);
-  assert.equal(spool.data.size, 1);
+  assert.equal([...spool.data.keys()].filter((k) => k.startsWith("inbound:")).length, 1);
   const calls: { url: string; init: RequestInit }[] = [];
-  const up = (async (url: string, init: RequestInit) => { calls.push({ url: String(url), init }); return new Response("{}", { status: 401 }); }) as unknown as typeof fetch;
+  const up = (async (url: string, init: RequestInit) => { calls.push({ url: String(url), init }); return new Response("{}", { status: 200 }); }) as unknown as typeof fetch;
   const done = await drainInboundSpool(env, { fetch: up, alarm: () => {} });
   assert.deepEqual(done, { delivered: 1, kept: 0 });
-  assert.equal(spool.data.size, 0, "a final answer (even a refusal) ends the post; the vault counted it");
+  assert.equal([...spool.data.keys()].filter((k) => k.startsWith("inbound:")).length, 0, "only the vault's 2xx ends a kept post");
   assert.equal(calls[0].url, "https://origin.example.com" + FPATH);
   assert.equal(new TextDecoder().decode(calls[0].init.body as ArrayBuffer), RAW);
   const h = calls[0].init.headers as Headers;
@@ -244,4 +244,64 @@ test("a client copy of the link-host header never reaches the vault on any other
   const { d, calls, env } = mk();
   await handleGateway(at("api.consentvault.ai", "/v1/systems", { headers: { authorization: "Bearer abc.def", [LINK_HOST_HEADER]: "consent.acme.example" } }), env, d);
   assert.equal((calls[0].init.headers as Headers).get(LINK_HOST_HEADER), null);
+});
+
+test("only a 2xx from the vault ends a kept post: a 404, 401 or 403 keeps it and raises an alarm", async () => {
+  for (const status of [404, 401, 403, 409, 302]) {
+    const spool = new Spool();
+    const alarms: string[] = [];
+    const { env } = mk({ INBOUND_SPOOL: spool });
+    await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {} });
+    const answer = (async () => new Response("{}", { status })) as unknown as typeof fetch;
+    const out = await drainInboundSpool(env, { fetch: answer, alarm: (n) => alarms.push(n) });
+    assert.deepEqual(out, { delivered: 0, kept: 1 }, String(status));
+    assert.ok(alarms.includes("confirmations.inbound_spool_refused"), String(status));
+  }
+});
+
+test("a fallback post the vault answers with anything but 2xx stays kept, and Twilio is still told it was received", async () => {
+  const spool = new Spool();
+  const alarms: string[] = [];
+  const { env } = mk({ INBOUND_SPOOL: spool });
+  const answer = (async () => new Response("{}", { status: 404 })) as unknown as typeof fetch;
+  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: answer, alarm: (n) => alarms.push(n) });
+  assert.equal(res.status, 200);
+  assert.equal([...spool.data.keys()].filter((k) => k.startsWith("inbound:")).length, 1);
+  assert.ok(alarms.includes("confirmations.inbound_spool_refused"));
+});
+
+test("the spool holds at most SPOOL_PER_KEY posts for one number and SPOOL_TOTAL in all; past a cap the post is forwarded, not kept", async () => {
+  const spool = new Spool();
+  for (let i = 0; i < SPOOL_PER_KEY; i++) spool.data.set(`inbound:${KEY}:2026-11-14T00:00:${String(i).padStart(4, "0")}:x`, "{}");
+  const alarms: string[] = [];
+  const { env } = mk({ INBOUND_SPOOL: spool });
+  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: (n) => alarms.push(n) });
+  assert.equal(res.status, 503);
+  assert.equal([...spool.data.keys()].filter((k) => k.startsWith("inbound:")).length, SPOOL_PER_KEY);
+  assert.ok(alarms.includes("confirmations.inbound_spool_full"));
+  const other = new Spool();
+  for (let i = 0; i < SPOOL_TOTAL; i++) other.data.set(`inbound:k${i}xxxxxxxxxxxxxxxxxxxxxxx:t:x`, "{}");
+  const e2 = mk({ INBOUND_SPOOL: other }).env;
+  const r2 = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), e2, { fetch: down(), alarm: () => {} });
+  assert.equal(r2.status, 503);
+  assert.equal(other.data.size, SPOOL_TOTAL);
+});
+
+test("a fallback body over 16 KB is refused and never kept (the vault takes no more)", async () => {
+  const spool = new Spool();
+  const { d, calls, env } = mk({ INBOUND_SPOOL: spool });
+  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: "a=" + "x".repeat(16 * 1024) }), env, d);
+  assert.equal(res.status, 413);
+  assert.equal(spool.data.size, 0);
+  assert.equal(calls.length, 0);
+});
+
+test("the drain reads one marker and lists nothing while the spool is empty (the KV list quota)", async () => {
+  let lists = 0;
+  const spool = new Spool();
+  const orig = spool.list.bind(spool);
+  spool.list = async (o) => { lists++; return orig(o); };
+  const { env } = mk({ INBOUND_SPOOL: spool });
+  await drainInboundSpool(env, { fetch: down(), alarm: () => {} });
+  assert.equal(lists, 0);
 });

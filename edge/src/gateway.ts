@@ -40,7 +40,7 @@ export interface SpoolKV {
   get(key: string): Promise<string | null>;
   put(key: string, value: string): Promise<void>;
   delete(key: string): Promise<void>;
-  list(options: { prefix: string }): Promise<{ keys: { name: string }[] }>;
+  list(options: { prefix: string; limit?: number }): Promise<{ keys: { name: string }[] }>;
 }
 
 /** The Workers rate-limit binding's shape: one call per request, { success: false } over the limit. */
@@ -82,6 +82,13 @@ const INBOUND_RE = /^\/v1\/confirmations\/inbound\/([A-Za-z0-9_-]{20,128})$/;
 // the vault is asked, and answered 200 once kept, so a STOP sent while the vault is down is delivered when it is back.
 const FALLBACK_RE = /^\/v1\/confirmations\/inbound-fallback\/([A-Za-z0-9_-]{20,128})$/;
 const SPOOL_PREFIX = "inbound:";
+// Set while anything is kept, so the per-minute drain makes one read, and lists nothing, while the spool is empty.
+const SPOOL_MARKER = "meta:pending";
+// The edge cannot check Twilio's signature (the auth token lives only in the vault), so what it keeps is capped: per number
+// (inbound key) and in all; past a cap a post is only forwarded. KV list returns at most 1000 keys per call.
+export const SPOOL_PER_KEY = 200;
+export const SPOOL_TOTAL = 1000;
+const FALLBACK_MAX_BODY = 16 * 1024; // the vault refuses more (confirm/inbound.py MAX_BODY_BYTES), so the edge keeps no more
 // The provider headers a kept post carries back to the vault (the signature over the address and the body is the credential).
 const SPOOL_HEADERS = ["content-type", "x-twilio-signature", "i-twilio-idempotency-token", "user-agent"];
 const INBOUND_MAX_BODY = 64 * 1024; // the vault itself answers 413 over 16 KB and counts it with the signature failures
@@ -292,27 +299,40 @@ function unb64(text: string): ArrayBuffer {
 
 interface Kept { path: string; headers: Record<string, string>; body_b64: string; kept_at: string }
 
-// A vault answer under 500 is final for a kept post (taken, a replay, or refused and counted by the vault); 5xx or no answer is not.
-const finalAnswer = (status: number) => status < 500;
+// Only the vault's 2xx ends a kept post (taken, or a replay it already holds). Anything else (a refusal, 404, a redirect, 5xx or
+// no answer) keeps the post, which may be a STOP, and raises an alarm: a person decides, nothing is dropped by the edge.
+const taken = (status: number) => status >= 200 && status < 300;
 
-async function fallbackDoor(request: Request, url: URL, env: GatewayEnv, deps: GatewayDeps): Promise<Response> {
+async function spoolHasRoom(spool: SpoolKV, inboundKey: string): Promise<boolean> {
+  const mine = await spool.list({ prefix: `${SPOOL_PREFIX}${inboundKey}:`, limit: SPOOL_PER_KEY });
+  if (mine.keys.length >= SPOOL_PER_KEY) return false;
+  const all = await spool.list({ prefix: SPOOL_PREFIX, limit: SPOOL_TOTAL });
+  return all.keys.length < SPOOL_TOTAL;
+}
+
+async function fallbackDoor(request: Request, url: URL, env: GatewayEnv, deps: GatewayDeps, inboundKey: string): Promise<Response> {
   const alarm = alarmOf(deps);
-  const body = (await readCapped(request, INBOUND_MAX_BODY)) ?? new ArrayBuffer(0);
+  const body = (await readCapped(request, FALLBACK_MAX_BODY)) ?? new ArrayBuffer(0);
   const keptHeaders: Record<string, string> = {};
   for (const h of SPOOL_HEADERS) {
     const v = request.headers.get(h);
     if (v !== null) keptHeaders[h] = v;
   }
   const now = new Date((deps.now ?? Date.now)());
-  const spoolKey = `${SPOOL_PREFIX}${now.toISOString()}:${crypto.randomUUID()}`;
+  const spoolKey = `${SPOOL_PREFIX}${inboundKey}:${now.toISOString()}:${crypto.randomUUID()}`;
   let kept = false;
   if (!env.INBOUND_SPOOL) {
     alarm("confirmations.inbound_spool_unbound", "the INBOUND_SPOOL binding is not set; a fallback post is only forwarded, never kept");
   } else {
     try {
-      const record: Kept = { path: url.pathname, headers: keptHeaders, body_b64: b64(body), kept_at: now.toISOString() };
-      await env.INBOUND_SPOOL.put(spoolKey, JSON.stringify(record));
-      kept = true;
+      if (!(await spoolHasRoom(env.INBOUND_SPOOL, inboundKey))) {
+        alarm("confirmations.inbound_spool_full", `the inbound spool is at its cap (${SPOOL_PER_KEY} per number, ${SPOOL_TOTAL} in all); this post is only forwarded`);
+      } else {
+        const record: Kept = { path: url.pathname, headers: keptHeaders, body_b64: b64(body), kept_at: now.toISOString() };
+        await env.INBOUND_SPOOL.put(spoolKey, JSON.stringify(record));
+        await env.INBOUND_SPOOL.put(SPOOL_MARKER, now.toISOString());
+        kept = true;
+      }
     } catch (e) {
       alarm("confirmations.inbound_spool_unwritable", `a fallback post could not be kept (${(e as Error).name})`);
     }
@@ -323,28 +343,32 @@ async function fallbackDoor(request: Request, url: URL, env: GatewayEnv, deps: G
   } catch {
     res = null;
   }
-  if (res && finalAnswer(res.status)) {
+  if (res && taken(res.status)) {
     if (kept) await env.INBOUND_SPOOL!.delete(spoolKey);
     return new Response(res.body, { status: res.status, headers: scrub(res.headers) });
   }
-  if (res) await res.body?.cancel();
   if (kept) {
-    alarm("confirmations.inbound_spooled", "the vault did not take a fallback post; it is kept at the edge and delivered by the drain");
+    if (res && res.status < 500) alarm("confirmations.inbound_spool_refused", `the vault answered a fallback post ${res.status}; it is kept for a person`);
+    else alarm("confirmations.inbound_spooled", "the vault did not take a fallback post; it is kept at the edge and delivered by the drain");
+    if (res) await res.body?.cancel();
     return new Response(JSON.stringify({ received: true, kept: true }), { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
   }
+  if (res) return new Response(res.body, { status: res.status, headers: scrub(res.headers) });
   return err(503, "store_unavailable", "the post could be neither kept nor delivered; nothing was recorded");
 }
 
-/** The cron's drain: every kept post goes to the vault's fallback door again, oldest first, and is removed on a final answer. */
+/** The cron's drain: every kept post goes to the vault's fallback door again, oldest first; only a 2xx removes it. */
 export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps): Promise<{ delivered: number; kept: number }> {
   const alarm = alarmOf(deps);
   if (!env.INBOUND_SPOOL) {
     alarm("confirmations.inbound_spool_unbound", "the INBOUND_SPOOL binding is not set; nothing to drain");
     return { delivered: 0, kept: 0 };
   }
+  if ((await env.INBOUND_SPOOL.get(SPOOL_MARKER)) === null) return { delivered: 0, kept: 0 };
   let delivered = 0;
   let kept = 0;
-  const { keys } = await env.INBOUND_SPOOL.list({ prefix: SPOOL_PREFIX });
+  let refused = 0;
+  const { keys } = await env.INBOUND_SPOOL.list({ prefix: SPOOL_PREFIX, limit: SPOOL_TOTAL });
   for (const { name } of keys) {
     const raw = await env.INBOUND_SPOOL.get(name);
     if (raw === null) continue; // already delivered by another run
@@ -364,14 +388,17 @@ export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps): Pro
     } catch {
       status = 0;
     }
-    if (status && finalAnswer(status)) {
+    if (taken(status)) {
       await env.INBOUND_SPOOL.delete(name);
       delivered++;
     } else {
       kept++;
+      if (status > 0 && status < 500) refused++;
     }
   }
-  if (kept) alarm("confirmations.inbound_spool_waiting", `${kept} kept inbound post(s) still wait for the vault`);
+  if (refused) alarm("confirmations.inbound_spool_refused", `${refused} kept inbound post(s) were answered with a refusal by the vault; kept for a person`);
+  if (kept > refused) alarm("confirmations.inbound_spool_waiting", `${kept - refused} kept inbound post(s) still wait for the vault`);
+  if (kept === 0) await env.INBOUND_SPOOL.delete(SPOOL_MARKER);
   return { delivered, kept };
 }
 
@@ -410,7 +437,8 @@ export async function handleGateway(request: Request, env: GatewayEnv, deps: Gat
     }
     const inbound = INBOUND_RE.exec(url.pathname);
     if (inbound && request.method === "POST") return await inboundDoor(request, url, env, deps, inbound[1]);
-    if (FALLBACK_RE.test(url.pathname) && request.method === "POST") return await fallbackDoor(request, url, env, deps);
+    const fallback = FALLBACK_RE.exec(url.pathname);
+    if (fallback && request.method === "POST") return await fallbackDoor(request, url, env, deps, fallback[1]);
     const page = PAGE_RE.exec(url.pathname);
     if (page || url.pathname === PROBE_PATH) {
       const allowed = request.method === "GET" || (request.method === "POST" && page?.[1] === "stop");

@@ -118,7 +118,7 @@ export function Confirmations() {
     <>
       <PageHead title="Confirmation messages" lede={LEDE} />
       {settings.status === 'loading' && <Skeleton what="confirmation settings" rows={4} variant="tiles" />}
-      {settings.status === 'error' && <ErrorBlock title="Confirmation settings did not load" err={settings.error} next="Try again. Messages already queued keep sending, and replies keep being recorded." actions={<Btn onClick={settings.reload}>Try again</Btn>} />}
+      {settings.status === 'error' && <ErrorBlock title="Confirmation settings did not load" err={settings.error} onRetry={settings.reload} next="Try again. Messages already queued keep sending, and replies keep being recorded." actions={<Btn onClick={settings.reload}>Try again</Btn>} />}
       {s && (
         <>
           {status === 'suspended' && <Banner kind="danger" title={`${orgName} is suspended.`} action={isAdmin ? <LinkBtn href="/billing" size="sm">Open billing</LinkBtn> : undefined}>No confirmation messages are sent; each is recorded as not sent. Replies and stops are still recorded, and opt-out replies still go out.</Banner>}
@@ -208,7 +208,7 @@ export function Confirmations() {
               </div>
 
               <h2 className="sec mt6">By capture source</h2>
-              {rules.status === 'error' && <ErrorBlock title="The rules did not load" err={rules.error} next="Try again." actions={<Btn onClick={rules.reload}>Try again</Btn>} />}
+              {rules.status === 'error' && <ErrorBlock title="The rules did not load" err={rules.error} onRetry={rules.reload} next="Try again." actions={<Btn onClick={rules.reload}>Try again</Btn>} />}
               {rules.status === 'ok' && (
                 <DataTable caption="By capture source" rows={sourceRows} rowKey={(r) => r.id}
                   columns={[
@@ -235,7 +235,7 @@ export function Confirmations() {
                 <SelectField label="Show" name="activity-filter" value={filter} onChange={(e) => setFilter(e.target.value)} options={[{ value: '', label: 'Everything' }, { value: 'sent', label: 'Sent' }, { value: 'delivered', label: 'Sent, delivered' }, { value: 'failed', label: 'Failed' }, { value: 'dead', label: 'Undelivered after 2 hours' }, { value: 'skipped', label: 'Not sent' }]} />
               </div>
               {activity.status === 'loading' && <Skeleton what="recent activity" rows={3} variant="table" />}
-              {activity.status === 'error' && <ErrorBlock title="Recent activity did not load" err={activity.error} next="Try again." actions={<Btn onClick={activity.reload}>Try again</Btn>} />}
+              {activity.status === 'error' && <ErrorBlock title="Recent activity did not load" err={activity.error} onRetry={activity.reload} next="Try again." actions={<Btn onClick={activity.reload}>Try again</Btn>} />}
               {activity.status === 'ok' && (activity.data.items.length === 0
                 ? <p className="hint">Nothing matches yet.</p>
                 : <DataTable caption="Recent activity" rows={activity.data.items} rowKey={(x) => x.send_id}
@@ -267,7 +267,7 @@ export function Confirmations() {
                 <section id="replies" className="mt6">
                   <h2 className="sec">{`Replies to read (${replies.status === 'ok' && replies.data ? replies.data.length : counts?.to_read ?? NA})`}</h2>
                   <p className="hint">Replies with a stop word were already recorded as stops. These contain none. A person decides; nothing changes until you choose.</p>
-                  {replies.status === 'error' && <ErrorBlock title="Replies did not load" err={replies.error} next="Try again." actions={<Btn onClick={replies.reload}>Try again</Btn>} />}
+                  {replies.status === 'error' && <ErrorBlock title="Replies did not load" err={replies.error} onRetry={replies.reload} next="Try again." actions={<Btn onClick={replies.reload}>Try again</Btn>} />}
                   {replies.status === 'ok' && replies.data && (replies.data.length === 0
                     ? <p className="hint">No replies are waiting.</p>
                     : <DataTable caption="Replies to read" rows={replies.data} rowKey={(x) => x.reply_id}
@@ -611,7 +611,7 @@ export function ConfirmationEdit({ sourceId, channel }: { sourceId: string; chan
 
   if (!ch) return <><PageHead title="Confirmation message" /><StateBlock kind="error" title="That channel does not exist" cause="Confirmation messages go by email or by text." next="Open the list and choose a source." actions={<LinkBtn href="/confirmations">Back to confirmation messages</LinkBtn>} /></>;
   if (loading) return <><PageHead title="Confirmation message" /><Skeleton what="the rule" rows={4} /></>;
-  if (failed && failed.status === 'error') return <><PageHead title="Confirmation message" /><ErrorBlock title="The rule did not load" err={failed.error} next="Try again. Nothing was changed." actions={<Btn onClick={() => { settings.reload(); rules.reload(); sources.reload(); brands.reload(); template.reload(); }}>Try again</Btn>} /></>;
+  if (failed && failed.status === 'error') return <><PageHead title="Confirmation message" /><ErrorBlock title="The rule did not load" err={failed.error} onRetry={() => { settings.reload(); rules.reload(); sources.reload(); brands.reload(); template.reload(); }} next="Try again. Nothing was changed." actions={<Btn onClick={() => { settings.reload(); rules.reload(); sources.reload(); brands.reload(); template.reload(); }}>Try again</Btn>} /></>;
   if (!src || !rule || !s) return <><PageHead title="Confirmation message" /><StateBlock kind="error" title={`That source does not exist in ${orgName}`} cause="The address may be mistyped, or the source was retired." next="Open the list and choose a source." actions={<LinkBtn href="/confirmations">Back to confirmation messages</LinkBtn>} /></>;
 
   const kindWord = ch === 'email' ? 'email' : 'text';

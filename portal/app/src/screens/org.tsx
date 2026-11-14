@@ -24,7 +24,7 @@ export function Retention() {
   const set = useAction((y: number, r: string) => api.retention.set(y, r));
   const write = canDo(role, 'retention.set');
   if (res.status === 'loading') return <><PageHead title="Retention" /><Skeleton what="retention" /></>;
-  if (res.status === 'error') return <><PageHead title="Retention" /><ErrorBlock title="Retention did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
+  if (res.status === 'error') return <><PageHead title="Retention" /><ErrorBlock title="Retention did not load" err={res.error} onRetry={res.reload} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
   const d = res.data;
   const min = d.platform_minimum_years;
   const n = Number(years);
@@ -100,7 +100,7 @@ export function Members() {
       {sent && <SuccessBanner>{`Invitation sent to ${sent.email}. It expires ${fmtDate(sent.expires)}.`}</SuccessBanner>}
       {lastAdminErr && <ErrorBlock title="You cannot remove the last admin" err={lastAdminErr} override="that would leave the organization with no admin" next="Make another member an admin first." />}
       {res.status === 'loading' && <Skeleton what="members" variant="table" />}
-      {res.status === 'error' && <ErrorBlock title="Members did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
+      {res.status === 'error' && <ErrorBlock title="Members did not load" err={res.error} onRetry={res.reload} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {res.status === 'ok' && res.data.invitesFailed && <Banner kind="warning" title="Pending invitations did not load">Active members are listed in full.</Banner>}
       {res.status === 'ok' && onlyYou && <StateBlock kind="empty" title="You are the only member" actions={inviteBtn}>Invite a second admin so your organization is never locked out, and a compliance viewer for record lookups.</StateBlock>}
       {rows.length > 0 && (
@@ -230,7 +230,7 @@ export function Audit() {
       {actions.status === 'ok' && actions.data === null && <p className="hint">The action list did not load. Filtering by action is Not available.</p>}
       <div className="mt5">
         {res.status === 'loading' && <Skeleton what="the audit log" variant="table" />}
-        {res.status === 'error' && <ErrorBlock title="The audit log did not load" err={res.error} next="Try again. Actions are still being recorded." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
+        {res.status === 'error' && <ErrorBlock title="The audit log did not load" err={res.error} onRetry={res.reload} next="Try again. Actions are still being recorded." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
         {res.status === 'ok' && rows.length === 0 && !dateErr && (
           <StateBlock kind="empty" title={filtered ? 'No entries match these filters' : 'No entries yet'} actions={filtered ? <Btn onClick={() => { setStack([]); setCursor(null); navigate('/audit', { replace: true }); }}>Clear filters</Btn> : null}>
             {filtered ? 'Nothing was recorded for this action and person between these dates. Widen the dates or clear the filters.' : 'Privileged actions appear here as they happen.'}
@@ -270,7 +270,7 @@ export function BillingScreen() {
     if (r.ok) { try { sessionStorage.setItem('cv.stripe.out', '1'); } catch { /* the return banner is optional */ } window.location.assign(r.value.portal_url); }
   };
   if (res.status === 'loading') return <><PageHead title="Billing" /><Skeleton what="billing" /></>;
-  if (res.status === 'error') return <><PageHead title="Billing" /><ErrorBlock title="Billing did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
+  if (res.status === 'error') return <><PageHead title="Billing" /><ErrorBlock title="Billing did not load" err={res.error} onRetry={res.reload} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
   const b = res.data;
   const pastDue = (b.status ?? status) === 'past_due';
   const usageNA = !b.used || !b.included;
@@ -312,7 +312,7 @@ export function Settings() {
   const [dialog, setDialog] = useState(false);
   const [done, setDone] = useState(false);
   if (res.status === 'loading') return <><PageHead title="Organization settings" /><Skeleton what="settings" /></>;
-  if (res.status === 'error') return <><PageHead title="Organization settings" /><ErrorBlock title="Settings did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
+  if (res.status === 'error') return <><PageHead title="Organization settings" /><ErrorBlock title="Settings did not load" err={res.error} onRetry={res.reload} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
   const o = res.data as OrgAdmin;
   const admin = role === 'admin' && 'offboarding' in o;
   const keyNA = admin && (o.key === null || o.partial?.includes('key'));
@@ -405,7 +405,7 @@ export function References() {
       <PageHead title="Rule references" />
       <Banner kind="info">Citations and official links only. Not legal advice. A reference never changes what a contact check returns.</Banner>
       {res.status === 'loading' && <Skeleton what="rule references" variant="table" />}
-      {res.status === 'error' && <ErrorBlock title="References did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
+      {res.status === 'error' && <ErrorBlock title="References did not load" err={res.error} onRetry={res.reload} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {res.status === 'ok' && rows.length === 0 && <StateBlock kind="empty" title="No references yet">None are listed yet.</StateBlock>}
       {res.status === 'ok' && rows.length > 0 && (
         <>
@@ -434,7 +434,7 @@ export function CompanySignIn() {
   const [saved, setSaved] = useState<string | null>(null);
   const save = useAction((req: boolean) => api.sso.set(req));
   if (res.status === 'loading') return <><PageHead title="Company sign-in" /><Skeleton what="company sign-in" /></>;
-  if (res.status === 'error') return <><PageHead title="Company sign-in" /><ErrorBlock title="Company sign-in did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
+  if (res.status === 'error') return <><PageHead title="Company sign-in" /><ErrorBlock title="Company sign-in did not load" err={res.error} onRetry={res.reload} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
   const sso = 'sso' in res.data ? res.data.sso : undefined;
   const run = async (req: boolean, done: string) => { const r = await save.run(req); if (r.ok) { setSaved(done); res.refresh(); } };
   return (

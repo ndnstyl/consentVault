@@ -31,7 +31,7 @@ export function Systems() {
     <>
       <PageHead title="Connected systems" lede="Every stop is pushed to each system below, retried for 24 hours, then marked undelivered and alerted." actions={rows.length > 0 ? connect : null} />
       {res.status === 'loading' && <Skeleton what="connected systems" variant="table" />}
-      {res.status === 'error' && <ErrorBlock title="Connected systems did not load" err={res.error} next="Try again. Pushes keep running while this page is down." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
+      {res.status === 'error' && <ErrorBlock title="Connected systems did not load" err={res.error} onRetry={res.reload} next="Try again. Pushes keep running while this page is down." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {res.status === 'ok' && rows.length === 0 && <StateBlock kind="empty" title="No systems connected" actions={connect}>Stops are recorded and contact checks show them, but nothing is pushed to your CRM, dialer or texting platform until you connect them.</StateBlock>}
       {rows.length > 0 && (
         <>
@@ -179,7 +179,7 @@ export function SystemDetail({ id }: { id: string }) {
   if (res.status === 'error') {
     return res.error.status === 404
       ? <><PageHead title="Connected system" /><StateBlock kind="error" title={`That page does not exist in ${orgName}`} cause="The address may be mistyped, or the item belongs to another organization you are not working in." next="Go back to connected systems." actions={<LinkBtn href="/systems" variant="secondary">Connected systems</LinkBtn>} /></>
-      : <><PageHead title="Connected system" /><ErrorBlock title="This system did not load" err={res.error} next="Try again. Pushes keep running while this page is down." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
+      : <><PageHead title="Connected system" /><ErrorBlock title="This system did not load" err={res.error} onRetry={res.reload} next="Try again. Pushes keep running while this page is down." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
   }
   const { system: s, dead } = res.data;
   const lt = test ?? (s.last_test ? { result: s.last_test.result as TestPush['result'], http_status: s.last_test.http_status, latency_ms: s.last_test.latency_ms, at: s.last_test.at } : null);

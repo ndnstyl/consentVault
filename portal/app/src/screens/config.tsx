@@ -39,7 +39,7 @@ export function Brands() {
       <PageHead title="Brands" lede="A brand is a business name your wording names as the seller." actions={rows.length > 0 ? addBtn : null} />
       {added && <SuccessBanner>{`${added} added. Add it to a capture source so events can name it.`}</SuccessBanner>}
       {res.status === 'loading' && <Skeleton what="brands" variant="table" />}
-      {res.status === 'error' && <ErrorBlock title="Brands did not load" err={res.error} next="Try again. Nothing was changed." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
+      {res.status === 'error' && <ErrorBlock title="Brands did not load" err={res.error} onRetry={res.reload} next="Try again. Nothing was changed." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {res.status === 'ok' && rows.length === 0 && (
         <StateBlock kind="empty" title="No brands yet" actions={addBtn}>
           {write ? 'Add the business name your consent wording names as the seller. You need one before you add a capture source.' : 'An admin adds the business name your consent wording names as the seller.'}
@@ -147,7 +147,7 @@ export function Sources() {
       <PageHead title="Capture sources" lede="Each website form, CRM or integration that sends consents, with the brands it may name." actions={d && d.sources.length > 0 && !noBrand ? addBtn : null} />
       {added && <SuccessBanner action={write ? <LinkBtn href={`/credentials/new?source=${added.source_id}`} size="sm" variant="secondary">{`Issue a credential for ${added.name}`}</LinkBtn> : undefined}>{`${added.name} added. Next: issue its credential.`}</SuccessBanner>}
       {res.status === 'loading' && <Skeleton what="capture sources" variant="table" />}
-      {res.status === 'error' && <ErrorBlock title="Capture sources did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
+      {res.status === 'error' && <ErrorBlock title="Capture sources did not load" err={res.error} onRetry={res.reload} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {d && noBrand && <StateBlock kind="empty" title="Add a brand first" actions={write ? <LinkBtn href="/brands" variant="primary">Add a brand</LinkBtn> : null}>Every capture source names at least one brand. Your organization has none yet.</StateBlock>}
       {d && !noBrand && d.sources.length === 0 && (
         <StateBlock kind="empty" title="No capture sources yet" actions={addBtn}>A capture source is a website form, CRM or integration that sends consents. Each one gets its own credential.</StateBlock>
@@ -191,7 +191,7 @@ export function SourceDetail({ id }: { id: string }) {
   const update = useAction((b: Parameters<typeof api.sources.update>[1]) => api.sources.update(id, b));
   const [saved, setSaved] = useState(false);
   if (res.status === 'loading') return <><PageHead title="Capture source" /><Skeleton what="this source" /></>;
-  if (res.status === 'error') return <><PageHead title="Capture source" /><ErrorBlock title="This source did not load" err={res.error} next="Go back to capture sources, or try again." actions={<><Btn onClick={res.reload}>Try again</Btn><LinkBtn href="/sources" variant="secondary">Capture sources</LinkBtn></>} /></>;
+  if (res.status === 'error') return <><PageHead title="Capture source" /><ErrorBlock title="This source did not load" err={res.error} onRetry={res.reload} next="Go back to capture sources, or try again." actions={<><Btn onClick={res.reload}>Try again</Btn><LinkBtn href="/sources" variant="secondary">Capture sources</LinkBtn></>} /></>;
   const { source, brands } = res.data;
   const brandName = (b: string) => brands.find((x) => x.brand_id === b)?.display_name ?? b;
   return (
@@ -255,7 +255,7 @@ export function Credentials() {
       {issuedName && <SuccessBanner action={<LinkBtn href="/setup/first-event" size="sm" variant="secondary">Send a test event</LinkBtn>}>{`${issuedName} issued.${issuedId ? ` Client id ${issuedId}.` : ''} Next: send your first test event.`}</SuccessBanner>}
       {suspended && <Banner kind="warning" title="New credentials are paused">{`New credentials are paused while ${orgName} is suspended. Existing capture credentials keep working. Resolve billing to issue new ones.`}</Banner>}
       {res.status === 'loading' && <Skeleton what="credentials" variant="table" />}
-      {res.status === 'error' && <ErrorBlock title="Credentials did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
+      {res.status === 'error' && <ErrorBlock title="Credentials did not load" err={res.error} onRetry={res.reload} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {d && d.credentials.length === 0 && <StateBlock kind="empty" title="No credentials yet" actions={issue}>Your systems need a credential to send consents. Start with a capture credential for your first source.</StateBlock>}
       {d && d.credentials.length > 0 && (
         <>
@@ -371,7 +371,7 @@ export function CredentialNew({ embedded }: { embedded?: Embedded } = {}) {
     <>
       {!embedded && <PageHead title="Issue a credential" lede={`Step ${step === 1 ? 1 : 2} of ${kind === 'jwt_public_key' ? 3 : 2}`} />}
       {res.status === 'loading' && <Skeleton what="your sources" />}
-      {res.status === 'error' && <ErrorBlock title="Your sources did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
+      {res.status === 'error' && <ErrorBlock title="Your sources did not load" err={res.error} onRetry={res.reload} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {suspended && <Banner kind="warning" title="New credentials are paused">{`New credentials are paused while ${orgName} is suspended. Existing capture credentials keep working. Resolve billing to issue new ones.`}</Banner>}
       {d && step === 1 && (
         <form className="card" onSubmit={(e) => { e.preventDefault(); next1(); }} noValidate>

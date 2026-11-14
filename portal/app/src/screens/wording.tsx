@@ -43,7 +43,7 @@ export function Wording() {
     <>
       <PageHead title="Wording" lede="The exact consent text each form shows, with its version history. Registered wording can never be edited." actions={rows.length > 0 ? reg : null} />
       {res.status === 'loading' && <Skeleton what="wording" variant="table" />}
-      {res.status === 'error' && <ErrorBlock title="Wording did not load" err={res.error} next="Try again. Nothing was changed." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
+      {res.status === 'error' && <ErrorBlock title="Wording did not load" err={res.error} onRetry={res.reload} next="Try again. Nothing was changed." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {res.status === 'ok' && rows.length === 0 && (
         <StateBlock kind="empty" title="No wording registered yet" actions={reg}>A consent can only be recorded against wording you registered first. {write ? 'Paste the exact text your form shows.' : 'An admin registers the exact text your form shows.'}</StateBlock>
       )}
@@ -108,7 +108,7 @@ export function WordingNew({ embedded }: { embedded?: Embedded } = {}) {
     <>
       {!embedded && <PageHead title="Register wording" lede="Paste the exact text people see next to the checkbox. It is stored character for character, including spaces and punctuation. Registered wording can never be edited." />}
       {res.status === 'loading' && <Skeleton what="the form" />}
-      {res.status === 'error' && <ErrorBlock title="The form did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
+      {res.status === 'error' && <ErrorBlock title="The form did not load" err={res.error} onRetry={res.reload} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {data && (
         <form className="card" onSubmit={submit} noValidate>
           <div ref={summary} tabIndex={-1}>
@@ -149,7 +149,7 @@ export function WordingDetail({ sha }: { sha: string }) {
   if (res.status === 'error') {
     return res.error.status === 404
       ? <><PageHead title="Wording" /><StateBlock kind="error" title={`That page does not exist in ${orgName}`} cause="The address may be mistyped, or the item belongs to another organization you are not working in." next="Go back to the wording list." actions={<LinkBtn href="/wording" variant="secondary">Wording</LinkBtn>} /></>
-      : <><PageHead title="Wording" /><ErrorBlock title="This wording did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
+      : <><PageHead title="Wording" /><ErrorBlock title="This wording did not load" err={res.error} onRetry={res.reload} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
   }
   const d = res.data;
   const link = (h: string | null) => { const x = h ? all.find((y) => y.sha256 === h) : undefined; return h ? <Link href={`/wording/${h}`}>{x ? wordingName(x) : shortId(h)}</Link> : null; };

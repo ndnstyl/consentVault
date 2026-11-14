@@ -271,7 +271,7 @@ export function Exports() {
       </div>
       <h2 className="sec mt5">Packages</h2>
       {res.status === 'loading' && <Skeleton what="packages" variant="table" />}
-      {res.status === 'error' && <ErrorBlock title="Packages did not load" err={res.error} next="Try again. Nothing was changed." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
+      {res.status === 'error' && <ErrorBlock title="Packages did not load" err={res.error} onRetry={res.reload} next="Try again. Nothing was changed." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {res.status === 'ok' && rows.length === 0 && <StateBlock kind="empty" title="No packages built yet">Enter a contact point above, or start from Evidence lookup.</StateBlock>}
       {rows.length > 0 && (
         <DataTable caption="Evidence packages" rows={rows} rowKey={(r) => r.export_id}
@@ -303,7 +303,7 @@ export function ExportDetailScreen({ id }: { id: string }) {
   if (!detail && fail) {
     return fail.status === 404
       ? <><PageHead title="Evidence package" /><StateBlock kind="error" title={`That page does not exist in ${orgName}`} cause="The address may be mistyped, or the item belongs to another organization you are not working in." next="Go back to evidence packages." actions={<LinkBtn href="/exports" variant="secondary">Evidence packages</LinkBtn>} /></>
-      : <><PageHead title="Evidence package" /><ErrorBlock title="This package did not load" err={fail} next="Try again." actions={<Btn onClick={() => { setFail(null); poll.restart(); }}>Try again</Btn>} /></>;
+      : <><PageHead title="Evidence package" /><ErrorBlock title="This package did not load" err={fail} onRetry={() => { setFail(null); poll.restart(); }} next="Try again." actions={<Btn onClick={() => { setFail(null); poll.restart(); }}>Try again</Btn>} /></>;
   }
   if (!detail) return <><PageHead title="Evidence package" /><Skeleton what="this package" /></>;
   const d = detail;

@@ -72,7 +72,7 @@ export function Setup() {
     <>
       <PageHead title={title} lede={lede} />
       {res.status === 'loading' && <Skeleton what="setup progress" rows={4} />}
-      {res.status === 'error' && <ErrorBlock title="Setup progress did not load" err={res.error} next="Try again. Nothing you finished is lost; every step saves when you do it." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
+      {res.status === 'error' && <ErrorBlock title="Setup progress did not load" err={res.error} onRetry={res.reload} next="Try again. Nothing you finished is lost; every step saves when you do it." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {a && showWelcome && (
         <div className="card">
           <p>{`You joined ${orgName} as ${role === 'admin' ? 'an admin' : 'a developer'}. Eight steps take you from here to your first recorded event and your first stop delivered. Most people finish the first five in about 25 minutes.`}</p>

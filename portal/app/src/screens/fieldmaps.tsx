@@ -76,7 +76,7 @@ export function SourceFieldMaps({ id }: { id: string }) {
   const [open, setOpen] = useState<number | null>(null);
   const add = useAction((f: FieldMapForm) => api.sources.fieldMaps.add(id, fieldMapBody(f)));
   if (res.status === 'loading') return <><PageHead title={C.title} /><Skeleton what="this field map" variant="table" /></>;
-  if (res.status === 'error') return <><PageHead title={C.title} /><ErrorBlock title="The field map did not load" err={res.error} next="Go back to the capture source, or try again." actions={<><Btn onClick={res.reload}>Try again</Btn><LinkBtn href={`/sources/${id}`} variant="secondary">Capture source</LinkBtn></>} /></>;
+  if (res.status === 'error') return <><PageHead title={C.title} /><ErrorBlock title="The field map did not load" err={res.error} onRetry={res.reload} next="Go back to the capture source, or try again." actions={<><Btn onClick={res.reload}>Try again</Btn><LinkBtn href={`/sources/${id}`} variant="secondary">Capture source</LinkBtn></>} /></>;
   const { source, maps } = res.data;
   const canAdd = write && source.status === 'active';
   const addBtn = canAdd ? <Btn variant="primary" onClick={() => { add.clear(); setDialog(true); }}>{C.add}</Btn> : null;

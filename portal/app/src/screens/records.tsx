@@ -167,13 +167,13 @@ function ExportStatus({ id, form, onAgain, onChangeFilters }: { id: string; form
   const { api } = useSession();
   const poll = usePoll<RecordsExportDetail>(() => api.records.exportGet(id), { intervalMs: 3000, deadlineMs: 20 * 60 * 1000, until: (e) => e.status !== 'building' });
   const e = poll.value;
-  if (!e && poll.error) return <ErrorBlock title="The file status did not load" err={poll.error} next="Try again in a minute. The file, if built, is under Exports for 24 hours." actions={<Btn onClick={poll.restart}>Try again</Btn>} />;
+  if (!e && poll.error) return <ErrorBlock title="The file status did not load" err={poll.error} onRetry={poll.restart} next="Try again in a minute. The file, if built, is under Exports for 24 hours." actions={<Btn onClick={poll.restart}>Try again</Btn>} />;
   if (!e) return <div className="mb5"><Skeleton what="the file status" rows={1} /></div>;
   if (e.status === 'building') {
     return <div role="status" aria-live="polite"><Banner kind="info" title={`Building your file: ${fmtNum(e.progress?.done ?? 0)} of ${e.progress ? fmtNum(e.progress.total) : NA} records.`}>You can leave this page; the file will be under Exports on this page for 24 hours.</Banner></div>;
   }
   if (e.status === 'failed') {
-    return <ErrorBlock title="The file was not built" err={new ApiError(503, e.failed_cause ?? 'service_unavailable', '', null)} override={`the records database stopped answering${e.progress ? ` at ${fmtNum(e.progress.done)} of ${fmtNum(e.progress.total)}` : ''} (${e.failed_cause ?? 'service_unavailable'})`}
+    return <ErrorBlock title="The file was not built" err={new ApiError(503, e.failed_cause ?? 'service_unavailable', '', null)} startingNotice="The file was not built. ConsentVault was starting; export again in about two minutes." override={`the records database stopped answering${e.progress ? ` at ${fmtNum(e.progress.done)} of ${fmtNum(e.progress.total)}` : ''} (${e.failed_cause ?? 'service_unavailable'})`}
       next="Start the export again. Nothing was downloaded." actions={<Btn variant="primary" onClick={onAgain}>Export again</Btn>} />;
   }
   if (e.status === 'expired') return <Banner kind="warning" title="That file has expired">Files are kept 24 hours. Export the list again to get a new one.</Banner>;
@@ -393,7 +393,7 @@ export function Records() {
         <ErrorBlock title="The list was not shown" err={list.error} override="the audit log could not record this view" next="Try again. Records are never shown without an audit row. If this repeats, the service status page names the outage." actions={<Btn onClick={list.reload}>Try again</Btn>} />
       )}
       {list.status === 'error' && list.error.code !== 'audit_unavailable' && (
-        <ErrorBlock title="The records list did not load" err={list.error} override={list.error.code === 'service_unavailable' ? 'the records database did not answer' : undefined} next="Try again. Capture keeps recording while this page is down." actions={<Btn onClick={list.reload}>Try again</Btn>} />
+        <ErrorBlock title="The records list did not load" err={list.error} onRetry={list.reload} override={list.error.code === 'service_unavailable' ? 'the records database did not answer' : undefined} next="Try again. Capture keeps recording while this page is down." actions={<Btn onClick={list.reload}>Try again</Btn>} />
       )}
       {list.status === 'loading' && <Skeleton what="records" rows={4} variant="tiles" />}
 
@@ -425,7 +425,7 @@ export function Records() {
               {summary.status === 'loading' && <Skeleton what="the chart" rows={1} />}
               {(summary.status === 'error' || (sum && sum.new_per_day === null)) && (
                 <Banner kind="warning" title="The chart did not load." action={<Btn size="sm" onClick={summary.reload}>Try the chart again</Btn>}>
-                  {`Cause: the daily counts did not answer (${summary.status === 'error' ? `${summary.error.status} ${summary.error.code}` : '503 service_unavailable'}). The list below is current.`}</Banner>
+                  {`Cause: the daily counts did not answer (${summary.status === 'error' ? causeLine(summary.error.status, summary.error.code) : causeLine(503, 'service_unavailable')}). The list below is current.`}</Banner>
               )}
               {sum && sum.new_per_day && sum.new_per_day.length > 0 && <BarChart series={sum.new_per_day} />}
             </div>

@@ -33,7 +33,7 @@ export function Checklists() {
       <PageHead title="Documentation checklists" lede="A checklist reports which elements a record documents. It measures documentation completeness only, never legal sufficiency." actions={d && d.items.length > 0 && write ? <Btn variant="primary" busy={again.busy} busyLabel="Creating" onClick={() => start(again as never)}>New checklist version</Btn> : null} />
       {(tpl.error || again.error) && <ErrorBlock title="The checklist was not created" err={(tpl.error ?? again.error)!} next="Try again. Nothing was changed." />}
       {res.status === 'loading' && <Skeleton what="checklists" variant="table" />}
-      {res.status === 'error' && <ErrorBlock title="Checklists did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
+      {res.status === 'error' && <ErrorBlock title="Checklists did not load" err={res.error} onRetry={res.reload} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {d && d.items.length === 0 && (
         <StateBlock kind="empty" title="No checklists yet" actions={write ? <Btn variant="primary" busy={tpl.busy} busyLabel="Creating" onClick={() => start(tpl)}>Start from the PEWC example</Btn> : null}>
           {write ? 'Start from the PEWC example, which names the regulation, and change each element to match your forms.' : 'An admin defines the checklists.'}
@@ -73,7 +73,7 @@ export function ChecklistDetail({ version }: { version: string }) {
   if (res.status === 'error') {
     return res.error.status === 404
       ? <><PageHead title="Documentation checklist" /><StateBlock kind="error" title={`That page does not exist in ${orgName}`} cause="The address may be mistyped, or the item belongs to another organization you are not working in." next="Go back to the checklists." actions={<LinkBtn href="/checklists" variant="secondary">Documentation checklists</LinkBtn>} /></>
-      : <><PageHead title="Documentation checklist" /><ErrorBlock title="This checklist did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
+      : <><PageHead title="Documentation checklist" /><ErrorBlock title="This checklist did not load" err={res.error} onRetry={res.reload} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
   }
   const { c, refsList } = res.data;
   const editable = canDo(role, 'checklist.write') && c.status === 'draft' && !approved;

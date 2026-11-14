@@ -221,7 +221,7 @@ export function ChooseOrg() {
   return (
     <CenteredCard wide>
       {res.status === 'loading' && <><h1 ref={h} tabIndex={-1}>Choose an organization</h1><Skeleton what="your organizations" rows={2} variant="table" /></>}
-      {res.status === 'error' && <><h1 ref={h} tabIndex={-1}>Choose an organization</h1><ErrorBlock title="Your organizations did not load" err={res.error} override="the membership service answered with an error" next="Try again. If it keeps failing, sign out and back in." actions={<><Btn onClick={res.reload}>Try again</Btn><Btn onClick={signOut}>Sign out</Btn></>} /></>}
+      {res.status === 'error' && <><h1 ref={h} tabIndex={-1}>Choose an organization</h1><ErrorBlock title="Your organizations did not load" err={res.error} onRetry={res.reload} override="the membership service answered with an error" next="Try again. If it keeps failing, sign out and back in." actions={<><Btn onClick={res.reload}>Try again</Btn><Btn onClick={signOut}>Sign out</Btn></>} /></>}
       {res.status === 'ok' && opening && <div role="status"><h1 ref={h} tabIndex={-1}>{`Opening ${opening}.`}</h1></div>}
       {res.status === 'ok' && !opening && res.data.items.length === 0 && <><h1 ref={h} tabIndex={-1}>Choose an organization</h1>
         <StateBlock kind="error" title="You are not a member of any organization" cause="Your membership may have been removed, or the organization was closed." next="Ask your admin for an invitation, or sign in with another account." actions={<Btn onClick={signOut}>Sign out</Btn>} /></>}
@@ -265,7 +265,7 @@ export function Plan() {
       <h1 ref={h} tabIndex={-1} className="page-h1">Choose a plan</h1>
       <p>Payment happens on Stripe&apos;s secure page. ConsentVault never sees or stores card or bank details.</p>
       {res.status === 'loading' && <Skeleton what="plans" rows={3} variant="tiles" />}
-      {res.status === 'error' && <ErrorBlock title="Plans are not available right now" err={res.error} next="Try again in a few minutes. You can still set up your first test event while this is fixed." actions={<><Btn onClick={res.reload}>Try again</Btn><LinkBtn href="/setup/first-event" variant="secondary">Set up first test event</LinkBtn></>} />}
+      {res.status === 'error' && <ErrorBlock title="Plans are not available right now" err={res.error} onRetry={res.reload} next="Try again in a few minutes. You can still set up your first test event while this is fixed." actions={<><Btn onClick={res.reload}>Try again</Btn><LinkBtn href="/setup/first-event" variant="secondary">Set up first test event</LinkBtn></>} />}
       {res.status === 'ok' && res.data.items.length === 0 && (
         <StateBlock kind="empty" title="Plans are not available right now" actions={<><Btn onClick={res.reload}>Try again</Btn><LinkBtn href="/setup/first-event" variant="secondary">Set up first test event</LinkBtn></>}>
           No plans were returned for your organization. Try again in a few minutes. You can still set up your first test event while this is fixed.

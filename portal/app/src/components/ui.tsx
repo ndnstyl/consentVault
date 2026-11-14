@@ -145,26 +145,44 @@ export function StateBlock({ kind, title, children, cause, next, actions, icon, 
   );
 }
 
-/** The cloud servers are parked and the edge has asked for them: say so and ask again every 15 seconds until the vault answers. */
-export function StartingBlock({ onRetry }: { onRetry?: () => void }) {
-  // A screen that gave no reload (its Try again button owns the load) still recovers: the page reloads itself and every screen re-asks the vault.
-  useEffect(() => {
-    const retry = onRetry ?? (() => window.location.reload());
-    const t = setInterval(retry, 15000);
-    return () => clearInterval(t);
-  }, [onRetry]);
+export const STARTING_RETRY_MS = 15000;
+export const STARTING_GIVE_UP_MS = 5 * 60 * 1000;
+
+/** Ask again every 15 seconds; after about five minutes stop and say so through giveUp. Returns the stop function. */
+export function startRetryLoop(retry: () => void, giveUp: () => void, everyMs = STARTING_RETRY_MS, maxMs = STARTING_GIVE_UP_MS): () => void {
+  let elapsed = 0;
+  const t = setInterval(() => {
+    elapsed += everyMs;
+    if (elapsed >= maxMs) { clearInterval(t); giveUp(); return; }
+    retry();
+  }, everyMs);
+  return () => clearInterval(t);
+}
+
+/** The cloud servers are parked and the edge has asked for them: say so and re-run the screen's own load until the vault answers (in place, no page reload, focus untouched). */
+export function StartingBlock({ onRetry, onGiveUp, headingLevel = 2 }: { onRetry: () => void; onGiveUp?: () => void; headingLevel?: 2 | 3 }) {
+  useEffect(() => startRetryLoop(onRetry, onGiveUp ?? (() => {})), [onRetry, onGiveUp]);
+  const H = (`h${headingLevel}`) as 'h2' | 'h3';
   return (
     <div className="empty" role="status" aria-live="polite">
       <Icon name="i-vault" className="big" />
-      <h2>ConsentVault is starting</h2>
+      <H>ConsentVault is starting</H>
       <p>This takes about two minutes. This page refreshes itself and shows your dashboard as soon as it is ready. Capture from your website and systems is not affected.</p>
     </div>
   );
 }
 
-/** Error formula (copy-rules.md section 4): what did not happen, cause with status and name, one next step. */
-export function ErrorBlock({ title, err, next, actions, override, headingLevel, onRetry }: { title: string; err: ApiError; next: React.ReactNode; actions?: React.ReactNode; override?: string; headingLevel?: 2 | 3; onRetry?: () => void }) {
-  if (err.code === 'vault_starting') return <StartingBlock onRetry={onRetry} />;
+export const NOT_SAVED_STARTING = 'Not saved. ConsentVault is starting; try again in about two minutes.';
+
+/** Error formula (copy-rules.md section 4): what did not happen, cause with status and name, one next step.
+ *  vault_starting: a LOAD passes onRetry and polls itself (up to about five minutes, then the plain error); anything else (a save, a create, a confirm)
+ *  gets a static notice with no timer, so nothing a person typed is ever cleared. */
+export function ErrorBlock({ title, err, next, actions, override, headingLevel, onRetry, startingNotice }: { title: string; err: ApiError; next: React.ReactNode; actions?: React.ReactNode; override?: string; headingLevel?: 2 | 3; onRetry?: () => void; startingNotice?: string }) {
+  const [gaveUp, setGaveUp] = useState(false);
+  if (err.code === 'vault_starting' && !gaveUp) {
+    if (onRetry) return <StartingBlock onRetry={onRetry} onGiveUp={() => setGaveUp(true)} headingLevel={headingLevel} />;
+    return <Banner kind="warning" title={startingNotice ?? NOT_SAVED_STARTING} />;
+  }
   return <StateBlock kind="error" title={title} cause={causeLine(err.status, err.code, override)} next={next} actions={actions} headingLevel={headingLevel} />;
 }
 

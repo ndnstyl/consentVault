@@ -176,7 +176,7 @@ export function FirstEvent() {
     <>
       <PageHead title="Send your first test event" lede="Use a test phone number you control. The event is real evidence in your ledger and cannot be deleted, so do not use a customer's number." />
       {load.status === 'loading' && <Skeleton what="your setup" rows={3} />}
-      {load.status === 'error' && <ErrorBlock title="Your setup did not load" err={load.error} next="Try again. Nothing was changed." actions={<Btn onClick={load.reload}>Try again</Btn>} />}
+      {load.status === 'error' && <ErrorBlock title="Your setup did not load" err={load.error} onRetry={load.reload} next="Try again. Nothing was changed." actions={<Btn onClick={load.reload}>Try again</Btn>} />}
       {d && missing.length > 0 && (
         <StateBlock kind="empty" title={`${words[missing.length]} ${missing.length === 1 ? 'step comes' : 'steps come'} first`} icon="i-vault"
           actions={<LinkBtn href={missing[0].href} variant="primary">{missing[0].button}</LinkBtn>}>

@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { handlePortal, type PortalEnv } from "../src/portal.ts";
-import { AUTH_ENV_BASE, NOW_MS, memKV, nowSec } from "./support/portal.ts";
-import { saveSession, SESSION_COOKIE, type SessionRecord } from "../src/session.ts";
+import { AUTH_ENV_BASE, NOW_MS, cookieNamed, jwt, memKV, nowSec } from "./support/portal.ts";
+import { saveSession, LOGIN_COOKIE, SESSION_COOKIE, type SessionRecord } from "../src/session.ts";
 
 const JWK = JSON.stringify({ ...crypto.generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" }), kid: "e" });
 const WAKE = "https://wake.example.test/";
@@ -138,18 +138,77 @@ test("the vault's own 503 (gate fails closed) is an answer, not a parked vault",
   assert.notEqual(((await res.clone().json().catch(() => ({}))) as { error?: string }).error, "vault_starting");
 });
 
-test("an anonymous visitor, a crawler and a visitor whose session is gone see the starting page and never trigger a wake", async () => {
+test("a signed-out navigation while parked is sent to sign-in and never wakes the vault", async () => {
   for (const c of [{}, { cookie: `${SESSION_COOKIE}=not-a-session` }, { cookie: "other=1" }]) {
     const m = mk({ origin: "down-530" });
     await signedIn(m);
     const res = await handlePortal(nav("/brands", c), m.env, m.deps);
-    assert.equal(res.status, 503);
-    assert.match(await res.text(), /ConsentVault is starting/);
-    assert.equal(wakes(m.calls), 0);
-    const j = await handlePortal(api("/v1/session", c), m.env, m.deps);
-    assert.equal(j.status, 503);
+    assert.equal(res.status, 302);
+    assert.equal(res.headers.get("location"), "/auth/login?return=%2Fbrands");
     assert.equal(wakes(m.calls), 0);
   }
+});
+
+test("a signed-out JSON call while parked is 401 signin_required and never wakes the vault", async () => {
+  for (const c of [{}, { cookie: `${SESSION_COOKIE}=not-a-session` }, { cookie: "other=1" }]) {
+    const m = mk({ origin: "down-530" });
+    await signedIn(m);
+    const j = await handlePortal(api("/v1/session", c), m.env, m.deps);
+    assert.equal(j.status, 401);
+    assert.deepEqual(await j.json(), { error: "signin_required" });
+    assert.equal(wakes(m.calls), 0);
+  }
+});
+
+test("an /auth/ request while parked reaches the sign-in code instead of the starting page", async () => {
+  const m = mk({ origin: "down-530" });
+  const res = await handlePortal(nav("/auth/login?return=%2Fbrands", {}), m.env, m.deps);
+  assert.equal(res.status, 302);
+  assert.match(res.headers.get("location") ?? "", /^https:\/\/idp\.example\/user_management\/authorize/);
+  assert.equal(wakes(m.calls), 0);
+});
+
+async function completeSignIn(vaultSession: "ok" | "parked") {
+  const m = mk({ origin: "down-530" });
+  const idt = jwt({ sub: "user_1", sid: "provider_sess_1", exp: nowSec() + 300 });
+  const inner = m.deps.fetch;
+  m.deps.fetch = (async (u: string, init?: RequestInit) => {
+    const url = String(u);
+    if (url.startsWith("https://idp.example/")) return new Response(JSON.stringify({ id_token: idt, access_token: "a", refresh_token: "r" }), { status: 200 });
+    if (vaultSession === "ok" && new URL(url).pathname === "/v1/session") { m.calls.push("origin /v1/session"); return new Response(JSON.stringify({ items: [] }), { status: 200 }); }
+    return inner(u as never, init as never);
+  }) as unknown as typeof fetch;
+  const start = await handlePortal(nav("/auth/login?return=%2Fbrands", {}), m.env, m.deps);
+  const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+  const loginCookie = cookieNamed(start, LOGIN_COOKIE)!.split(";")[0];
+  const res = await handlePortal(nav(`/auth/callback?code=abc&state=${state}`, { cookie: loginCookie }), m.env, m.deps);
+  return { m, res };
+}
+
+test("a completed sign-in while parked asks for exactly one wake and lands on the starting page", async () => {
+  const { m, res } = await completeSignIn("ok");
+  assert.equal(res.status, 302);
+  const sessionCookie = cookieNamed(res, SESSION_COOKIE);
+  assert.ok(sessionCookie, "the session was created");
+  assert.equal(wakes(m.calls), 1);
+  assert.ok(await m.kv.get("cv:wake:requested"), "the wake went through the counted path and left its marker");
+  const day = [...m.kv.data.keys()].find((k) => k.startsWith("cv:wake:day:"));
+  assert.equal(m.kv.data.get(day!), "1");
+  const next = await handlePortal(nav("/brands", { cookie: sessionCookie!.split(";")[0] }), m.env, m.deps);
+  assert.equal(next.status, 503);
+  assert.match(await next.text(), /ConsentVault is starting/);
+  assert.equal(wakes(m.calls), 1, "once per cold period");
+});
+
+test("a sign-in that cannot finish because the vault is parked says so, names the cause, and asks for the wake", async () => {
+  const { m, res } = await completeSignIn("parked");
+  assert.equal(res.status, 503);
+  assert.equal(cookieNamed(res, SESSION_COOKIE), undefined);
+  const html = await res.text();
+  assert.match(html, /ConsentVault is starting/);
+  assert.match(html, /href="\/auth\/login"/);
+  assert.doesNotMatch(html, /http-equiv="refresh"/);
+  assert.equal(wakes(m.calls), 1);
 });
 
 test("an expired session does not wake the vault", async () => {

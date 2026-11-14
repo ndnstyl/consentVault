@@ -81,11 +81,20 @@ async function signedInPerson(request: Request, env: PortalEnv, deps: GatewayDep
 // The vault is parked: ask for it once per cold period (a marker in the session store, which expires), say so, and never
 // pretend a failed wake is a start. A failed wake is logged by name and leaves no marker, so the next request tries again.
 async function whileParked(request: Request, env: PortalEnv, deps: GatewayDeps, nowMs: number): Promise<Response> {
-  const wantsHtml = (request.headers.get("accept") ?? "").includes("text/html") && !new URL(request.url).pathname.startsWith("/v1/");
+  const url = new URL(request.url);
+  const wantsHtml = (request.headers.get("accept") ?? "").includes("text/html") && !url.pathname.startsWith("/v1/");
   lastUp.delete(env);
-  // Only a person with a live sign-in may start the servers. A visitor without one, and a crawler, are shown the page and
-  // trigger nothing; the servers start when a signed-in person (or the signup retry worker) asks.
-  if (!(await signedInPerson(request, env, deps, nowMs))) return startingResponse(wantsHtml, true, "");
+  // Only a person with a live sign-in may start the servers. A visitor without one, and a crawler, trigger nothing and are
+  // never told the vault is starting (nothing would start it): a page goes to sign-in, a JSON call is told to sign in.
+  if (!(await signedInPerson(request, env, deps, nowMs))) {
+    if (!wantsHtml) return new Response(JSON.stringify({ error: "signin_required" }), { status: 401, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    return new Response(null, { status: 302, headers: { location: "/auth/login?return=" + encodeURIComponent(url.pathname + url.search), "cache-control": "no-store" } });
+  }
+  return wakeOnce(env, deps, nowMs, wantsHtml);
+}
+
+// Ask for the vault once per cold period through the counted path (marker, daily cap), and say what happened.
+async function wakeOnce(env: PortalEnv, deps: GatewayDeps, nowMs: number, wantsHtml: boolean): Promise<Response> {
   let marked: string | null = null;
   try { marked = await env.SESSIONS.get(WAKE_MARKER); } catch (e) { console.error(`consentvault portal WAKE_MARKER_UNREADABLE: ${(e as Error).name}; asking for a wake anyway`); }
   if (!marked) {
@@ -107,17 +116,39 @@ async function whileParked(request: Request, env: PortalEnv, deps: GatewayDeps, 
   return startingResponse(wantsHtml, true, "");
 }
 
+// A sign-in that just finished: if the vault is parked, ask for it so the person lands on "starting" that actually starts.
+// A sign-in the parked vault kept from finishing (the edge cannot check it with the vault) is told so by name, with the
+// wake asked, instead of the generic failure.
+async function afterCallback(res: Response, env: PortalEnv, deps: GatewayDeps, now: () => number): Promise<Response> {
+  const created = res.status === 302 && res.headers.getSetCookie().some((c) => c.startsWith(SESSION_COOKIE + "="));
+  const unfinished = res.status === 502;
+  if (!created && !unfinished) return res;
+  if (!(await vaultParked(env, deps, now()))) return res;
+  lastUp.delete(env);
+  const woke = await wakeOnce(env, deps, now(), true);
+  if (created) return res;
+  const started = woke.status === 503 && !(await woke.clone().text()).includes("could not be started");
+  const message = started
+    ? "Your sign-in could not be finished because ConsentVault was asleep. It is starting now, about two minutes. Then sign in again."
+    : "Your sign-in could not be finished and ConsentVault could not be started. The team has been alerted. Try again in a few minutes.";
+  const title = started ? "ConsentVault is starting" : "ConsentVault could not be started";
+  return new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>` +
+    `<main style="font-family:system-ui,sans-serif;max-width:32rem;margin:20vh auto;padding:0 1.5rem"><h1>${esc(title)}</h1><p>${esc(message)}</p><p><a href="/auth/login">Sign in again</a></p></main>`,
+    { status: 503, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+}
+
 export async function handlePortal(request: Request, env: PortalEnv, deps: GatewayDeps): Promise<Response> {
   const path = new URL(request.url).pathname;
   const now = deps.now ?? Date.now;
   const accept = request.headers.get("accept") ?? "";
   const navigation = request.method === "GET" && accept.includes("text/html");
   const asksJson = path.startsWith("/v1/") && accept.includes("application/json");
-  if ((navigation || asksJson) && (await vaultParked(env, deps, now()))) return whileParked(request, env, deps, now());
   if (path.startsWith("/auth/")) {
+    // Sign-in is never behind the parked check: it is how a signed-out person gets the right to wake the vault.
     const res = await handleAuth(request, env, { fetch: deps.fetch, now, vault: vaultCaller(env, deps) });
-    if (res) return res;
+    if (res) return path === "/auth/callback" ? afterCallback(res, env, deps, now) : res;
   }
+  if ((navigation || asksJson) && (await vaultParked(env, deps, now()))) return whileParked(request, env, deps, now());
   if (path.startsWith("/v1/")) {
     const res = await handleGateway(request, env, deps);
     // A call that did not ask for JSON still finds out the vault is parked when the gateway cannot reach it.

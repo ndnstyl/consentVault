@@ -7,7 +7,7 @@ const src = (p: string) => readFileSync(new URL(`../src/${p}`, import.meta.url),
 test('the error card swaps to the self-refreshing starting page on vault_starting', () => {
   const ui = src('components/ui.tsx');
   assert.match(ui, /err\.code === 'vault_starting' && !gaveUp\)[\s\S]*<StartingBlock onRetry=\{onRetry\}/);
-  assert.match(ui, /startRetryLoop\(onRetry/);
+  assert.match(ui, /runStartingBlock\(episodeKey/);
   assert.match(ui, /ConsentVault is starting/);
 });
 

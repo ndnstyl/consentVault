@@ -159,9 +159,26 @@ export function startRetryLoop(retry: () => void, giveUp: () => void, everyMs = 
   return () => clearInterval(t);
 }
 
+// A reload unmounts the block and the next vault_starting answer mounts a fresh one, so the five minutes are counted here, per screen title,
+// not per mount. A gap of more than 45 seconds with no block shown is a new episode.
+const EPISODES = new Map<string, { start: number; seen: number }>();
+const EPISODE_GAP_MS = 45_000;
+
+/** Start (or continue) the retry loop for one screen's starting episode. Returns the stop function. */
+export function runStartingBlock(key: string, retry: () => void, giveUp: () => void): () => void {
+  const now = Date.now();
+  const ep = EPISODES.get(key);
+  const cur = ep && now - ep.seen <= EPISODE_GAP_MS ? ep : { start: now, seen: now };
+  EPISODES.set(key, cur);
+  const remaining = STARTING_GIVE_UP_MS - (now - cur.start);
+  if (remaining <= 0) { giveUp(); return () => {}; }
+  const stop = startRetryLoop(() => { cur.seen = Date.now(); retry(); }, () => { cur.seen = Date.now(); giveUp(); }, STARTING_RETRY_MS, Math.max(STARTING_RETRY_MS, remaining));
+  return stop;
+}
+
 /** The cloud servers are parked and the edge has asked for them: say so and re-run the screen's own load until the vault answers (in place, no page reload, focus untouched). */
-export function StartingBlock({ onRetry, onGiveUp, headingLevel = 2 }: { onRetry: () => void; onGiveUp?: () => void; headingLevel?: 2 | 3 }) {
-  useEffect(() => startRetryLoop(onRetry, onGiveUp ?? (() => {})), [onRetry, onGiveUp]);
+export function StartingBlock({ onRetry, onGiveUp, headingLevel = 2, episodeKey }: { onRetry: () => void; onGiveUp: () => void; headingLevel?: 2 | 3; episodeKey: string }) {
+  useEffect(() => runStartingBlock(episodeKey, onRetry, onGiveUp), [episodeKey, onRetry, onGiveUp]);
   const H = (`h${headingLevel}`) as 'h2' | 'h3';
   return (
     <div className="empty" role="status" aria-live="polite">
@@ -179,8 +196,9 @@ export const NOT_SAVED_STARTING = 'Not saved. ConsentVault is starting; try agai
  *  gets a static notice with no timer, so nothing a person typed is ever cleared. */
 export function ErrorBlock({ title, err, next, actions, override, headingLevel, onRetry, startingNotice }: { title: string; err: ApiError; next: React.ReactNode; actions?: React.ReactNode; override?: string; headingLevel?: 2 | 3; onRetry?: () => void; startingNotice?: string }) {
   const [gaveUp, setGaveUp] = useState(false);
+  const giveUp = useCallback(() => setGaveUp(true), []);
   if (err.code === 'vault_starting' && !gaveUp) {
-    if (onRetry) return <StartingBlock onRetry={onRetry} onGiveUp={() => setGaveUp(true)} headingLevel={headingLevel} />;
+    if (onRetry) return <StartingBlock onRetry={onRetry} onGiveUp={giveUp} headingLevel={headingLevel} episodeKey={title} />;
     return <Banner kind="warning" title={startingNotice ?? NOT_SAVED_STARTING} />;
   }
   return <StateBlock kind="error" title={title} cause={causeLine(err.status, err.code, override)} next={next} actions={actions} headingLevel={headingLevel} />;

@@ -57,3 +57,38 @@ test('5 an export that failed with vault_starting is a static notice, never a ti
   const html = renderToStaticMarkup(h(ui.ErrorBlock, { title: 'x', err: starting(), next: 'n', startingNotice: 'The file was not built. Export again in about two minutes.' }));
   assert.match(html, /The file was not built\. Export again/);
 });
+
+test('6 a retry cycle (vault_starting, reload, new block, vault_starting again) still gives up at five minutes', () => {
+  mock.timers.enable({ apis: ['setInterval', 'Date'], now: 1_000_000 });
+  let gaveUp = 0, mounts = 0;
+  let stop = () => {};
+  // The screen's reload unmounts the block and the next vault_starting answer mounts a fresh one, as useResource does.
+  const mount = () => { mounts++; stop = ui.runStartingBlock('Billing did not load', retry, () => { gaveUp++; }); };
+  const retry = () => { stop(); mount(); };
+  mount();
+  mock.timers.tick(4 * 60 * 1000);
+  assert.equal(gaveUp, 0);
+  mock.timers.tick(70 * 1000);
+  const at = gaveUp;
+  mock.timers.tick(10 * 60 * 1000);
+  stop();
+  mock.timers.reset();
+  assert.equal(at, 1, 'gave up by 5 minutes 10 seconds');
+  assert.equal(gaveUp, 1, 'gave up once and stopped');
+  assert.ok(mounts <= 22, `mounts ${mounts}`);
+});
+test('7 a later, separate episode starts a fresh five minutes', () => {
+  mock.timers.enable({ apis: ['setInterval', 'Date'], now: 5_000_000 });
+  let gaveUp = 0;
+  const stop = ui.runStartingBlock('Other screen', () => {}, () => { gaveUp++; });
+  mock.timers.tick(6 * 60 * 1000); stop();
+  mock.timers.tick(10 * 60 * 1000);
+  let again = 0;
+  const stop2 = ui.runStartingBlock('Other screen', () => {}, () => { again++; });
+  mock.timers.tick(60 * 1000); stop2();
+  mock.timers.reset();
+  assert.equal(gaveUp, 1); assert.equal(again, 0);
+});
+test('8 the give-up handler is stable across parent renders', () => {
+  assert.match(src('components/ui.tsx'), /const giveUp = useCallback\(/);
+});

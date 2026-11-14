@@ -506,6 +506,51 @@
    "defined_in": "0039_customer_alarm_rows.sql"
   },
   {
+   "code": "db_disclosure_replaces_guard_gqmzrv",
+   "function": "consentvault.disclosure_replaces_guard",
+   "signature": "",
+   "line": 19,
+   "template": "consentvault.disclosure: a replacing wording must start after the one it replaces",
+   "meaning": "consentvault.disclosure: a replacing wording must start after the one it replaces",
+   "defined_in": "0092_wording_replaces_guard.sql"
+  },
+  {
+   "code": "db_disclosure_replaces_guard_gsmpny",
+   "function": "consentvault.disclosure_replaces_guard",
+   "signature": "",
+   "line": 15,
+   "template": "consentvault.disclosure: the wording it replaces is not held by this organisation",
+   "meaning": "consentvault.disclosure: the wording it replaces is not held by this organisation",
+   "defined_in": "0092_wording_replaces_guard.sql"
+  },
+  {
+   "code": "db_disclosure_replaces_guard_jgkmjs",
+   "function": "consentvault.disclosure_replaces_guard",
+   "signature": "",
+   "line": 25,
+   "template": "consentvault.disclosure: a replacement chain cannot loop back",
+   "meaning": "consentvault.disclosure: a replacement chain cannot loop back",
+   "defined_in": "0092_wording_replaces_guard.sql"
+  },
+  {
+   "code": "db_disclosure_replaces_guard_kzrprx",
+   "function": "consentvault.disclosure_replaces_guard",
+   "signature": "",
+   "line": 29,
+   "template": "consentvault.disclosure: replacement chain too long to check",
+   "meaning": "consentvault.disclosure: replacement chain too long to check",
+   "defined_in": "0092_wording_replaces_guard.sql"
+  },
+  {
+   "code": "db_disclosure_replaces_guard_rrgvwh",
+   "function": "consentvault.disclosure_replaces_guard",
+   "signature": "",
+   "line": 11,
+   "template": "consentvault.disclosure: a wording cannot replace itself",
+   "meaning": "consentvault.disclosure: a wording cannot replace itself",
+   "defined_in": "0092_wording_replaces_guard.sql"
+  },
+  {
    "code": "db_dispatch_org_ids_wggtgy",
    "function": "consentvault.dispatch_org_ids",
    "signature": "text",

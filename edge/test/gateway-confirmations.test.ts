@@ -169,7 +169,7 @@ test("the link-host probe is forwarded with the link host", async () => {
 
 // ---- the fallback door: stored in D1 before the vault is asked ----------------------------------------------------------------
 // A stand-in for D1 that answers exactly the statements the gateway sends (SPOOL_SQL); any other statement fails the test.
-type Row = { id: string; number_key: string; received_at: string; path: string; body_b64: string; headers_json: string; attempts: number; last_status: number | null; drained_at: string | null };
+type Row = { id: string; number_key: string; received_at: string; path: string; body_b64: string; headers_json: string; attempts: number; last_status: number | null; drained_at: string | null; refused_at?: string | null };
 class FakeD1 implements D1Like {
   rows: Row[] = [];
   fail: Set<string> = new Set(); // statement names that throw
@@ -181,13 +181,14 @@ class FakeD1 implements D1Like {
     const run = async (args: unknown[]) => {
       db.seen.push(name);
       if (db.fail.has(name)) throw new Error(`D1_ERROR ${name}`);
-      const open = db.rows.filter((r) => r.drained_at === null);
+      const open = db.rows.filter((r) => r.drained_at === null && !r.refused_at);
       switch (name) {
         case "countKey": return { results: [{ n: open.filter((r) => r.number_key === args[0]).length }] };
         case "countAll": return { results: [{ n: open.length }] };
         case "insert": db.rows.push({ id: String(args[0]), number_key: String(args[1]), received_at: String(args[2]), path: String(args[3]), body_b64: String(args[4]), headers_json: String(args[5]), attempts: 0, last_status: null, drained_at: null }); return { results: [] };
         case "pending": return { results: [...open].sort((a, b) => a.received_at.localeCompare(b.received_at)) };
         case "markDrained": { const r = db.rows.find((x) => x.id === args[2])!; r.drained_at = String(args[0]); r.attempts++; r.last_status = Number(args[1]); return { results: [] }; }
+        case "markRefused": { const r = db.rows.find((x) => x.id === args[2])!; r.refused_at = String(args[0]); r.attempts++; r.last_status = Number(args[1]); return { results: [] }; }
         case "markAttempt": { const r = db.rows.find((x) => x.id === args[1])!; r.attempts++; r.last_status = Number(args[0]); return { results: [] }; }
         case "purge": db.rows = db.rows.filter((r) => !(r.drained_at !== null && r.drained_at < String(args[0]))); return { results: [] };
       }
@@ -197,7 +198,7 @@ class FakeD1 implements D1Like {
   }
 }
 const FPATH = `/v1/confirmations/inbound-fallback/${KEY}`;
-const open = (db: FakeD1) => db.rows.filter((r) => r.drained_at === null);
+const open = (db: FakeD1) => db.rows.filter((r) => r.drained_at === null && !r.refused_at);
 
 function down(calls: { url: string; init: RequestInit }[] = []): typeof fetch {
   return (async (url: string, init: RequestInit) => { calls.push({ url: String(url), init }); throw new TypeError("network"); }) as unknown as typeof fetch;
@@ -272,17 +273,40 @@ test("the drain selects open rows every minute with no flag and no listing, and 
   assert.ok(!db.seen.some((s) => /list|flag|marker/i.test(s)));
 });
 
-test("only a 2xx from the vault ends a stored post: a 404, 401, 403, 409 or redirect keeps it and alarms", async () => {
+test("a post the vault refuses (4xx, a redirect) is alarmed, then closed as refused with its status: kept for the record, off the cap", async () => {
   for (const status of [404, 401, 403, 409, 302]) {
     const db = new FakeD1();
     const alarms: string[] = [];
     const { env } = mk({ INBOUND_SPOOL: db });
     await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {} });
     const out = await drainInboundSpool(env, { fetch: answering(status), alarm: (n) => alarms.push(n) });
-    assert.deepEqual(out, { delivered: 0, kept: 1 }, String(status));
+    assert.deepEqual(out, { delivered: 0, kept: 0 }, String(status));
     assert.ok(alarms.includes("confirmations.inbound_spool_refused"), String(status));
+    assert.equal(db.rows.length, 1, "the refused row is kept");
     assert.equal(db.rows[0].last_status, status);
+    assert.ok(db.rows[0].refused_at && db.rows[0].drained_at === null);
+    assert.equal(open(db).length, 0);
   }
+});
+
+test("a 5xx or no answer keeps the row open", async () => {
+  for (const f of [answering(503), down()]) {
+    const db = new FakeD1();
+    const { env } = mk({ INBOUND_SPOOL: db });
+    await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {} });
+    assert.deepEqual(await drainInboundSpool(env, { fetch: f, alarm: () => {} }), { delivered: 0, kept: 1 });
+    assert.equal(open(db).length, 1);
+  }
+});
+
+test("refused rows do not count toward the per-number cap", async () => {
+  const db = new FakeD1();
+  const base = { path: FPATH, body_b64: "", headers_json: "{}", attempts: 1, last_status: 401, drained_at: null, refused_at: "2026-11-14T00:00:00Z" };
+  for (let i = 0; i < SPOOL_PER_KEY; i++) db.rows.push({ ...base, id: `j${i}`, number_key: KEY, received_at: "2026-11-14T00:00:00Z" });
+  const { env } = mk({ INBOUND_SPOOL: db });
+  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {} });
+  assert.equal(res.status, 200);
+  assert.equal(open(db).length, 1, "a real STOP is still stored past 200 refused junk posts");
 });
 
 test("a fallback post the vault answers with anything but 2xx stays stored, and Twilio is still told it was received", async () => {
@@ -291,8 +315,10 @@ test("a fallback post the vault answers with anything but 2xx stays stored, and 
   const { env } = mk({ INBOUND_SPOOL: db });
   const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: answering(404), alarm: (n) => alarms.push(n) });
   assert.equal(res.status, 200);
-  assert.equal(open(db).length, 1);
   assert.ok(alarms.includes("confirmations.inbound_spool_refused"));
+  assert.equal(open(db).length, 0, "closed as refused, off the cap");
+  assert.equal(db.rows[0].last_status, 404);
+  assert.ok(db.rows[0].refused_at);
 });
 
 test("a stored post older than 10 minutes raises a named alarm", async () => {

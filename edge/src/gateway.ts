@@ -89,10 +89,13 @@ const KEEP_DRAINED_MS = 7 * 24 * 3600_000;
 // The store (edge/migrations/0001_inbound_spool.sql). D1 is strongly consistent through its primary: the drain reads the open
 // rows every minute; there is no flag and no listing.
 export const SPOOL_SQL = {
-  countKey: "SELECT count(*) AS n FROM inbound_spool WHERE number_key = ? AND drained_at IS NULL",
-  countAll: "SELECT count(*) AS n FROM inbound_spool WHERE drained_at IS NULL",
+  countKey: "SELECT count(*) AS n FROM inbound_spool WHERE number_key = ? AND drained_at IS NULL AND refused_at IS NULL",
+  countAll: "SELECT count(*) AS n FROM inbound_spool WHERE drained_at IS NULL AND refused_at IS NULL",
   insert: "INSERT INTO inbound_spool (id, number_key, received_at, path, body_b64, headers_json) VALUES (?, ?, ?, ?, ?, ?)",
-  pending: "SELECT id, number_key, received_at, path, body_b64, headers_json FROM inbound_spool WHERE drained_at IS NULL ORDER BY received_at LIMIT 1000",
+  pending: "SELECT id, number_key, received_at, path, body_b64, headers_json FROM inbound_spool WHERE drained_at IS NULL AND refused_at IS NULL ORDER BY received_at LIMIT 1000",
+  // A post the vault refuses (a 4xx or a redirect: a bad signature, a number not the account's) is closed as refused after its
+  // alarm, kept for the record with the status, and no longer counts toward the cap; a 5xx or no answer keeps it open.
+  markRefused: "UPDATE inbound_spool SET refused_at = ?, attempts = attempts + 1, last_status = ? WHERE id = ?",
   markDrained: "UPDATE inbound_spool SET drained_at = ?, attempts = attempts + 1, last_status = ? WHERE id = ?",
   markAttempt: "UPDATE inbound_spool SET attempts = attempts + 1, last_status = ? WHERE id = ?",
   purge: "DELETE FROM inbound_spool WHERE drained_at IS NOT NULL AND drained_at < ?",
@@ -365,8 +368,14 @@ async function fallbackDoor(request: Request, url: URL, env: GatewayEnv, deps: G
     return new Response(res.body, { status: res.status, headers: scrub(res.headers) });
   }
   if (kept) {
-    if (res && res.status < 500) alarm("confirmations.inbound_spool_refused", `the vault answered a fallback post ${res.status}; it is stored for a person`);
-    else alarm("confirmations.inbound_spooled", "the vault did not take a fallback post; it is stored at the edge and delivered by the drain");
+    if (res && res.status < 500) {
+      alarm("confirmations.inbound_spool_refused", `the vault refused a fallback post with ${res.status}; it is closed as refused and kept for the record`);
+      try {
+        await db!.prepare(SPOOL_SQL.markRefused).bind(now, res.status, id).run();
+      } catch (e) {
+        alarm("confirmations.inbound_spool_unwritable", `a refused post could not be closed; it stays open (${(e as Error).message.slice(0, 80)})`);
+      }
+    } else alarm("confirmations.inbound_spooled", "the vault did not take a fallback post; it is stored at the edge and delivered by the drain");
     if (res) await res.body?.cancel();
     return new Response(JSON.stringify({ received: true, kept: true }), { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
   }
@@ -422,16 +431,20 @@ export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps): Pro
         delivered++;
         continue;
       }
+      if (status > 0 && status < 500) {
+        refused++;
+        await db.prepare(SPOOL_SQL.markRefused).bind(nowIso, status, String(row.id)).run();
+        continue;
+      }
       if (status > 0) await db.prepare(SPOOL_SQL.markAttempt).bind(status, String(row.id)).run();
     } catch (e) {
       alarm("confirmations.inbound_spool_unwritable", `stored post ${String(row.id)} could not be marked (${(e as Error).message.slice(0, 80)}); it is sent again next run`);
     }
     kept++;
-    if (status > 0 && status < 500) refused++;
   }
   if (stale) alarm("confirmations.inbound_spool_stale", `${stale} stored inbound post(s) are older than 10 minutes`);
-  if (refused) alarm("confirmations.inbound_spool_refused", `${refused} stored inbound post(s) were answered with a refusal by the vault; kept for a person`);
-  if (kept > refused) alarm("confirmations.inbound_spool_waiting", `${kept - refused} stored inbound post(s) still wait for the vault`);
+  if (refused) alarm("confirmations.inbound_spool_refused", `${refused} stored inbound post(s) were refused by the vault; closed as refused and kept for the record`);
+  if (kept) alarm("confirmations.inbound_spool_waiting", `${kept} stored inbound post(s) still wait for the vault`);
   try {
     await db.prepare(SPOOL_SQL.purge).bind(new Date(nowMs - KEEP_DRAINED_MS).toISOString()).run();
   } catch (e) {

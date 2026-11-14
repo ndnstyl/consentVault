@@ -50,6 +50,18 @@ def test_edge_site_key_has_an_identifier_and_no_secret(world):
                                              "source_id": str(uuid.uuid4())}, name="not_found")
 
 
+def test_a_site_key_is_refused_for_a_server_source_and_nothing_is_written(world):
+    vault, org, boss, dev, viewer, src = world
+    brand = boss.ok("POST", "/v1/brands", body={"display_name": "Acme Two"})["brand_id"]
+    server = boss.ok("POST", "/v1/sources", body={"name": "CRM push", "kind": "server", "brand_ids": [brand]})["source_id"]
+    before = len(boss.ok("GET", "/v1/credentials")["items"])
+    dev.err("POST", "/v1/credentials", body={"name": "wrong", "kind": "edge_site_key", "scope": "capture", "source_id": server},
+                name="validation_failed")
+    assert len(boss.ok("GET", "/v1/credentials")["items"]) == before
+    ok = dev.ok("POST", "/v1/credentials", body={"name": "right", "kind": "edge_site_key", "scope": "capture", "source_id": src})
+    assert ok["site_key_id"].startswith("cv_site_")
+
+
 @pytest.mark.parametrize("make,alg", [(lambda: ec.generate_private_key(ec.SECP256R1()), "ES256"),
                                       (lambda: ed25519.Ed25519PrivateKey.generate(), "EdDSA")])
 def test_public_key_credentials(world, make, alg):

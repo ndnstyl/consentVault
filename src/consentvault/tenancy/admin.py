@@ -522,6 +522,11 @@ def _issue(ctx: Ctx, *, name, kind, scope, source_id, public_key, algorithm, cus
             raise invalid(scope="an edge site key is a capture credential")
         if sid is None:
             raise invalid(source_id="required for an edge site key")
+        src_kind = ctx.conn.execute("SELECT kind FROM consentvault.capture_source WHERE org_id = (SELECT consentvault.current_org())"
+                                    " AND source_id = %s", (sid,)).fetchone()["kind"]
+        if src_kind != "site_key":
+            raise invalid(source_id="a site key is for a website form source; this source sends from a server, "
+                                    "so issue a public key or a signed webhook secret for it")
         site_key = "cv_site_" + secrets.token_urlsafe(18)
     elif kind == "jwt_public_key":
         if not isinstance(public_key, str) or not public_key.strip():

@@ -143,3 +143,16 @@ test('Session: refreshOrg reports a failed read instead of swallowing it', () =>
   assert.doesNotMatch(src, /catch \{ \/\* the page that asked shows its own error \*\/ \}/);
   assert.match(src, /refreshOrg: \(\) => Promise<ApiError \| null>/);
 });
+
+// ---- the vault refuses a public key for a website source, so the form does not offer it
+const kindInputs = (sources) => {
+  const res = { status: 'ok', data: { sources }, error: null, reload: noop, refresh: noop, setData: noop };
+  const html = renderToStaticMarkup(h(SessionContext.Provider, { value: session() }, h(RouterContext.Provider, { value: router }, h(CredentialNewView, { res }))));
+  return [...html.matchAll(/<label[^>]*class="opt"[^>]*>\s*<input([^>]*)>\s*<span><b>(.*?)<\/b>(.*?)<\/span>/g)].filter((m) => /name="kind"/.test(m[1])).map((m) => ({ label: m[2], disabled: /disabled/.test(m[1]), hint: m[3] }));
+};
+test('Credential: for a website source the public key option is off and says why; for a server source it is on', () => {
+  const web = kindInputs([SRC('site_key')]).find((k) => /Public key/.test(k.label));
+  assert.equal(web.disabled, true);
+  assert.match(web.hint, /website form/i);
+  assert.equal(kindInputs([SRC('server')]).find((k) => /Public key/.test(k.label)).disabled, false);
+});

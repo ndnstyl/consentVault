@@ -342,6 +342,7 @@ export function CredentialNewView({ res, embedded }: { res: ReturnType<typeof us
   // the kind follows the source that is selected (or the one the form will pre-select) until the person picks one; with no source, or a kind it does not know, nothing is chosen
   const chosenSource = needsSource ? sources.find((s) => s.source_id === draft.source) ?? (draft.source ? undefined : sources[0]) : undefined;
   const kind = (draft.kind || defaultKindFor(chosenSource)) as CredentialKind | '';
+  const websiteSource = scope === 'capture' && chosenSource?.kind === 'site_key';
   useEffect(() => {
     if (d && needsSource && !draft.source && sources[0]) setDraft({ source: sources[0].source_id });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -369,7 +370,7 @@ export function CredentialNewView({ res, embedded }: { res: ReturnType<typeof us
   };
   const next1 = () => {
     setTouched(true);
-    if (!draft.name.trim() || !kind || (needsSource && !draft.source)) return;
+    if (!draft.name.trim() || !kind || (needsSource && !draft.source) || (websiteSource && kind === 'jwt_public_key')) return;
     if (kind === 'jwt_public_key') setStep(2); else void finish();
   };
   const next2 = () => {
@@ -402,9 +403,11 @@ export function CredentialNewView({ res, embedded }: { res: ReturnType<typeof us
           <fieldset>
             <legend>Kind</legend>
             {kindsFor.includes('edge_site_key') && <Radio name="kind" label="Site key for a website form" checked={kind === 'edge_site_key'} onChange={() => setDraft({ kind: 'edge_site_key' })} />}
-            <Radio name="kind" label="Public key for a server (you keep the private key)" checked={kind === 'jwt_public_key'} onChange={() => setDraft({ kind: 'jwt_public_key' })} />
+            <Radio name="kind" label="Public key for a server (you keep the private key)" checked={kind === 'jwt_public_key'} onChange={() => setDraft({ kind: 'jwt_public_key' })}
+              disabled={websiteSource} hint={websiteSource ? 'Not for a website form source: a server would be vouching for the visitor details only the ConsentVault edge may record. Use a site key, or pick a server source.' : undefined} />
             <Radio name="kind" label="Signed webhook secret, for systems that cannot use keys" checked={kind === 'hmac_fallback'} onChange={() => setDraft({ kind: 'hmac_fallback' })} />
             {touched && !kind && <p className="field-error" role="alert"><Icon name="i-err" /><span>Choose a kind.</span></p>}
+            {touched && websiteSource && kind === 'jwt_public_key' && <p className="field-error" role="alert"><Icon name="i-err" /><span>A public key is not available for a website form source. Choose a site key, or pick a server source.</span></p>}
           </fieldset>
           {needsSource && (sources.length === 0
             ? <Banner kind="warning" title="Add a capture source first">A capture credential belongs to one source. <Link href="/sources">Open capture sources</Link></Banner>

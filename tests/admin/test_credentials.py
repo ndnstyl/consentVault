@@ -28,6 +28,12 @@ def world(vault):
     return vault, org, boss, dev, viewer, src
 
 
+def server_source(boss, name="Back end"):
+    """A source that sends from a server: the only kind a public-key capture credential may belong to."""
+    brand = boss.ok("POST", "/v1/brands", body={"display_name": f"{name} brand"})["brand_id"]
+    return boss.ok("POST", "/v1/sources", body={"name": name, "kind": "server", "brand_ids": [brand]})["source_id"]
+
+
 def approve_a_policy(boss):
     chans = [c["channel"] for c in boss.ok("GET", "/v1/channels")["items"]]
     tpl = boss.ok("GET", "/v1/policy-templates")["items"][0]
@@ -62,10 +68,26 @@ def test_a_site_key_is_refused_for_a_server_source_and_nothing_is_written(world)
     assert ok["site_key_id"].startswith("cv_site_")
 
 
+def test_a_public_key_capture_credential_is_refused_for_a_website_source_and_nothing_is_written(world):
+    """A server holding a public-key credential asserts the visitor address, arrival time and bot check itself, so it can never
+    be filed under a website form source, whose edge facts only the ConsentVault edge may observe."""
+    vault, org, boss, dev, viewer, src = world
+    key = ec.generate_private_key(ec.SECP256R1())
+    body = {"name": "Server", "kind": "jwt_public_key", "scope": "capture", "source_id": src,
+            "public_key": pem_pub(key), "algorithm": "ES256"}
+    dev.err("POST", "/v1/credentials", body=body, name="validation_failed")
+    with vault.superuser() as su:
+        assert su.execute("SELECT count(*) AS n FROM consentvault.credential WHERE name = 'Server'").fetchone()["n"] == 0
+        assert su.execute("SELECT count(*) AS n FROM consentvault.audit_event WHERE action = 'credential.issued'").fetchone()["n"] == 0
+    ok = dev.ok("POST", "/v1/credentials", body={**body, "source_id": server_source(boss)})
+    assert ok["client_id"] == ok["credential_id"]
+
+
 @pytest.mark.parametrize("make,alg", [(lambda: ec.generate_private_key(ec.SECP256R1()), "ES256"),
                                       (lambda: ed25519.Ed25519PrivateKey.generate(), "EdDSA")])
 def test_public_key_credentials(world, make, alg):
     vault, org, boss, dev, viewer, src = world
+    src = server_source(boss)
     key = make()
     c = dev.ok("POST", "/v1/credentials", body={"name": "Server", "kind": "jwt_public_key", "scope": "capture",
                                                 "source_id": src, "public_key": pem_pub(key), "algorithm": alg})
@@ -191,12 +213,13 @@ def test_suspended_and_offboarding_organisations_issue_nothing_new(world):
 
 def test_a_credential_resolves_for_the_token_endpoint_with_its_source_and_scope(world):
     vault, org, boss, dev, viewer, src = world
+    src = server_source(boss)
     key = ec.generate_private_key(ec.SECP256R1())
     c = dev.ok("POST", "/v1/credentials", body={"name": "s", "kind": "jwt_public_key", "scope": "capture", "source_id": src,
                                                "public_key": pem_pub(key), "algorithm": "ES256"})
     with vault.appconn() as a:
         r = a.execute("SELECT * FROM consentvault.resolve_credential(%s)", (c["credential_id"],)).fetchone()
-    assert r["scopes"] == ["capture"] and r["kind"] == "jwt_public_key" and r["allowed_origins"] == ["https://acme.example"]
+    assert r["scopes"] == ["capture"] and r["kind"] == "jwt_public_key" and not r["allowed_origins"]  # a server source has no origins
 
 
 # ---- integration pass: a connected system's signal credential is bound through the sync lane's door ------------------
@@ -212,6 +235,7 @@ def _signal_credential_of(vault, org_id, system_id):
 
 def test_system_create_and_edit_bind_the_signal_credential(world):
     vault, org, boss, dev, viewer, src = world
+    src = server_source(boss)
     key = ec.generate_private_key(ec.SECP256R1())
     first = dev.ok("POST", "/v1/credentials", body={"name": "CRM in", "kind": "jwt_public_key", "scope": "capture",
                                                     "source_id": src, "public_key": pem_pub(key), "algorithm": "ES256"})
@@ -234,6 +258,7 @@ def test_system_create_and_edit_bind_the_signal_credential(world):
 
 def test_a_signal_credential_is_unbound_back_to_none_and_audited(world):
     vault, org, boss, dev, viewer, src = world
+    src = server_source(boss)
     cred = dev.ok("POST", "/v1/credentials", body={"name": "CRM in", "kind": "jwt_public_key", "scope": "capture",
                                                    "source_id": src, "public_key": pem_pub(ec.generate_private_key(
                                                        ec.SECP256R1())), "algorithm": "ES256"})

@@ -539,6 +539,14 @@ def _issue(ctx: Ctx, *, name, kind, scope, source_id, public_key, algorithm, cus
         pem = public_key.strip()
         if scope in ("capture", "capture_verified") and sid is None:
             raise invalid(source_id="required for a capture credential")
+        if scope == "capture":
+            # a server holding a public key asserts the visitor address, arrival time and bot check itself; a website form
+            # source is the one whose edge facts only the ConsentVault edge observes, so a server never signs for it
+            src_kind = ctx.conn.execute("SELECT kind FROM consentvault.capture_source WHERE org_id = (SELECT consentvault.current_org())"
+                                        " AND source_id = %s", (sid,)).fetchone()["kind"]
+            if src_kind != "server":
+                raise invalid(source_id="a public key is for a source that sends from a server; this is a website form source, "
+                                        "whose visitor details only the ConsentVault edge may record, so issue a site key for it")
     else:  # hmac_fallback
         if sid is None:
             raise invalid(source_id="required for an HMAC fallback credential")

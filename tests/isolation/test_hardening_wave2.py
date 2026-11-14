@@ -381,6 +381,9 @@ def test_a_compliance_viewer_reads_brand_and_source_names_only(hw):
 
 def test_a_revoke_answer_carries_the_credential_created_at_and_retention_needs_a_reason(hw):
     a = hw.cloud.a
+    with hw.t.superuser() as su:  # a site key is issued only for a website form source (kind site_key); the fixture's source is a plain form
+        su.execute("UPDATE consentvault.capture_source SET kind = 'site_key' WHERE org_id = %s AND source_id = %s",
+                   (a.org.org_id, a.org.source_id))
     tok = hw.portal_token(a.org)
     s, raw, _ = hw.call("POST", "/v1/credentials", {"name": "site", "kind": "edge_site_key", "scope": "capture",
                                                     "source_id": str(a.org.source_id)}, token=tok)

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { drainInboundSpool, handleGateway, SPOOL_PER_KEY, SPOOL_TOTAL, LINK_HOST_HEADER, type GatewayEnv, type GatewayDeps, type RateLimiter, type SpoolKV } from "../src/gateway.ts";
+import { drainInboundSpool, handleGateway, isSweepMinute, SPOOL_PER_KEY, SPOOL_TOTAL, LINK_HOST_HEADER, type GatewayEnv, type GatewayDeps, type RateLimiter, type SpoolKV } from "../src/gateway.ts";
 
 // The confirmation service's two public doors (marketing/specs/confirmations-go-live):
 //  - the text provider's inbound posts, POST /v1/confirmations/inbound/<key>: admitted with no bearer (Twilio sends none; the
@@ -344,4 +344,27 @@ test("the flag is removed only after two empty listings and once it is older tha
   spool.data.set("meta:pending", new Date(t - 600_000).toISOString());
   await drainInboundSpool(env, { fetch: down(), alarm: () => {}, now: () => t, sleep: async () => {} });
   assert.equal(spool.data.get("meta:pending"), undefined);
+});
+
+test("every tenth minute the drain lists everything even with no flag, so a post another location's drain missed is delivered", async () => {
+  const spool = new Spool();
+  const { env } = mk({ INBOUND_SPOOL: spool });
+  const t = Date.parse("2026-11-14T12:00:00Z");
+  spool.data.set(`inbound:${KEY}:2026-11-14T11:59:00.000Z:x`, JSON.stringify({ path: FPATH, headers: {}, body_b64: btoa(RAW), kept_at: "2026-11-14T11:59:00.000Z" }));
+  const up = (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch;
+  assert.deepEqual(await drainInboundSpool(env, { fetch: up, alarm: () => {}, now: () => t }), { delivered: 0, kept: 0 }, "no flag, no sweep: nothing listed");
+  assert.deepEqual(await drainInboundSpool(env, { fetch: up, alarm: () => {}, now: () => t }, { sweep: true }), { delivered: 1, kept: 0 });
+  assert.ok(isSweepMinute(Date.parse("2026-11-14T12:10:00Z")) && isSweepMinute(Date.parse("2026-11-14T12:00:30Z")));
+  assert.ok(!isSweepMinute(Date.parse("2026-11-14T12:11:00Z")));
+});
+
+test("a kept post older than 10 minutes raises a named alarm", async () => {
+  const spool = new Spool();
+  const alarms: string[] = [];
+  const { env } = mk({ INBOUND_SPOOL: spool });
+  const t = Date.parse("2026-11-14T12:00:00Z");
+  spool.data.set("meta:pending", new Date(t - 60_000).toISOString());
+  spool.data.set(`inbound:${KEY}:2026-11-14T11:45:00.000Z:x`, JSON.stringify({ path: FPATH, headers: {}, body_b64: btoa(RAW), kept_at: "2026-11-14T11:45:00.000Z" }));
+  await drainInboundSpool(env, { fetch: down(), alarm: (n) => alarms.push(n), now: () => t });
+  assert.ok(alarms.includes("confirmations.inbound_spool_stale"));
 });

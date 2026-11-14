@@ -93,6 +93,14 @@ export const SPOOL_TOTAL = 1000;
 // listings can lag a fresh write by up to a minute, and a post can be kept while the drain runs.
 const FLAG_SETTLE_MS = 5 * 60_000;
 const SECOND_LISTING_DELAY_MS = 2_000;
+// KV is eventually consistent across locations (about 60 s), so a drain elsewhere can remove the flag while a post sits unseen.
+// Every tenth minute the drain therefore lists everything whatever the flag says: 144 sweep listings a day, plus one listing a
+// minute only while something is kept (Workers KV free plan: 1,000 list operations a day, as published by Cloudflare).
+export function isSweepMinute(ms: number): boolean {
+  return new Date(ms).getUTCMinutes() % 10 === 0;
+}
+// A kept post older than this is an alarm: it should have reached the vault within a few runs.
+const STALE_AFTER_MS = 10 * 60_000;
 const FALLBACK_MAX_BODY = 16 * 1024; // the vault refuses more (confirm/inbound.py MAX_BODY_BYTES), so the edge keeps no more
 // The provider headers a kept post carries back to the vault (the signature over the address and the body is the credential).
 const SPOOL_HEADERS = ["content-type", "x-twilio-signature", "i-twilio-idempotency-token", "user-agent"];
@@ -363,13 +371,15 @@ async function fallbackDoor(request: Request, url: URL, env: GatewayEnv, deps: G
 }
 
 /** The cron's drain: every kept post goes to the vault's fallback door again, oldest first; only a 2xx removes it. */
-export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps): Promise<{ delivered: number; kept: number }> {
+export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps, opts: { sweep?: boolean } = {}): Promise<{ delivered: number; kept: number }> {
   const alarm = alarmOf(deps);
   if (!env.INBOUND_SPOOL) {
     alarm("confirmations.inbound_spool_unbound", "the INBOUND_SPOOL binding is not set; nothing to drain");
     return { delivered: 0, kept: 0 };
   }
-  if ((await env.INBOUND_SPOOL.get(SPOOL_MARKER)) === null) return { delivered: 0, kept: 0 };
+  if (!opts.sweep && (await env.INBOUND_SPOOL.get(SPOOL_MARKER)) === null) return { delivered: 0, kept: 0 };
+  const nowMs = (deps.now ?? Date.now)();
+  let stale = 0;
   let delivered = 0;
   let kept = 0;
   let refused = 0;
@@ -385,6 +395,7 @@ export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps): Pro
       kept++;
       continue;
     }
+    if (nowMs - Date.parse(rec.kept_at) > STALE_AFTER_MS) stale++;
     let status = 0;
     try {
       const res = await deps.fetch(clean(env.ORIGIN_URL) + rec.path, { method: "POST", headers: towardVault(new Headers(rec.headers), env), body: unb64(rec.body_b64) });
@@ -401,6 +412,7 @@ export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps): Pro
       if (status > 0 && status < 500) refused++;
     }
   }
+  if (stale) alarm("confirmations.inbound_spool_stale", `${stale} kept inbound post(s) are older than 10 minutes`);
   if (refused) alarm("confirmations.inbound_spool_refused", `${refused} kept inbound post(s) were answered with a refusal by the vault; kept for a person`);
   if (kept > refused) alarm("confirmations.inbound_spool_waiting", `${kept - refused} kept inbound post(s) still wait for the vault`);
   if (kept === 0) {
@@ -572,7 +584,7 @@ export default {
     return handleGateway(request, env, { fetch: (...a) => fetch(...a) });
   },
   // Every minute (wrangler [triggers] crons): deliver what the fallback door kept while the vault was away.
-  async scheduled(_event: unknown, env: GatewayEnv): Promise<void> {
-    await drainInboundSpool(env, { fetch: (...a) => fetch(...a) });
+  async scheduled(event: { scheduledTime?: number }, env: GatewayEnv): Promise<void> {
+    await drainInboundSpool(env, { fetch: (...a) => fetch(...a) }, { sweep: isSweepMinute(event.scheduledTime ?? Date.now()) });
   },
 };

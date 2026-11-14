@@ -624,8 +624,8 @@
    "tests": [
     "portal/app/e2e/run.mjs::brands partial",
     "portal/app/e2e/run.mjs::plan empty",
-    "portal/app/e2e/run.mjs::policies empty",
-    "portal/app/e2e/run.mjs::checklists partial"
+    "portal/app/e2e/run.mjs::wording empty",
+    "portal/app/e2e/run.mjs::checklists empty"
    ],
    "owner": "Mike: the hosted WorkOS sign-in page branding is set in the vendor dashboard"
   },

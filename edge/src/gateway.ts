@@ -31,6 +31,16 @@ export interface GatewayEnv {
   // Workers rate-limit bindings for the confirmation doors (wrangler [[ratelimits]]); see confirmationDoor below.
   INBOUND_LIMITER?: RateLimiter;
   PAGE_LIMITER?: RateLimiter;
+  // Key-value store the fallback door keeps each post in until the vault has answered it (drainInboundSpool, on the cron).
+  INBOUND_SPOOL?: SpoolKV;
+}
+
+/** The Workers KV operations the inbound spool uses. */
+export interface SpoolKV {
+  get(key: string): Promise<string | null>;
+  put(key: string, value: string): Promise<void>;
+  delete(key: string): Promise<void>;
+  list(options: { prefix: string }): Promise<{ keys: { name: string }[] }>;
 }
 
 /** The Workers rate-limit binding's shape: one call per request, { success: false } over the limit. */
@@ -68,9 +78,16 @@ const TWENTY_WEBHOOK_MAX_BODY = 256 * 1024;
 // The text provider's inbound posts (confirmations.md section 9): Twilio sends no bearer; the X-Twilio-Signature over the address
 // the vault stored is the credential, checked by the vault. The key is the random per-account part of that address.
 const INBOUND_RE = /^\/v1\/confirmations\/inbound\/([A-Za-z0-9_-]{20,128})$/;
+// The number's fallback address: Twilio calls it once when the primary fails. Every post here is kept in INBOUND_SPOOL before
+// the vault is asked, and answered 200 once kept, so a STOP sent while the vault is down is delivered when it is back.
+const FALLBACK_RE = /^\/v1\/confirmations\/inbound-fallback\/([A-Za-z0-9_-]{20,128})$/;
+const SPOOL_PREFIX = "inbound:";
+// The provider headers a kept post carries back to the vault (the signature over the address and the body is the credential).
+const SPOOL_HEADERS = ["content-type", "x-twilio-signature", "i-twilio-idempotency-token", "user-agent"];
 const INBOUND_MAX_BODY = 64 * 1024; // the vault itself answers 413 over 16 KB and counts it with the signature failures
 // The person's pages on an organisation's own link host (confirmations.md sections 6 and 7; the product's own token pattern).
-const PAGE_RE = /^\/c\/(r|stop)\/[A-Za-z0-9_-]{8,128}$/;
+const PAGE_RE = /^\/c\/(r|stop)\/([A-Za-z0-9_-]{8,128})$/;
+const PROBE_PATH = "/c/ping"; // the vault's link-host probe answer (confirm/egress.py)
 const PAGE_MAX_BODY = 8 * 1024;
 const TENANT_LEAD_SECONDS = 20;
 const REFRESH_LEAD_SECONDS = 30;
@@ -203,33 +220,170 @@ function tooMany(): Response {
   });
 }
 
-// The two confirmation doors. Nothing here reads or judges the request: the vault checks the provider's signature and finds a
-// page token only on its organisation's verified host. No cookie, no Authorization and no session store are ever involved.
-async function confirmationDoor(request: Request, url: URL, env: GatewayEnv, deps: GatewayDeps, kind: "inbound" | "page", key: string): Promise<Response> {
-  const alarm = deps.alarm ?? ((n, d) => console.error(`consentvault gateway alarm ${n}: ${d}`));
-  const limiter = kind === "inbound" ? env.INBOUND_LIMITER : env.PAGE_LIMITER;
-  if (!limiter) {
-    // A missing binding forwards: a stop the person texted must reach the vault, and Twilio does not resend a refused one.
-    alarm(`confirmations.${kind === "inbound" ? "inbound" : "page"}_rate_limit_unbound`, `the ${kind === "inbound" ? "INBOUND_LIMITER" : "PAGE_LIMITER"} binding is not set; the door is not rate limited`);
-  } else if (!(await limiter.limit({ key })).success) {
-    return tooMany();
-  }
-  const max = kind === "inbound" ? INBOUND_MAX_BODY : PAGE_MAX_BODY;
-  const declared = request.headers.get("content-length");
-  if (declared !== null && Number(declared) > max) throw new Refusal(413, "too_large", `body exceeds ${max} bytes`);
-  let body: ArrayBuffer | undefined;
-  if (request.method === "POST") {
-    body = await request.arrayBuffer();
-    if (body.byteLength > max) throw new Refusal(413, "too_large", `body exceeds ${max} bytes`);
-  }
-  const headers = new Headers(request.headers);
+function alarmOf(deps: GatewayDeps) {
+  return deps.alarm ?? ((n: string, d: string) => console.error(`consentvault gateway alarm ${n}: ${d}`));
+}
+
+// The provider headers and body as the vault must see them: the edge's own credentials added, the browser's removed.
+function towardVault(source: Headers, env: GatewayEnv): Headers {
+  const headers = new Headers(source);
   for (const h of DROP_REQUEST_HEADERS) headers.delete(h);
   headers.delete("authorization");
   headers.delete("x-cv-org");
   headers.delete(ASSERTION_HEADER);
   headers.set("cf-access-client-id", env.ACCESS_CLIENT_ID);
   headers.set("cf-access-client-secret", env.ACCESS_CLIENT_SECRET);
-  if (kind === "page") headers.set(LINK_HOST_HEADER, url.hostname.toLowerCase());
+  return headers;
+}
+
+async function readCapped(request: Request, max: number): Promise<ArrayBuffer | undefined> {
+  const declared = request.headers.get("content-length");
+  if (declared !== null && Number(declared) > max) throw new Refusal(413, "too_large", `body exceeds ${max} bytes`);
+  if (request.method !== "POST") return undefined;
+  const body = await request.arrayBuffer();
+  if (body.byteLength > max) throw new Refusal(413, "too_large", `body exceeds ${max} bytes`);
+  return body;
+}
+
+// A delivery report carries MessageStatus; a person's reply does not. Counted apart, a burst of reports never uses up the
+// replies' allowance. Read from the form without changing a byte of what is forwarded.
+function inboundKind(body: ArrayBuffer | undefined): "report" | "reply" {
+  try {
+    return new URLSearchParams(new TextDecoder().decode(body ?? new ArrayBuffer(0))).has("MessageStatus") ? "report" : "reply";
+  } catch {
+    return "reply";
+  }
+}
+
+// The confirmation doors. Nothing here judges the request: the vault checks the provider's signature and finds a page token
+// only on its organisation's verified host. No cookie, no Authorization and no session store are ever involved.
+// The inbound door is NEVER refused: over its limit (or with no limiter) it forwards and raises a named alarm, because a STOP
+// Twilio is told was refused is not sent again.
+async function inboundDoor(request: Request, url: URL, env: GatewayEnv, deps: GatewayDeps, key: string): Promise<Response> {
+  const alarm = alarmOf(deps);
+  const body = await readCapped(request, INBOUND_MAX_BODY);
+  const kind = inboundKind(body);
+  if (!env.INBOUND_LIMITER) {
+    alarm("confirmations.inbound_rate_limit_unbound", "the INBOUND_LIMITER binding is not set; the inbound door is not rate limited");
+  } else if (!(await env.INBOUND_LIMITER.limit({ key: `inbound:${key}:${kind}` })).success) {
+    alarm("confirmations.inbound_rate_limited", `an inbound ${kind} went over its limit and was forwarded anyway`);
+  }
+  let res: Response;
+  try {
+    res = await deps.fetch(clean(env.ORIGIN_URL) + url.pathname + url.search, { method: "POST", headers: towardVault(request.headers, env), body });
+  } catch (e) {
+    throw new Refusal(502, "origin_unreachable", `origin unreachable: ${(e as Error).name}`);
+  }
+  return new Response(res.body, { status: res.status, headers: scrub(res.headers) });
+}
+
+function b64(buf: ArrayBuffer): string {
+  let bin = "";
+  for (const b of new Uint8Array(buf)) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+function unb64(text: string): ArrayBuffer {
+  const bin = atob(text);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out.buffer;
+}
+
+interface Kept { path: string; headers: Record<string, string>; body_b64: string; kept_at: string }
+
+// A vault answer under 500 is final for a kept post (taken, a replay, or refused and counted by the vault); 5xx or no answer is not.
+const finalAnswer = (status: number) => status < 500;
+
+async function fallbackDoor(request: Request, url: URL, env: GatewayEnv, deps: GatewayDeps): Promise<Response> {
+  const alarm = alarmOf(deps);
+  const body = (await readCapped(request, INBOUND_MAX_BODY)) ?? new ArrayBuffer(0);
+  const keptHeaders: Record<string, string> = {};
+  for (const h of SPOOL_HEADERS) {
+    const v = request.headers.get(h);
+    if (v !== null) keptHeaders[h] = v;
+  }
+  const now = new Date((deps.now ?? Date.now)());
+  const spoolKey = `${SPOOL_PREFIX}${now.toISOString()}:${crypto.randomUUID()}`;
+  let kept = false;
+  if (!env.INBOUND_SPOOL) {
+    alarm("confirmations.inbound_spool_unbound", "the INBOUND_SPOOL binding is not set; a fallback post is only forwarded, never kept");
+  } else {
+    try {
+      const record: Kept = { path: url.pathname, headers: keptHeaders, body_b64: b64(body), kept_at: now.toISOString() };
+      await env.INBOUND_SPOOL.put(spoolKey, JSON.stringify(record));
+      kept = true;
+    } catch (e) {
+      alarm("confirmations.inbound_spool_unwritable", `a fallback post could not be kept (${(e as Error).name})`);
+    }
+  }
+  let res: Response | null = null;
+  try {
+    res = await deps.fetch(clean(env.ORIGIN_URL) + url.pathname, { method: "POST", headers: towardVault(new Headers(keptHeaders), env), body });
+  } catch {
+    res = null;
+  }
+  if (res && finalAnswer(res.status)) {
+    if (kept) await env.INBOUND_SPOOL!.delete(spoolKey);
+    return new Response(res.body, { status: res.status, headers: scrub(res.headers) });
+  }
+  if (res) await res.body?.cancel();
+  if (kept) {
+    alarm("confirmations.inbound_spooled", "the vault did not take a fallback post; it is kept at the edge and delivered by the drain");
+    return new Response(JSON.stringify({ received: true, kept: true }), { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+  }
+  return err(503, "store_unavailable", "the post could be neither kept nor delivered; nothing was recorded");
+}
+
+/** The cron's drain: every kept post goes to the vault's fallback door again, oldest first, and is removed on a final answer. */
+export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps): Promise<{ delivered: number; kept: number }> {
+  const alarm = alarmOf(deps);
+  if (!env.INBOUND_SPOOL) {
+    alarm("confirmations.inbound_spool_unbound", "the INBOUND_SPOOL binding is not set; nothing to drain");
+    return { delivered: 0, kept: 0 };
+  }
+  let delivered = 0;
+  let kept = 0;
+  const { keys } = await env.INBOUND_SPOOL.list({ prefix: SPOOL_PREFIX });
+  for (const { name } of keys) {
+    const raw = await env.INBOUND_SPOOL.get(name);
+    if (raw === null) continue; // already delivered by another run
+    let rec: Kept;
+    try {
+      rec = JSON.parse(raw) as Kept;
+    } catch {
+      alarm("confirmations.inbound_spool_unreadable", `a kept post ${name} is not readable; it is left for a person`);
+      kept++;
+      continue;
+    }
+    let status = 0;
+    try {
+      const res = await deps.fetch(clean(env.ORIGIN_URL) + rec.path, { method: "POST", headers: towardVault(new Headers(rec.headers), env), body: unb64(rec.body_b64) });
+      status = res.status;
+      await res.body?.cancel();
+    } catch {
+      status = 0;
+    }
+    if (status && finalAnswer(status)) {
+      await env.INBOUND_SPOOL.delete(name);
+      delivered++;
+    } else {
+      kept++;
+    }
+  }
+  if (kept) alarm("confirmations.inbound_spool_waiting", `${kept} kept inbound post(s) still wait for the vault`);
+  return { delivered, kept };
+}
+
+async function pageDoor(request: Request, url: URL, env: GatewayEnv, deps: GatewayDeps, key: string): Promise<Response> {
+  if (!env.PAGE_LIMITER) {
+    alarmOf(deps)("confirmations.page_rate_limit_unbound", "the PAGE_LIMITER binding is not set; the pages are not rate limited");
+  } else if (!(await env.PAGE_LIMITER.limit({ key })).success) {
+    return tooMany();
+  }
+  const body = await readCapped(request, PAGE_MAX_BODY);
+  const headers = towardVault(request.headers, env);
+  headers.set(LINK_HOST_HEADER, url.hostname.toLowerCase());
   let res: Response;
   try {
     res = await deps.fetch(clean(env.ORIGIN_URL) + url.pathname + url.search, { method: request.method, headers, body });
@@ -255,11 +409,16 @@ export async function handleGateway(request: Request, env: GatewayEnv, deps: Gat
       if (!env[k]) throw new Refusal(500, "misconfigured", `gateway setting ${k} is not set`);
     }
     const inbound = INBOUND_RE.exec(url.pathname);
-    if (inbound && request.method === "POST") return await confirmationDoor(request, url, env, deps, "inbound", `inbound:${inbound[1]}`);
+    if (inbound && request.method === "POST") return await inboundDoor(request, url, env, deps, inbound[1]);
+    if (FALLBACK_RE.test(url.pathname) && request.method === "POST") return await fallbackDoor(request, url, env, deps);
     const page = PAGE_RE.exec(url.pathname);
-    if (page) {
-      if (!(request.method === "GET" || (request.method === "POST" && page[1] === "stop"))) throw new Refusal(405, "method_not_allowed", "method not allowed");
-      return await confirmationDoor(request, url, env, deps, "page", `page:${request.headers.get("cf-connecting-ip") || "unknown"}`);
+    if (page || url.pathname === PROBE_PATH) {
+      const allowed = request.method === "GET" || (request.method === "POST" && page?.[1] === "stop");
+      if (!allowed) throw new Refusal(405, "method_not_allowed", "method not allowed");
+      // A stop posted to the stop page (the email's one-click unsubscribe, sent by the mail provider's servers) is counted per
+      // token, never per client address: many people's stops can come from one address.
+      const key = request.method === "POST" ? `stop:${page![2]}` : `page:${request.headers.get("cf-connecting-ip") || "unknown"}`;
+      return await pageDoor(request, url, env, deps, key);
     }
     if (!url.pathname.startsWith("/v1/")) throw new Refusal(404, "not_found", "no such route");
     if (!ALLOWED_METHODS.includes(request.method)) throw new Refusal(405, "method_not_allowed", "method not allowed");
@@ -368,5 +527,9 @@ export async function handleGateway(request: Request, env: GatewayEnv, deps: Gat
 export default {
   async fetch(request: Request, env: GatewayEnv): Promise<Response> {
     return handleGateway(request, env, { fetch: (...a) => fetch(...a) });
+  },
+  // Every minute (wrangler [triggers] crons): deliver what the fallback door kept while the vault was away.
+  async scheduled(_event: unknown, env: GatewayEnv): Promise<void> {
+    await drainInboundSpool(env, { fetch: (...a) => fetch(...a) });
   },
 };

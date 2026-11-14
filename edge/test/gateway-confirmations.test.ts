@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handleGateway, LINK_HOST_HEADER, type GatewayEnv, type GatewayDeps, type RateLimiter } from "../src/gateway.ts";
+import { drainInboundSpool, handleGateway, LINK_HOST_HEADER, type GatewayEnv, type GatewayDeps, type RateLimiter, type SpoolKV } from "../src/gateway.ts";
 
 // The confirmation service's two public doors (marketing/specs/confirmations-go-live):
 //  - the text provider's inbound posts, POST /v1/confirmations/inbound/<key>: admitted with no bearer (Twilio sends none; the
@@ -74,13 +74,21 @@ test("only POST to the exact inbound path skips the bearer check", async () => {
   }
 });
 
-test("the inbound door is limited per inbound key and an over-limit post never reaches the vault", async () => {
+test("the inbound door is never refused: over the limit it still forwards and raises a named alarm", async () => {
   const limiter = new Limiter(false);
-  const { d, calls, env } = mk({ INBOUND_LIMITER: limiter });
+  const { d, calls, alarms, env } = mk({ INBOUND_LIMITER: limiter });
   const res = await handleGateway(at("api.consentvault.ai", PATH, { method: "POST", headers: TWILIO, body: RAW }), env, d);
-  assert.equal(res.status, 429);
-  assert.equal(calls.length, 0);
-  assert.deepEqual(limiter.keys, [`inbound:${KEY}`]);
+  assert.equal(res.status, 200);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(alarms, ["confirmations.inbound_rate_limited"]);
+});
+
+test("delivery reports and replies are counted under separate keys, so a send burst cannot use up the replies' allowance", async () => {
+  const limiter = new Limiter(true);
+  const { d, env } = mk({ INBOUND_LIMITER: limiter });
+  await handleGateway(at("api.consentvault.ai", PATH, { method: "POST", headers: TWILIO, body: "MessageSid=SM2&MessageStatus=delivered&To=%2B1555" }), env, d);
+  await handleGateway(at("api.consentvault.ai", PATH, { method: "POST", headers: TWILIO, body: RAW }), env, d);
+  assert.deepEqual(limiter.keys, [`inbound:${KEY}:report`, `inbound:${KEY}:reply`]);
 });
 
 test("without the rate-limit binding the post still goes through and a named alarm is raised", async () => {
@@ -135,13 +143,101 @@ test("a page path that is not a token path is not forwarded", async () => {
   }
 });
 
-test("pages are limited per client address", async () => {
+test("the wording page and the stop form are limited per client address", async () => {
   const limiter = new Limiter(false);
   const { d, calls, env } = mk({ PAGE_LIMITER: limiter });
   const res = await handleGateway(at("consent.acme.example", "/c/stop/tok_abc-12345", { headers: { "cf-connecting-ip": "203.0.113.9" } }), env, d);
   assert.equal(res.status, 429);
   assert.equal(calls.length, 0);
   assert.deepEqual(limiter.keys, ["page:203.0.113.9"]);
+});
+
+test("a stop posted to the stop page (the email's one-click unsubscribe) is limited per token, never per client address", async () => {
+  const limiter = new Limiter(true);
+  const { d, calls, env } = mk({ PAGE_LIMITER: limiter });
+  await handleGateway(at("consent.acme.example", "/c/stop/tok_abc-12345", { method: "POST", body: "List-Unsubscribe=One-Click", headers: { "cf-connecting-ip": "203.0.113.9" } }), env, d);
+  assert.deepEqual(limiter.keys, ["stop:tok_abc-12345"]);
+  assert.equal(calls.length, 1);
+});
+
+test("the link-host probe is forwarded with the link host", async () => {
+  const { d, calls, env } = mk();
+  const res = await handleGateway(at("consent.acme.example", "/c/ping"), env, d);
+  assert.equal(res.status, 200);
+  assert.equal((calls[0].init.headers as Headers).get(LINK_HOST_HEADER), "consent.acme.example");
+});
+
+// ---- the fallback door: spooled at the edge before the vault is asked -------------------------------------------------------
+class Spool implements SpoolKV {
+  data = new Map<string, string>();
+  failPut = false;
+  async get(k: string) { return this.data.get(k) ?? null; }
+  async put(k: string, v: string) { if (this.failPut) throw new Error("kv down"); this.data.set(k, v); }
+  async delete(k: string) { this.data.delete(k); }
+  async list(o: { prefix: string }) { return { keys: [...this.data.keys()].filter((k) => k.startsWith(o.prefix)).sort().map((name) => ({ name })) }; }
+}
+const FPATH = `/v1/confirmations/inbound-fallback/${KEY}`;
+
+function down(calls: { url: string; init: RequestInit }[] = []): typeof fetch {
+  return (async (url: string, init: RequestInit) => { calls.push({ url: String(url), init }); throw new TypeError("network"); }) as unknown as typeof fetch;
+}
+
+test("a fallback post while the vault is down is kept at the edge and Twilio is told it was received", async () => {
+  const spool = new Spool();
+  const { env, alarms } = mk({ INBOUND_SPOOL: spool });
+  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: (n) => alarms.push(n) });
+  assert.equal(res.status, 200);
+  assert.equal(spool.data.size, 1);
+  const kept = JSON.parse([...spool.data.values()][0]);
+  assert.equal(kept.path, FPATH);
+  assert.equal(atob(kept.body_b64), RAW);
+  assert.equal(kept.headers["x-twilio-signature"], TWILIO["x-twilio-signature"]);
+  assert.deepEqual(alarms, ["confirmations.inbound_spooled"]);
+});
+
+test("a fallback post the vault answers at once is not left in the spool", async () => {
+  const spool = new Spool();
+  const { d, calls, env } = mk({ INBOUND_SPOOL: spool });
+  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, d);
+  assert.equal(res.status, 200);
+  assert.equal(calls[0].url, "https://origin.example.com" + FPATH);
+  assert.equal(spool.data.size, 0);
+});
+
+test("a fallback post that can be neither kept nor delivered answers 503 and alarms", async () => {
+  const spool = new Spool();
+  spool.failPut = true;
+  const { env, alarms } = mk({ INBOUND_SPOOL: spool });
+  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: (n) => alarms.push(n) });
+  assert.equal(res.status, 503);
+  assert.ok(alarms.includes("confirmations.inbound_spool_unwritable"));
+});
+
+test("the drain delivers each kept post to the vault's fallback door byte for byte and keeps it while the vault is down", async () => {
+  const spool = new Spool();
+  const { env } = mk({ INBOUND_SPOOL: spool });
+  await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {} });
+  const left = await drainInboundSpool(env, { fetch: down(), alarm: () => {} });
+  assert.equal(left.kept, 1);
+  assert.equal(spool.data.size, 1);
+  const calls: { url: string; init: RequestInit }[] = [];
+  const up = (async (url: string, init: RequestInit) => { calls.push({ url: String(url), init }); return new Response("{}", { status: 401 }); }) as unknown as typeof fetch;
+  const done = await drainInboundSpool(env, { fetch: up, alarm: () => {} });
+  assert.deepEqual(done, { delivered: 1, kept: 0 });
+  assert.equal(spool.data.size, 0, "a final answer (even a refusal) ends the post; the vault counted it");
+  assert.equal(calls[0].url, "https://origin.example.com" + FPATH);
+  assert.equal(new TextDecoder().decode(calls[0].init.body as ArrayBuffer), RAW);
+  const h = calls[0].init.headers as Headers;
+  assert.equal(h.get("x-twilio-signature"), TWILIO["x-twilio-signature"]);
+  assert.equal(h.get("cf-access-client-id"), "cid");
+});
+
+test("without the spool binding the fallback post is forwarded and a named alarm raised", async () => {
+  const { d, calls, alarms, env } = mk({ INBOUND_SPOOL: undefined });
+  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, d);
+  assert.equal(res.status, 200);
+  assert.equal(calls.length, 1);
+  assert.ok(alarms.includes("confirmations.inbound_spool_unbound"));
 });
 
 test("a client copy of the link-host header never reaches the vault on any other route", async () => {

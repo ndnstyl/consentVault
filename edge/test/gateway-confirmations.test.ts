@@ -305,3 +305,43 @@ test("the drain reads one marker and lists nothing while the spool is empty (the
   await drainInboundSpool(env, { fetch: down(), alarm: () => {} });
   assert.equal(lists, 0);
 });
+
+test("a post kept between the drain's listing and its flag check is still drained on the next run", async () => {
+  const spool = new Spool();
+  const { env } = mk({ INBOUND_SPOOL: spool });
+  let t = Date.parse("2026-11-14T12:00:00Z");
+  const clock = () => t;
+  // something was kept long ago and has been delivered, so the flag is old and the spool empty
+  spool.data.set("meta:pending", new Date(t - 3_600_000).toISOString());
+  const origList = spool.list.bind(spool);
+  let lists = 0;
+  spool.list = async (o) => {
+    const out = await origList(o);
+    lists++;
+    if (lists === 1) {
+      // a fallback post arrives right after the drain's first listing read empty
+      await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {}, now: clock });
+    }
+    return out;
+  };
+  await drainInboundSpool(env, { fetch: down(), alarm: () => {}, now: clock, sleep: async () => {} });
+  assert.notEqual(spool.data.get("meta:pending"), undefined, "the flag must survive: a post was kept during the drain");
+  spool.list = origList;
+  t += 60_000;
+  const calls: { url: string }[] = [];
+  const up = (async (url: string) => { calls.push({ url: String(url) }); return new Response("{}", { status: 200 }); }) as unknown as typeof fetch;
+  const next = await drainInboundSpool(env, { fetch: up, alarm: () => {}, now: clock, sleep: async () => {} });
+  assert.equal(next.delivered, 1);
+});
+
+test("the flag is removed only after two empty listings and once it is older than the settle time", async () => {
+  const spool = new Spool();
+  const { env } = mk({ INBOUND_SPOOL: spool });
+  const t = Date.parse("2026-11-14T12:00:00Z");
+  spool.data.set("meta:pending", new Date(t - 30_000).toISOString());
+  await drainInboundSpool(env, { fetch: down(), alarm: () => {}, now: () => t, sleep: async () => {} });
+  assert.notEqual(spool.data.get("meta:pending"), undefined, "a young flag stays (KV listings can lag a fresh write)");
+  spool.data.set("meta:pending", new Date(t - 600_000).toISOString());
+  await drainInboundSpool(env, { fetch: down(), alarm: () => {}, now: () => t, sleep: async () => {} });
+  assert.equal(spool.data.get("meta:pending"), undefined);
+});

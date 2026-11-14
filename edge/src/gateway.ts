@@ -55,6 +55,7 @@ export interface GatewayDeps {
   // route a verdict blocks. Undefined allows.
   waf?: (request: Request) => Promise<{ status: number; code: string; message: string } | undefined>;
   alarm?: (name: string, detail: string) => void;
+  sleep?: (ms: number) => Promise<void>; // the drain's pause between its two empty listings (tests pass one that returns at once)
 }
 
 const DEFAULT_MAX_BODY = 256 * 1024;
@@ -88,6 +89,10 @@ const SPOOL_MARKER = "meta:pending";
 // (inbound key) and in all; past a cap a post is only forwarded. KV list returns at most 1000 keys per call.
 export const SPOOL_PER_KEY = 200;
 export const SPOOL_TOTAL = 1000;
+// The flag is removed only when two listings a moment apart both read empty AND it was last set longer ago than this: KV
+// listings can lag a fresh write by up to a minute, and a post can be kept while the drain runs.
+const FLAG_SETTLE_MS = 5 * 60_000;
+const SECOND_LISTING_DELAY_MS = 2_000;
 const FALLBACK_MAX_BODY = 16 * 1024; // the vault refuses more (confirm/inbound.py MAX_BODY_BYTES), so the edge keeps no more
 // The provider headers a kept post carries back to the vault (the signature over the address and the body is the credential).
 const SPOOL_HEADERS = ["content-type", "x-twilio-signature", "i-twilio-idempotency-token", "user-agent"];
@@ -398,7 +403,17 @@ export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps): Pro
   }
   if (refused) alarm("confirmations.inbound_spool_refused", `${refused} kept inbound post(s) were answered with a refusal by the vault; kept for a person`);
   if (kept > refused) alarm("confirmations.inbound_spool_waiting", `${kept - refused} kept inbound post(s) still wait for the vault`);
-  if (kept === 0) await env.INBOUND_SPOOL.delete(SPOOL_MARKER);
+  if (kept === 0) {
+    const flag = await env.INBOUND_SPOOL.get(SPOOL_MARKER);
+    const age = flag === null ? Infinity : (deps.now ?? Date.now)() - Date.parse(flag);
+    if (flag !== null && age > FLAG_SETTLE_MS) {
+      await (deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms))))(SECOND_LISTING_DELAY_MS);
+      const again = await env.INBOUND_SPOOL.list({ prefix: SPOOL_PREFIX, limit: 1 });
+      const still = await env.INBOUND_SPOOL.get(SPOOL_MARKER);
+      // A post kept meanwhile re-sets the flag (a newer time) or shows in the listing: the flag then stays for the next run.
+      if (again.keys.length === 0 && still === flag) await env.INBOUND_SPOOL.delete(SPOOL_MARKER);
+    }
+  }
   return { delivered, kept };
 }
 

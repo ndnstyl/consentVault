@@ -5,7 +5,7 @@ import json, os, threading, time, urllib.request, uuid
 import psycopg
 import pytest
 
-from consentvault import door
+from consentvault import api, door
 from .cloud_harness import Cloud, facts_of, raw_posts
 
 X = "+15555550177"
@@ -64,8 +64,10 @@ def test_a_crash_after_the_answer_leaves_no_event_and_a_stop_is_not_lifted_by_a_
     cloud.server.drain(30)
     assert _events(cloud, "grant") == base  # the post is stored, the crash left no event
     monkeypatch.setattr(door.TenantBackend, "apply", real)
-    cloud.call("/v1/events", _grant_body(cloud, nonce), token=tok, headers=h)  # the resend records the grant, once
+    cloud.call("/v1/events", _grant_body(cloud, nonce), token=tok, headers=h)  # the resend is stored and waits behind the faulted post
     cloud.server.drain(30)
+    assert _events(cloud, "grant") == base  # the live path tries a faulted post at most once a minute (one-door round 4)
+    api.rebuild_cloud(cloud.settings, [cloud.a.org.org_id])  # the rebuild tries it every run: the earlier copy records the grant, once
     assert _events(cloud, "grant") == base + 1
     assert _stop(cloud)[0] == 201
     assert len(_open_stops(cloud)) == 1

@@ -168,7 +168,8 @@ test("an /auth/ request while parked reaches the sign-in code instead of the sta
   assert.equal(wakes(m.calls), 0);
 });
 
-const subjectHash = (sub: string) => crypto.createHash("sha256").update(sub).digest("hex");
+const subjectHash = (sub: string) => crypto.createHmac("sha256", AUTH_ENV_BASE.AUTH_CLIENT_SECRET).update("cv-known-member-v1:" + sub).digest("hex");
+const bareHash = (sub: string) => crypto.createHash("sha256").update(sub).digest("hex");
 async function known(m: { kv: ReturnType<typeof memKV> }, sub: string) { await m.kv.put("cv:member:" + subjectHash(sub), "1", { expirationTtl: 400 * 86400 }); }
 
 async function signIn(m: ReturnType<typeof mk>, o: { idp?: "ok" | "refused" | "down"; sub?: string | null; vaultSession?: "ok" | "origin" | "502" } = {}) {
@@ -281,6 +282,36 @@ test("a token with no subject never wakes the vault", async () => {
   const res = await signIn(m, { sub: null });
   assert.equal(wakes(m.calls), 0);
   assert.notEqual(res.status, 200);
+});
+
+const memberRec = (sub: string): SessionRecord => ({ ...REC, token: jwt({ sub, sid: "p", exp: nowSec() + 300 }) });
+
+test("a request that carries a live session records the member mark, keyed, once a day", async () => {
+  const m = mk({ origin: "up" });
+  await saveSession(m.kv, SID, memberRec("user_live"), NOW_MS);
+  await handlePortal(nav("/brands"), m.env, m.deps);
+  const key = "cv:member:" + subjectHash("user_live");
+  assert.ok(await m.kv.get(key), "the mark is written");
+  assert.ok((m.kv.ttl.get(key) ?? 0) >= 399 * 86400);
+  assert.equal(await m.kv.get("cv:member:" + bareHash("user_live")), null, "the stored key is not the bare SHA-256 of the subject");
+  assert.ok(![...m.kv.data.keys()].some((k) => k.includes(bareHash("user_live"))));
+  let puts = 0; const put = m.kv.put.bind(m.kv); m.kv.put = async (k, v, o) => { if (k.startsWith("cv:member:")) puts++; return put(k, v, o); };
+  await handlePortal(nav("/brands"), m.env, m.deps);
+  await handlePortal(api("/v1/session"), m.env, m.deps);
+  assert.equal(puts, 0, "checked before put, so no second write the same day");
+});
+
+test("a member whose session was live after deploy signs in after it expires, while parked, and gets exactly one wake", async () => {
+  const m = mk({ origin: "down-530" });
+  await saveSession(m.kv, SID, memberRec("user_1"), NOW_MS);
+  await handlePortal(api("/v1/session"), m.env, m.deps);
+  await m.kv.delete("cv:wake:requested");
+  m.calls.length = 0;
+  await m.kv.delete("sess:" + crypto.createHash("sha256").update(SID).digest("hex"));
+  const res = await signIn(m, { sub: "user_1" });
+  assert.equal(res.status, 503);
+  assert.match(await res.text(), /ConsentVault is starting/);
+  assert.equal(wakes(m.calls), 1);
 });
 
 test("an expired session does not wake the vault", async () => {

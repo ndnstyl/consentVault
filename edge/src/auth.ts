@@ -83,10 +83,33 @@ export const VAULT_UNREACHABLE_HEADER = "x-cv-vault-unreachable";
 export const MEMBER_KEY = "cv:member:";
 export const MEMBER_SECONDS = 400 * 86400;
 export const SUBJECT_HASH_HEADER = "x-cv-subject-hash";
-async function vaultUnreachable(res: Response, sub: string | undefined, down: boolean): Promise<Response> {
+// The known-member mark and the per-person wake count are keyed by HMAC-SHA256 of the subject under the Worker's own client
+// secret with a fixed domain label, never a bare hash. No secret means no mark and no wake (named in the log).
+export async function memberHash(env: { AUTH_CLIENT_SECRET?: string }, sub: string): Promise<string | null> {
+  if (!env.AUTH_CLIENT_SECRET) return null;
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.AUTH_CLIENT_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const d = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode("cv-known-member-v1:" + sub)));
+  return [...d].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Record that this person holds (or held) a session. Checked before put, at most one write per person per day.
+export async function recordMember(env: { AUTH_CLIENT_SECRET?: string; SESSIONS: KV }, sub: string, nowMs: number): Promise<void> {
+  try {
+    const h = await memberHash(env, sub);
+    if (!h) { console.error("consentvault portal MEMBER_NOT_RECORDED: AUTH_CLIENT_SECRET is not set, so no known-member mark can be keyed"); return; }
+    const seen = `${MEMBER_KEY}seen:${h}:${new Date(nowMs).toISOString().slice(0, 10)}`;
+    if (await env.SESSIONS.get(seen)) return;
+    await env.SESSIONS.put(MEMBER_KEY + h, "1", { expirationTtl: MEMBER_SECONDS });
+    await env.SESSIONS.put(seen, "1", { expirationTtl: 2 * 86400 });
+  } catch (e) { console.error(`consentvault portal MEMBER_UNWRITABLE: ${(e as Error).name}; this person may not be able to ask for a wake at sign-in`); }
+}
+
+async function vaultUnreachable(res: Response, sub: string | undefined, down: boolean, env: { AUTH_CLIENT_SECRET?: string }): Promise<Response> {
   if (!down || !sub) return res; // no subject, no wake: nobody to count it against
+  const h = await memberHash(env, sub);
+  if (!h) { console.error("consentvault portal MEMBER_NOT_KEYED: AUTH_CLIENT_SECRET is not set, so a sign-in cannot ask for a wake"); return res; }
   res.headers.set(VAULT_UNREACHABLE_HEADER, "1");
-  res.headers.set(SUBJECT_HASH_HEADER, await sha256Hex(sub));
+  res.headers.set(SUBJECT_HASH_HEADER, h);
   return res;
 }
 async function callback(request: Request, env: AuthEnv, deps: AuthDeps): Promise<Response | null> {
@@ -148,11 +171,11 @@ async function callback(request: Request, env: AuthEnv, deps: AuthDeps): Promise
     check = await deps.vault("/v1/session?limit=1", token, assertion ? { [ASSERTION_HEADER]: assertion } : undefined);
   } catch (e) {
     if (e instanceof MisconfiguredError) return page(500, "Sign-in is not configured", e.message, [spent]);
-    return vaultUnreachable(page(502, "Sign-in is unavailable", "The service could not be reached.", [spent]), claims.sub, vaultCalled);
+    return vaultUnreachable(page(502, "Sign-in is unavailable", "The service could not be reached.", [spent]), claims.sub, vaultCalled, env);
   }
   // A missing second factor still gets a session: the portal's callback page explains it and offers a way forward.
   if (!check.ok && !(check.status === 403 && (await check.clone().text()).includes("second_factor_required"))) {
-    return vaultUnreachable(page(check.status === 401 ? 401 : 502, "Sign-in was not accepted", "The service did not accept this sign-in.", [spent]), claims.sub, PARKED_STATUSES.has(check.status));
+    return vaultUnreachable(page(check.status === 401 ? 401 : 502, "Sign-in was not accepted", "The service did not accept this sign-in.", [spent]), claims.sub, PARKED_STATUSES.has(check.status), env);
   }
 
   const sid = randomToken(32);
@@ -166,9 +189,7 @@ async function callback(request: Request, env: AuthEnv, deps: AuthDeps): Promise
     if (e instanceof StoreUnavailable) return unavailable(request, [spent]);
     throw e;
   }
-  if (claims.sub) {
-    try { await env.SESSIONS.put(MEMBER_KEY + (await sha256Hex(claims.sub)), "1", { expirationTtl: MEMBER_SECONDS }); } catch (e) { console.error(`consentvault portal MEMBER_UNWRITABLE: ${(e as Error).name}; this person will not be able to ask for a wake at sign-in`); }
-  }
+  if (claims.sub) await recordMember(env, claims.sub, deps.now());
   return redirect(`/auth/callback?return=${encodeURIComponent(ret)}`, [setCookie(SESSION_COOKIE, sid, SESSION_SECONDS), spent]);
 }
 

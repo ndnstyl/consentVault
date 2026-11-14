@@ -1,10 +1,10 @@
 // Portal Worker: the dashboard's one public door. /auth/* is sign-in (auth.ts), /v1/* is the gateway with session
 // cookies (gateway.ts), everything else is the dashboard's static export.
 
-import { MEMBER_KEY, SUBJECT_HASH_HEADER, VAULT_UNREACHABLE_HEADER, handleAuth } from "./auth.ts";
+import { MEMBER_KEY, SUBJECT_HASH_HEADER, recordMember, VAULT_UNREACHABLE_HEADER, handleAuth } from "./auth.ts";
 import { PARKED_STATUSES } from "./parked.ts";
 import { handleGateway, vaultCaller, type GatewayDeps, type GatewayEnv } from "./gateway.ts";
-import { cookieValue, SESSION_COOKIE, type KV } from "./session.ts";
+import { cookieValue, SESSION_COOKIE, tokenClaims, type KV } from "./session.ts";
 import { sessionStoreFor } from "./session-store.ts";
 import { callWake, type WakeEnv } from "./wake.ts";
 
@@ -161,12 +161,26 @@ async function afterCallback(res: Response, env: PortalEnv, deps: GatewayDeps, n
     { status: 503, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
 
+// A request that carries a live session records its person as a known member (so they can ask for a wake at sign-in after
+// the session expires). Never blocks or fails the request.
+async function noteLiveMember(request: Request, env: PortalEnv, deps: GatewayDeps, nowMs: number): Promise<void> {
+  try {
+    const sid = cookieValue(request.headers.get("cookie"), SESSION_COOKIE);
+    if (!sid) return;
+    const rec = await sessionStoreFor({ SESSIONS: env.SESSIONS, SESSION_GATE: env.SESSION_GATE, AUTH_BASE_URL: env.AUTH_BASE_URL!, AUTH_CLIENT_ID: env.AUTH_CLIENT_ID!, AUTH_CLIENT_SECRET: env.AUTH_CLIENT_SECRET }, deps.fetch).load(sid, nowMs);
+    if (!rec || rec.until * 1000 <= nowMs) return;
+    const sub = tokenClaims(rec.token)?.sub;
+    if (sub) await recordMember(env, sub, nowMs);
+  } catch (e) { console.error(`consentvault portal MEMBER_NOTE_FAILED: ${(e as Error).name}`); }
+}
+
 export async function handlePortal(request: Request, env: PortalEnv, deps: GatewayDeps): Promise<Response> {
   const path = new URL(request.url).pathname;
   const now = deps.now ?? Date.now;
   const accept = request.headers.get("accept") ?? "";
   const navigation = request.method === "GET" && accept.includes("text/html");
   const asksJson = path.startsWith("/v1/") && accept.includes("application/json");
+  if (navigation || path.startsWith("/v1/")) await noteLiveMember(request, env, deps, now());
   if (path.startsWith("/auth/")) {
     // Sign-in is never behind the parked check: it is how a signed-out person gets the right to wake the vault.
     const res = await handleAuth(request, env, { fetch: deps.fetch, now, vault: vaultCaller(env, deps) });

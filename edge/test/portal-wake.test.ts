@@ -168,8 +168,11 @@ test("an /auth/ request while parked reaches the sign-in code instead of the sta
   assert.equal(wakes(m.calls), 0);
 });
 
-async function signIn(m: ReturnType<typeof mk>, o: { idp?: "ok" | "refused" | "down"; sub?: string; vaultSession?: "ok" | "origin" } = {}) {
-  const idt = jwt({ sub: o.sub ?? "user_1", sid: "provider_sess_1", exp: nowSec() + 300 });
+const subjectHash = (sub: string) => crypto.createHash("sha256").update(sub).digest("hex");
+async function known(m: { kv: ReturnType<typeof memKV> }, sub: string) { await m.kv.put("cv:member:" + subjectHash(sub), "1", { expirationTtl: 400 * 86400 }); }
+
+async function signIn(m: ReturnType<typeof mk>, o: { idp?: "ok" | "refused" | "down"; sub?: string | null; vaultSession?: "ok" | "origin" | "502" } = {}) {
+  const idt = jwt({ ...(o.sub === null ? {} : { sub: o.sub ?? "user_1" }), sid: "provider_sess_1", exp: nowSec() + 300 });
   const inner = m.deps.fetch;
   m.deps.fetch = (async (u: string, init?: RequestInit) => {
     const url = String(u);
@@ -179,6 +182,7 @@ async function signIn(m: ReturnType<typeof mk>, o: { idp?: "ok" | "refused" | "d
       return new Response(JSON.stringify({ id_token: idt, access_token: "a", refresh_token: "r" }), { status: 200 });
     }
     if (o.vaultSession === "ok" && new URL(url).pathname === "/v1/session") { m.calls.push("origin /v1/session"); return new Response(JSON.stringify({ items: [] }), { status: 200 }); }
+    if (o.vaultSession === "502" && new URL(url).pathname === "/v1/session") { m.calls.push("origin /v1/session"); return new Response('{"error":"its own"}', { status: 502 }); }
     return inner(u as never, init as never);
   }) as unknown as typeof fetch;
   const start = await handlePortal(nav("/auth/login?return=%2Fbrands", {}), m.env, m.deps);
@@ -199,6 +203,7 @@ test("a completed sign-in with the vault up creates the session, asks for no wak
 
 test("a sign-in the parked vault kept from finishing says so, asks for one wake, and leaks no internal header", async () => {
   const m = mk({ origin: "down-530" });
+  await known(m, "user_1");
   const res = await signIn(m);
   assert.equal(res.status, 503);
   assert.equal(cookieNamed(res, SESSION_COOKIE), undefined);
@@ -227,11 +232,55 @@ test("an unreachable identity provider never wakes the vault", async () => {
 
 test("one identity-provider subject can ask for at most 2 wakes a day, so one person cannot use up the shared cap", async () => {
   const m = mk({ origin: "down-530" });
+  await known(m, "user_stranger"); await known(m, "user_other");
   for (let i = 0; i < 4; i++) { await m.kv.delete("cv:wake:requested"); await signIn(m, { sub: "user_stranger" }); }
   assert.equal(wakes(m.calls), 2);
   await m.kv.delete("cv:wake:requested");
   await signIn(m, { sub: "user_other" });
   assert.equal(wakes(m.calls), 3, "a different person still has their own allowance");
+});
+
+test("a created session records its identity as a known member", async () => {
+  const m = mk({ origin: "up" });
+  await signIn(m, { vaultSession: "ok", sub: "user_member" });
+  assert.ok(await m.kv.get("cv:member:" + subjectHash("user_member")));
+  assert.ok((m.kv.ttl.get("cv:member:" + subjectHash("user_member")) ?? 0) >= 399 * 86400);
+});
+
+test("25 unknown identities cause 0 wakes and get the honest could-not-finish page; a known one still wakes", async () => {
+  const m = mk({ origin: "down-530" });
+  let page = "";
+  for (let i = 0; i < 25; i++) { const r = await signIn(m, { sub: "stranger_" + i }); assert.equal(r.status, 503); page = await r.text(); }
+  assert.equal(wakes(m.calls), 0);
+  assert.match(page, /could not be finished/);
+  assert.match(page, /two minutes/);
+  assert.doesNotMatch(page, /ConsentVault is starting/);
+  await known(m, "user_member");
+  await signIn(m, { sub: "user_member" });
+  assert.equal(wakes(m.calls), 1);
+});
+
+test("a running vault answering its own 502 during sign-in does not wake it", async () => {
+  const m = mk({ origin: "up" });
+  await known(m, "user_1");
+  const res = await signIn(m, { vaultSession: "502" });
+  assert.equal(wakes(m.calls), 0);
+  assert.equal(res.status, 502);
+});
+
+test("two failed wakes do not use up the person's allowance", async () => {
+  const m = mk({ origin: "down-530", wake: "fail" });
+  await known(m, "user_1");
+  const orig = console.error; console.error = () => {};
+  try { for (let i = 0; i < 4; i++) { await m.kv.delete("cv:wake:requested"); await signIn(m); } } finally { console.error = orig; }
+  assert.equal(wakes(m.calls), 4);
+});
+
+test("a token with no subject never wakes the vault", async () => {
+  const m = mk({ origin: "down-530" });
+  const res = await signIn(m, { sub: null });
+  assert.equal(wakes(m.calls), 0);
+  assert.notEqual(res.status, 200);
 });
 
 test("an expired session does not wake the vault", async () => {

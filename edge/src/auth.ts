@@ -4,6 +4,7 @@
 // cookie. Contract: contracts/session.md, "Sign-in, sign-out and callback are edge routes".
 
 import { ASSERTION_HEADER, MisconfiguredError, amrFromExchange, assertionConfigError, signAssertion, ssoFromExchange, whoFromExchange, type ExchangeAnswer } from "./assertion.ts";
+import { PARKED_STATUSES } from "./parked.ts";
 import { StoreUnavailable, sessionStoreFor, type GateNamespace } from "./session-store.ts";
 import {
   LOGIN_COOKIE, LOGIN_SECONDS, SESSION_COOKIE, SESSION_SECONDS, b64url, clearCookie, cookieValue, loginKey,
@@ -78,12 +79,14 @@ async function login(request: Request, env: AuthEnv, deps: AuthDeps): Promise<Re
 // Internal marks on a callback answer, read and stripped by the portal before the response leaves the Worker: the vault itself
 // was unreachable (the only failure that may ask for a wake), and the hash of the identity provider's subject for a per-person cap.
 export const VAULT_UNREACHABLE_HEADER = "x-cv-vault-unreachable";
+// A person who has held a ConsentVault session before is a known member; only a known member's sign-in may ask for a wake.
+export const MEMBER_KEY = "cv:member:";
+export const MEMBER_SECONDS = 400 * 86400;
 export const SUBJECT_HASH_HEADER = "x-cv-subject-hash";
-const VAULT_DOWN_STATUSES = new Set([502, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]);
 async function vaultUnreachable(res: Response, sub: string | undefined, down: boolean): Promise<Response> {
-  if (!down) return res;
+  if (!down || !sub) return res; // no subject, no wake: nobody to count it against
   res.headers.set(VAULT_UNREACHABLE_HEADER, "1");
-  if (sub) res.headers.set(SUBJECT_HASH_HEADER, await sha256Hex(sub));
+  res.headers.set(SUBJECT_HASH_HEADER, await sha256Hex(sub));
   return res;
 }
 async function callback(request: Request, env: AuthEnv, deps: AuthDeps): Promise<Response | null> {
@@ -149,7 +152,7 @@ async function callback(request: Request, env: AuthEnv, deps: AuthDeps): Promise
   }
   // A missing second factor still gets a session: the portal's callback page explains it and offers a way forward.
   if (!check.ok && !(check.status === 403 && (await check.clone().text()).includes("second_factor_required"))) {
-    return vaultUnreachable(page(check.status === 401 ? 401 : 502, "Sign-in was not accepted", "The service did not accept this sign-in.", [spent]), claims.sub, VAULT_DOWN_STATUSES.has(check.status));
+    return vaultUnreachable(page(check.status === 401 ? 401 : 502, "Sign-in was not accepted", "The service did not accept this sign-in.", [spent]), claims.sub, PARKED_STATUSES.has(check.status));
   }
 
   const sid = randomToken(32);
@@ -162,6 +165,9 @@ async function callback(request: Request, env: AuthEnv, deps: AuthDeps): Promise
   } catch (e) {
     if (e instanceof StoreUnavailable) return unavailable(request, [spent]);
     throw e;
+  }
+  if (claims.sub) {
+    try { await env.SESSIONS.put(MEMBER_KEY + (await sha256Hex(claims.sub)), "1", { expirationTtl: MEMBER_SECONDS }); } catch (e) { console.error(`consentvault portal MEMBER_UNWRITABLE: ${(e as Error).name}; this person will not be able to ask for a wake at sign-in`); }
   }
   return redirect(`/auth/callback?return=${encodeURIComponent(ret)}`, [setCookie(SESSION_COOKIE, sid, SESSION_SECONDS), spent]);
 }

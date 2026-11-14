@@ -1,7 +1,8 @@
 // Portal Worker: the dashboard's one public door. /auth/* is sign-in (auth.ts), /v1/* is the gateway with session
 // cookies (gateway.ts), everything else is the dashboard's static export.
 
-import { SUBJECT_HASH_HEADER, VAULT_UNREACHABLE_HEADER, handleAuth } from "./auth.ts";
+import { MEMBER_KEY, SUBJECT_HASH_HEADER, VAULT_UNREACHABLE_HEADER, handleAuth } from "./auth.ts";
+import { PARKED_STATUSES } from "./parked.ts";
 import { handleGateway, vaultCaller, type GatewayDeps, type GatewayEnv } from "./gateway.ts";
 import { cookieValue, SESSION_COOKIE, type KV } from "./session.ts";
 import { sessionStoreFor } from "./session-store.ts";
@@ -17,9 +18,7 @@ export interface PortalEnv extends GatewayEnv, WakeEnv {
   ASSETS: { fetch(request: Request): Promise<Response> };
 }
 
-// The vault is parked when nobody has asked for it: the tunnel has no connector (Cloudflare answers 530, or 521 to 524, or 502
-// and 504) or the call never connects. The vault's own 503 (a gate that fails closed) is an answer, not a parked vault.
-const PARKED_STATUSES = new Set([502, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]);
+// The vault is parked when nobody has asked for it: the tunnel has no connector (see parked.ts) or the call never connects.
 export const WAKE_MARKER = "cv:wake:requested";
 export const WAKE_MARKER_SECONDS = 120; // Workers KV accepts no expiry under 60 seconds
 export const UP_CACHE_MS = 60_000;
@@ -123,13 +122,13 @@ async function wakeOnce(env: PortalEnv, deps: GatewayDeps, nowMs: number, subjec
   }
   try {
     await env.SESSIONS.put(day, String(used + 1), { expirationTtl: 2 * 86400 });
-    if (person) await env.SESSIONS.put(person, String(personUsed + 1), { expirationTtl: 2 * 86400 });
   } catch (e) { console.error(`consentvault portal WAKE_COUNTER_UNWRITABLE: ${(e as Error).name}; no wake was asked`); return failed("the daily wake counter could not be written"); }
   const woke = await callWake(env, deps.fetch, nowMs);
   if (!woke.ok) {
     console.error(`consentvault portal WAKE_FAILED: ${woke.reason}`);
     return failed(woke.reason);
   }
+  if (person) { try { await env.SESSIONS.put(person, String(personUsed + 1), { expirationTtl: 2 * 86400 }); } catch (e) { console.error(`consentvault portal WAKE_SUBJECT_COUNTER_UNWRITABLE: ${(e as Error).name}`); } }
   try { await env.SESSIONS.put(WAKE_MARKER, new Date(nowMs).toISOString(), { expirationTtl: WAKE_MARKER_SECONDS }); } catch (e) { console.error(`consentvault portal WAKE_MARKER_UNWRITABLE: ${(e as Error).name}; the next request will ask again`); }
   return { started: true, detail: "" };
 }
@@ -145,11 +144,18 @@ async function afterCallback(res: Response, env: PortalEnv, deps: GatewayDeps, n
   out.headers.delete(SUBJECT_HASH_HEADER);
   if (!vaultDown) return out;
   lastUp.delete(env);
-  const woke = await wakeOnce(env, deps, now(), subject);
-  const message = woke.started
-    ? "Your sign-in could not be finished because ConsentVault was asleep. It is starting now, about two minutes. Then sign in again."
-    : "Your sign-in could not be finished and ConsentVault could not be started. The team has been alerted. Try again in a few minutes.";
-  const title = woke.started ? "ConsentVault is starting" : "ConsentVault could not be started";
+  // The mark came from one answer; confirm with the health check that the vault is parked (a running vault can answer its own 502).
+  if (!(await vaultParked(env, deps, now()))) return out;
+  // Only a person who has held a session before may ask for a wake; anyone else is told honestly and nothing starts.
+  let member = false;
+  try { member = !!subject && !!(await env.SESSIONS.get(MEMBER_KEY + subject)); } catch (e) { console.error(`consentvault portal MEMBER_UNREADABLE: ${(e as Error).name}; no wake was asked`); }
+  const woke = member ? await wakeOnce(env, deps, now(), subject) : { started: false, detail: "not a known member" };
+  const title = !member ? "Sign-in could not be finished" : woke.started ? "ConsentVault is starting" : "ConsentVault could not be started";
+  const message = !member
+    ? "Your sign-in could not be finished. Try again in two minutes."
+    : woke.started
+      ? "Your sign-in could not be finished because ConsentVault was asleep. It is starting now, about two minutes. Then sign in again."
+      : "Your sign-in could not be finished and ConsentVault could not be started. The team has been alerted. Try again in a few minutes.";
   return new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>` +
     `<main style="font-family:system-ui,sans-serif;max-width:32rem;margin:20vh auto;padding:0 1.5rem"><h1>${esc(title)}</h1><p>${esc(message)}</p><p><a href="/auth/login">Sign in again</a></p></main>`,
     { status: 503, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });

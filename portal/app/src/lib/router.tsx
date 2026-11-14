@@ -14,6 +14,7 @@ interface RouterCtx {
   navigate: (to: string, o?: { replace?: boolean }) => void;
 }
 const Ctx = createContext<RouterCtx | null>(null);
+export const RouterContext = Ctx;
 
 export function RouterProvider({ children, initial }: { children: React.ReactNode; initial: string }) {
   const [loc, setLoc] = useState<{ path: string; search: string }>({ path: initial, search: '' });

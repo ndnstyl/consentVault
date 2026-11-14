@@ -54,13 +54,13 @@ export function Systems() {
 const KINDS = [['crm', 'CRM'], ['dialer', 'Dialer'], ['sms', 'Texting'], ['email', 'Email'], ['ai_agent', 'AI agent'], ['webhook', 'Other webhook']].map(([value, label]) => ({ value, label }));
 
 function pushAnswer(name: string, t: TestPush): { ok: boolean; text: string; next?: string } {
-  if (t.result === 'accepted') return { ok: true, text: `Test push accepted: ${t.http_status} in ${t.latency_ms} ms` };
+  if (t.result === 'accepted') return { ok: true, text: `Test push accepted${t.http_status != null ? `: ${t.http_status}` : ''}${t.latency_ms != null ? ` in ${t.latency_ms} ms` : ''}` };
   if (t.result === 'rejected') {
     const c = t.http_status ?? 0;
     const next = c === 401 || c === 403 ? `Load the public key shown below into ${name}, then send another test push.` : c === 404 ? `Check the endpoint address in ${name}, then send another test push.` : c === 410 ? `${name} says this address is gone. Edit the address, then send another test push.` : `Check ${name}'s log for the reason, then send another test push.`;
-    return { ok: false, text: `${name} answered ${c}${t.latency_ms !== null ? ` after ${t.latency_ms} ms` : ''}. It did not accept the push.`, next };
+    return { ok: false, text: `${name} answered ${c}${t.latency_ms != null ? ` after ${t.latency_ms} ms` : ''}. It did not accept the push.`, next };
   }
-  if (t.result === 'server_error') return { ok: false, text: `${name} answered ${t.http_status}. It had an error.`, next: `Fix ${name}, then send another test push.` };
+  if (t.result === 'server_error') return { ok: false, text: `${name} answered${t.http_status != null ? ` ${t.http_status}` : ''}. It had an error.`, next: `Fix ${name}, then send another test push.` };
   if (t.result === 'timeout') return { ok: false, text: `${name} did not answer within 10 seconds.`, next: 'Check that the address is reachable, then send another test push.' };
   return { ok: false, text: `${name} could not be reached.`, next: 'Check the endpoint address, then send another test push.' };
 }
@@ -197,7 +197,7 @@ export function SystemDetail({ id }: { id: string }) {
           ['Signature', isEd25519(s.signature) ? 'Ed25519, key version 1' : 'HMAC shared secret'],
           ['Contact sent as', s.contact_form === 'plaintext' ? 'Plain contact point' : 'Fingerprint only'],
           ['Retry window', `${s.retry_window_hours} hours`],
-          ['Last test push', lt ? <span key="t"><Time iso={lt.at} />: {lt.http_status ?? lt.result}{lt.latency_ms !== null ? ` in ${lt.latency_ms} ms` : ''}</span> : 'None yet'],
+          ['Last test push', lt ? <span key="t"><Time iso={lt.at} />: {lt.http_status ?? lt.result}{lt.latency_ms != null ? ` in ${lt.latency_ms} ms` : ''}</span> : 'None yet'],
           ...(s.public_key ? [['Public key', <span key="k" className="gap-row"><code className="mono wrap-pre">{s.public_key}</code><CopyButton text={s.public_key} ariaLabel="Copy public key" /></span>] as [string, React.ReactNode]] : []),
         ]} />
         {write && <div className="btn-row mt4"><Btn size="sm" busy={patch.busy} busyLabel="Saving" onClick={async () => { const r = await patch.run({ status: s.status === 'active' ? 'paused' : 'active' }); if (r.ok) { res.refresh(); toast(`${s.name} ${s.status === 'active' ? 'paused' : 'resumed'}. Recorded in the audit log.`); } }}>{s.status === 'active' ? 'Pause pushes' : 'Resume pushes'}</Btn></div>}

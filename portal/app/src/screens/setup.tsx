@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ApiError, allPages } from '../lib/api/client.ts';
 import type { SetupAnswer, SetupStep, SetupStepName } from '../lib/api/types.ts';
 import { NA } from '../lib/copy.ts';
-import { fmtDateTime, fmtDate } from '../lib/format.ts';
+import { fmtDateTime, fmtDate, rec } from '../lib/format.ts';
 import { useAction, usePoll, useResource } from '../lib/hooks.ts';
 import { useRouter } from '../lib/router.tsx';
 import { canDo } from '../lib/roles.ts';
@@ -25,6 +25,21 @@ const PARTIAL_CAUSE: Record<SetupStepName, string> = {
 };
 const num = (s: SetupStepName) => ORDER.indexOf(s) + 1;
 const done = (s: SetupStep) => s.status === 'done' || s.status === 'skipped';
+const COUNT_WORD: Record<number, string> = { 5: 'Five', 6: 'Six', 7: 'Seven', 8: 'Eight', 9: 'Nine' };
+const isStep = (n: unknown): n is SetupStepName => typeof n === 'string' && (ORDER as string[]).includes(n);
+/** The step a "needs:<step>" reason points at, when it is one this portal shows. */
+export const neededStep = (reason: string | null): SetupStepName | null => { const n = reason?.startsWith('needs:') ? reason.slice(6) : null; return isStep(n) ? n : null; };
+
+/**
+ * The vault's setup answer, reduced to the steps this portal has a screen for, in the portal's order. The vault may list a step the
+ * portal does not show (it lists a policy step; policies are not in the portal). Counting, "current" and "complete" are then worked out
+ * over what is shown, so a step with no screen never reads as "step 0" or as an undefined name, and never keeps setup from completing.
+ */
+export function portalView(a: SetupAnswer): SetupAnswer {
+  const steps = ORDER.map((name) => a.steps.find((s) => s.step === name)).filter((s): s is SetupStep => !!s);
+  const current = steps.find((s) => !done(s))?.step ?? null;
+  return { steps, current_step: current, complete: steps.filter((s) => s.required).every((s) => s.status === 'done'), partial: a.partial.filter(isStep) };
+}
 
 function list(nums: number[]): string {
   if (nums.length === 1) return String(nums[0]);
@@ -38,9 +53,14 @@ function prefixDone(steps: SetupStep[]): number {
 
 // ---------- 24 Setup walkthrough ----------
 export function Setup() {
-  const { api, role, orgName, user, status } = useSession();
-  const { search, navigate } = useRouter();
+  const { api } = useSession();
   const res = useResource(() => api.setup.get(), [api]);
+  return <SetupView res={res} />;
+}
+
+export function SetupView({ res }: { res: ReturnType<typeof useResource<SetupAnswer>> }) {
+  const { role, orgName, user, status } = useSession();
+  const { search, navigate } = useRouter();
   const paramStep = ORDER.find((s) => s === search.get('step')) ?? null;
   const [selected, setSelected] = useState<SetupStepName | null>(paramStep);
   const [began, setBegan] = useState(false);
@@ -56,7 +76,7 @@ export function Setup() {
   };
 
   const first = firstNameOf(user);
-  const a: SetupAnswer | null = res.status === 'ok' ? res.data : null;
+  const a: SetupAnswer | null = res.status === 'ok' ? portalView(res.data) : null;
   const steps = a?.steps ?? [];
   const byName = (n: SetupStepName) => steps.find((s) => s.step === n);
   const current = a?.current_step ?? null;
@@ -75,7 +95,7 @@ export function Setup() {
       {res.status === 'error' && <ErrorBlock title="Setup progress did not load" err={res.error} onRetry={res.reload} next="Try again. Nothing you finished is lost; every step saves when you do it." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {a && showWelcome && (
         <div className="card">
-          <p>{`You joined ${orgName} as ${role === 'admin' ? 'an admin' : 'a developer'}. Eight steps take you from here to your first recorded event and your first stop delivered. Most people finish the first five in about 25 minutes.`}</p>
+          <p>{`You joined ${orgName} as ${role === 'admin' ? 'an admin' : 'a developer'}. ${COUNT_WORD[ORDER.length] ?? ORDER.length} steps take you from here to your first recorded event and your first stop delivered. Most people finish the first five in about 25 minutes.`}</p>
           <ol className="step-list">{ORDER.map((s) => <li key={s}>{RAIL_LABEL(s)}</li>)}</ol>
           {status === 'trial' && <p className="hint">Your organization is in trial. Test events are recorded and labelled as trial records.</p>}
           <div className="btn-row mt4"><Btn variant="primary" onClick={() => go(current ?? 'brand')}>Start with step 1</Btn><LinkBtn href="/">Go to the overview instead</LinkBtn></div>
@@ -98,7 +118,7 @@ export function chipFor(s: SetupStep, role: string | null): { text: string; tone
   if (s.status === 'done') return { text: 'Done', tone: 'st-success', icon: 'i-ok' };
   if (s.status === 'skipped') return { text: 'Skipped', tone: 'st-neutral', icon: 'i-dash' };
   if (role && !s.roles.includes(role as 'admin' | 'developer')) return { text: 'Waiting on an admin', tone: 'st-warning', icon: 'i-warn' };
-  if (s.status === 'blocked') return s.blocked_reason === 'org_suspended' ? { text: 'Paused', tone: 'st-warning', icon: 'i-pause' } : { text: s.blocked_reason?.startsWith('needs:') ? `Needs step ${num(s.blocked_reason.slice(6) as SetupStepName)}` : 'Paused', tone: 'st-warning', icon: 'i-pause' };
+  if (s.status === 'blocked') return s.blocked_reason === 'org_suspended' ? { text: 'Paused', tone: 'st-warning', icon: 'i-pause' } : { text: neededStep(s.blocked_reason) ? `Needs step ${num(neededStep(s.blocked_reason)!)}` : 'Paused', tone: 'st-warning', icon: 'i-pause' };
   return { text: 'To do', tone: 'st-neutral', icon: 'i-dash' };
 }
 
@@ -176,7 +196,7 @@ function Panel({ step, steps, a, refresh, setAnswer, go, welcomeBack, heading }:
   return (
     <div className="card stepbox">
       {welcomeBack && <Banner kind="info" title="Welcome back.">{`${k === 1 ? 'Step 1 is done' : k === 2 ? 'Steps 1 and 2 are done' : `Steps 1 to ${k} are done`}. You are on step ${n}.`}</Banner>}
-      <p className="hint">{`Step ${n} of 8`}</p>
+      <p className="hint">{`Step ${n} of ${ORDER.length}`}</p>
       <h2 ref={heading} tabIndex={-1}>{`${n}. ${LABEL[step.step]}`}</h2>
 
       {step.status === null && (
@@ -188,15 +208,15 @@ function Panel({ step, steps, a, refresh, setAnswer, go, welcomeBack, heading }:
       {step.status === 'done' && <SuccessLine step={step} />}
       {step.status === 'skipped' && (
         <Banner kind="info" title="Skipped" action={skippable ? <Btn size="sm" busy={unskip.busy} busyLabel="Working" onClick={async () => { const r = await unskip.run(); if (r.ok) refresh(); }}>Turn it back on</Btn> : undefined}>
-          {`${step.skipped_by ? `Skipped by ${step.skipped_by}${step.skipped_at ? ` on ${fmtDate(step.skipped_at)}` : ''}. ` : ''}${step.skip_reason ? `Reason: ${step.skip_reason}. ` : ''}You can do this later.`}
+          {`${step.skipped_by ? `Skipped by ${rec(step.skipped_by)}${step.skipped_at ? ` on ${fmtDate(step.skipped_at)}` : ''}. ` : ''}${step.skip_reason ? `Reason: ${rec(step.skip_reason)}. ` : ''}You can do this later.`}
         </Banner>
       )}
       {unskip.error && <ErrorBlock title="The step was not turned back on" err={unskip.error} next="Ask an admin to turn it back on. Nothing was changed." />}
       {step.status === 'blocked' && step.blocked_reason === 'org_suspended' && (
         <Banner kind="warning" title={`${step.step === 'credential' ? 'New credentials are' : 'Connecting a system is'} paused while ${orgName} is suspended.`} action={role === 'admin' ? <LinkBtn href="/billing" size="sm">Open billing</LinkBtn> : undefined}>{`${doneBefore} Resolve billing to continue with step ${n}.`.trim()}</Banner>
       )}
-      {step.status === 'blocked' && step.blocked_reason?.startsWith('needs:') && (
-        <Banner kind="info" title={`This step needs step ${num(step.blocked_reason.slice(6) as SetupStepName)} first.`} action={<Btn size="sm" onClick={() => go(step.blocked_reason!.slice(6) as SetupStepName)}>{`Go to step ${num(step.blocked_reason.slice(6) as SetupStepName)}`}</Btn>}>A test event names the wording it showed, so register your wording first.</Banner>
+      {step.status === 'blocked' && neededStep(step.blocked_reason) && (
+        <Banner kind="info" title={`This step needs step ${num(neededStep(step.blocked_reason)!)} first.`} action={<Btn size="sm" onClick={() => go(neededStep(step.blocked_reason)!)}>{`Go to step ${num(neededStep(step.blocked_reason)!)}`}</Btn>}>A test event names the wording it showed, so register your wording first.</Banner>
       )}
       {(step.status === 'to_do' || step.status === 'blocked') && !mine && (
         <Banner kind="info" title="Waiting on an admin">{`This step needs an admin of ${orgName}. Nothing here changes until they do it.`}</Banner>

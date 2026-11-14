@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import type { FieldMapSettings, FieldMapVersion } from '../lib/api/types.ts';
+import { rec } from '../lib/format.ts';
 import { FIELD_MAP_COPY as C } from '../lib/copy.ts';
 import { EMPTY_FORM, SINGLE_PATHS, fieldMapBody, fieldMapErrors } from '../lib/fieldmap.ts';
 import type { FieldMapForm } from '../lib/fieldmap.ts';
@@ -94,7 +95,7 @@ export function SourceFieldMaps({ id }: { id: string }) {
             { key: 'v', header: 'Version', render: (v) => <b className="num">{v.map_version}</b>, primary: true },
             { key: 'f', header: 'Form sends', render: (v) => FORMAT_LABEL[v.body_format] ?? v.body_format },
             { key: 'c', header: 'Consent box', render: (v) => <Paths list={v.consent_paths} /> },
-            { key: 'w', header: 'Set by', render: (v) => v.set_by },
+            { key: 'w', header: 'Set by', render: (v) => rec(v.set_by) },
             { key: 'a', header: 'Set at', render: (v) => <Time iso={v.set_at} /> },
           ]}
           actions={(v) => <Btn size="sm" variant="quiet" onClick={() => setOpen(open === v.map_version ? null : v.map_version)}>{open === v.map_version ? 'Close' : 'Show all settings'}</Btn>} />

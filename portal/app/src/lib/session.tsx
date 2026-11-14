@@ -44,6 +44,7 @@ export interface SessionCtx {
   dismissElsewhere: () => void;
 }
 const Ctx = createContext<SessionCtx | null>(null);
+export const SessionContext = Ctx;
 
 export { safeReturn };
 

@@ -27,17 +27,43 @@ export function fmtMoney(cents: number, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: currency.toUpperCase(), maximumFractionDigits: 0 }).format(cents / 100);
 }
 
-/** "(555) ***-0100" for a contact point we may only show masked. */
-export function maskContact(c: string): string {
-  if (c.includes('@')) { const [u, d] = c.split('@'); return `${u.slice(0, 1)}***@${d}`; }
-  const digits = c.replace(/\D/g, '');
-  const ten = digits.slice(-10);
-  return ten.length === 10 ? `(${ten.slice(0, 3)}) ***-${ten.slice(6)}` : '***';
+export const NOT_RECORDED = 'Not recorded';
+
+/** A field the record may not hold, as text: the value, or "Not recorded". Never "undefined", "null" or an empty cell. */
+export function rec(v: unknown, fallback: string = NOT_RECORDED): string {
+  if (v === null || v === undefined) return fallback;
+  const t = typeof v === 'string' ? v.trim() : String(v);
+  return t === '' || t === 'null' || t === 'undefined' || t === 'NaN' ? fallback : t;
 }
+
+// A phone is recognised only by its whole shape (an optional +1, then exactly ten digits, with only phone punctuation between),
+// never by finding digits inside some other value: an export id or a fingerprint carries digit runs too.
+const PHONE_SHAPE = /^(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$/;
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const tenDigits = (c: string): string | null => (PHONE_SHAPE.test(c.trim()) ? c.replace(/\D/g, '').slice(-10) : null);
+
+/** "(555) ***-0100" for a contact point we may only show masked. Anything that is not a whole email or phone shows as "***". */
+export function maskContact(c: string): string {
+  if (EMAIL_SHAPE.test(c)) { const [u, d] = c.split('@'); return `${u.slice(0, 1)}***@${d}`; }
+  const ten = tenDigits(c);
+  return ten ? `(${ten.slice(0, 3)}) ***-${ten.slice(6)}` : '***';
+}
+/** A phone in its usual form when it is a whole phone; every other value is shown exactly as it is. */
 export function prettyContact(c: string): string {
   if (c.includes('@')) return c;
-  const ten = c.replace(/\D/g, '').slice(-10);
-  return ten.length === 10 ? `(${ten.slice(0, 3)}) ${ten.slice(3, 6)}-${ten.slice(6)}` : c;
+  const ten = tenDigits(c);
+  return ten ? `(${ten.slice(0, 3)}) ${ten.slice(3, 6)}-${ten.slice(6)}` : c;
+}
+
+/** The Target cell of the audit log: what the record holds. Only a contact target whose value is itself a whole email or phone is masked. */
+export function targetLine(t: { kind: string; id: string | null } | null | undefined): string {
+  if (!t) return NOT_RECORDED;
+  if (t.kind === 'org') return 'This organization';
+  const label = rec(t.kind, 'record').replace(/_/g, ' ');
+  const id = typeof t.id === 'string' ? t.id.trim() : '';
+  if (!id) return label;
+  const isContactPoint = t.kind === 'contact' && (EMAIL_SHAPE.test(id) || PHONE_SHAPE.test(id));
+  return `${label} ${isContactPoint ? maskContact(id) : id}`;
 }
 
 /** Classify a typed contact as phone or email and say why it is incomplete (invalid_contact:phone|email). */

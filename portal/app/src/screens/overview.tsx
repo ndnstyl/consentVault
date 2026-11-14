@@ -7,9 +7,9 @@ import { CAPTURE_REFUSALS, NA } from '../lib/copy.ts';
 import { FLAGS } from '../lib/flags.ts';
 import { usePoll, useResource } from '../lib/hooks.ts';
 import { canDo } from '../lib/roles.ts';
-import { ORDER, RAIL_LABEL, chipFor } from './setup.tsx';
+import { ORDER, RAIL_LABEL, chipFor, portalView } from './setup.tsx';
 import { useSession } from '../lib/session.tsx';
-import { fmtDateTime, fmtTime } from '../lib/format.ts';
+import { fmtDateTime, fmtTime, rec } from '../lib/format.ts';
 import { Banner, Btn, CodeBlock, CopyButton, DataTable, ErrorBlock, KV, LinkBtn, NotAvailable, OrgChip, PageHead, Chip, SetupChecklist, type ChecklistItem, Skeleton, StateBlock, SuccessBanner, Tabs, Tile, Time, Meter } from '../components/ui.tsx';
 
 type Got<T> = { ok: true; v: T } | { ok: false; e: ApiError };
@@ -47,8 +47,8 @@ export function Overview() {
   const view = useMemo(() => {
     if (res.status !== 'ok') return null;
     const d = res.data;
-    // the checklist is the eight steps GET /v1/setup reports: the service decides what is done, this page only draws it
-    const answer = d.setup.ok ? d.setup.v : null;
+    // the checklist is the steps GET /v1/setup reports that this portal has a screen for: the service decides what is done, this page only draws it
+    const answer = d.setup.ok ? portalView(d.setup.v) : null;
     const firstEventAt = (d.health.ok ? d.health.v.first_event?.at : null) ?? answer?.steps.find((s) => s.step === 'first_event')?.evidence?.at ?? null;
     const items = answer ? ORDER.map((name) => {
       const st = answer.steps.find((x) => x.step === name);
@@ -157,7 +157,7 @@ export function FirstEvent() {
   const prereq = d ? [
     { label: 'Brand', done: d.brands.length > 0, href: '/brands', button: 'Add a brand', value: brand?.display_name ?? null },
     { label: 'Capture source', done: !!source, href: '/sources', button: 'Add a capture source', value: source?.name ?? null },
-    { label: 'Wording', done: !!wording, href: '/wording/new', button: 'Register your consent wording', value: wording ? `Version ${wording.version_label}` : null },
+    { label: 'Wording', done: !!wording, href: '/wording/new', button: 'Register your consent wording', value: wording ? (wording.version_label ? `Version ${wording.version_label}` : rec(wording.label)) : null },
     { label: 'Credential', done: !!cred, href: '/credentials/new', button: 'Issue a capture credential', value: cred?.name ?? null },
   ] : [];
   const missing = waitingFor(prereq);

@@ -65,7 +65,7 @@ export interface FieldMapSettings {
   checkbox_default_path: string | null; submit_context_path: string | null; third_party_cert_path: string | null;
   jurisdiction_path: string | null; channel_scope_path: string | null;
 }
-export interface FieldMapVersion extends FieldMapSettings { source_id: string | null; map_version: number; set_by: string; set_at: string }
+export interface FieldMapVersion extends FieldMapSettings { source_id: string | null; map_version: number; set_by: string | null; set_at: string }
 export interface FieldMapBuiltIn extends FieldMapSettings { label: string }
 export interface FieldMapList { items: FieldMapVersion[]; built_in: FieldMapBuiltIn }
 export type FieldMapNew = Partial<Omit<FieldMapSettings, 'body_format' | 'consent_paths' | 'contact_paths'>> & { body_format: FieldMapBodyFormat; consent_paths: string[]; contact_paths?: { path: string; kind: 'phone' | 'email' }[] }
@@ -79,7 +79,7 @@ export interface CredentialIssued {
   credential_id: string; name: string; kind: CredentialKind; scope: CredentialScope; source_id: string | null;
   algorithm: string | null; created_at: string; client_id?: string; site_key_id?: string; secret?: string; shown_once: boolean;
 }
-export interface RetentionVersion { version: number; evidence_years: number; applies_from: string; set_by: string }
+export interface RetentionVersion { version: number; evidence_years: number; applies_from: string; set_by: string | null }
 export interface Retention { current: RetentionVersion | null; platform_minimum_years: number; items: RetentionVersion[]; next_cursor: string | null; partial?: string[] }
 export interface ErasureAccepted { erasure_id: string; status: 'pending_operator_confirmation' }
 

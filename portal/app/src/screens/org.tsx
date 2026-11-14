@@ -1,19 +1,32 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, allPages } from '../lib/api/client.ts';
-import type { AuditRow, MemberRow, OrgAdmin, Role } from '../lib/api/types.ts';
+import type { AuditRow, MemberRow, OrgAdmin, Retention, Role } from '../lib/api/types.ts';
 import { ROLE_DESCRIPTION } from '../lib/copy.ts';
 import { NA, ORG_STATUS_LABEL } from '../lib/copy.ts';
 import { useAction, useResource } from '../lib/hooks.ts';
 import { useRouter } from '../lib/router.tsx';
 import { ROLE_LABEL, canDo } from '../lib/roles.ts';
 import { useSession } from '../lib/session.tsx';
-import { fmtDate, fmtDateTime, fmtNum, maskContact } from '../lib/format.ts';
+import { fmtDate, fmtDateTime, fmtNum, rec, targetLine } from '../lib/format.ts';
 import { actionLabel, actorName, type NamedMember } from '../lib/labels.ts';
 import { useToast } from '../lib/toast.tsx';
 import { ConfirmDialog, Dialog } from '../components/Dialog.tsx';
 import { Banner, Btn, Chip, DataTable, ErrorBlock, KV, LinkBtn, Meter, NotAvailable, OrgChip, PageHead, Radio, SelectField, Skeleton, StateBlock, SuccessBanner, TextArea, TextField, Time } from '../components/ui.tsx';
 
 // ---------- 16 Retention ----------
+export function retentionInForce(d: Retention, inForce: number, min: number): string {
+  return d.current ? `${inForce} years (version ${d.current.version}, set ${fmtDate(d.current.applies_from)} by ${rec(d.current.set_by)})` : `${min} years (platform minimum)`;
+}
+export function RetentionHistory({ d, inForce }: { d: Retention; inForce: number }) {
+  return d.partial?.includes('history') ? <Banner kind="warning" title="Version history did not load">{`The value in force is current: ${inForce} years.`}</Banner>
+    : d.items.length === 0 ? <p className="hint">No versions yet.</p>
+      : <DataTable caption="Retention versions" rows={d.items} rowKey={(r) => String(r.version)} columns={[
+        { key: 'v', header: 'Version', render: (r) => <span className="num">{r.version}</span>, primary: true },
+        { key: 'y', header: 'Years', render: (r) => <span className="num">{r.evidence_years}</span> },
+        { key: 's', header: 'Set by', render: (r) => rec(r.set_by) },
+        { key: 'f', header: 'From', render: (r) => <Time iso={r.applies_from} date /> },
+      ]} />;
+}
 export function Retention() {
   const { api, role } = useSession();
   const res = useResource(() => api.retention.get(), [api]);
@@ -46,7 +59,7 @@ export function Retention() {
       {!d.current && <StateBlock kind="empty" title="Platform minimum in force">{`Your organization has not set its own retention, so records are kept for the platform minimum of ${min} years.`}</StateBlock>}
       <div className="card mt4">
         <KV rows={[
-          ['In force', d.current ? `${inForce} years (version ${d.current.version}, set ${fmtDate(d.current.applies_from)} by ${d.current.set_by})` : `${min} years (platform minimum)`],
+          ['In force', retentionInForce(d, inForce, min)],
           ['Platform minimum', `${min} years`],
         ]} />
         <p className="mt4">Each record&apos;s keep-until date is locked when it is written. A change applies to records written after it. Nobody, including ConsentVault, can delete a record before its date.</p>
@@ -60,14 +73,7 @@ export function Retention() {
         )}
       </div>
       <h2 className="sec mt6">History</h2>
-      {d.partial?.includes('history') ? <Banner kind="warning" title="Version history did not load">{`The value in force is current: ${inForce} years.`}</Banner>
-        : d.items.length === 0 ? <p className="hint">No versions yet.</p>
-          : <DataTable caption="Retention versions" rows={d.items} rowKey={(r) => String(r.version)} columns={[
-            { key: 'v', header: 'Version', render: (r) => <span className="num">{r.version}</span>, primary: true },
-            { key: 'y', header: 'Years', render: (r) => <span className="num">{r.evidence_years}</span> },
-            { key: 's', header: 'Set by', render: (r) => r.set_by },
-            { key: 'f', header: 'From', render: (r) => <Time iso={r.applies_from} date /> },
-          ]} />}
+      <RetentionHistory d={d} inForce={inForce} />
     </>
   );
 }
@@ -185,13 +191,7 @@ function RoleDialog({ row, onClose, onDone }: { row: MemberRow; onClose: () => v
 }
 
 // ---------- 18 Audit log ----------
-const PERSONAL = /(\+?\d[\d\s().-]{8,}\d)|([^\s@]+@[^\s@]+\.[^\s@]+)/;
-function safeTarget(t: AuditRow['target']): string {
-  if (t.kind === 'org') return 'This organization';
-  const id = t.id ?? '';
-  const shown = PERSONAL.test(id) ? maskContact(id) : id;
-  return `${t.kind.replace(/_/g, ' ')}${shown ? ` ${shown}` : ''}`;
-}
+export const safeTarget = targetLine;
 
 export function Audit() {
   const { api, role } = useSession();

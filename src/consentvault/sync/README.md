@@ -17,7 +17,7 @@ rolls back). An event that does not move a person's state (a second stop, a gran
 
 ## 3. Worker (deployment lane)
 
-`SyncWorker(crypto, custody, transport, alarms).run_once(worker_role_conn)` or `.run_loop(...)`. Runs as
+`SyncWorker(crypto, custody, transport, alarms).run_once(worker_role_conn, connect=db.connect_factory(cfg))` or `.run_loop(...)`; with `db_auth = "iam"` every connection logs in with a fresh RDS IAM token. Runs as
 `consentvault_worker`; one organisation per transaction through `dispatch_orgs('sync')`. `transport` is
 `connectors.webhook.EgressTransport(egress_url, EGRESS_SECRET)`. `custody` is the providers `KeyProvider`
 (`wrap`/`unwrap`). `alarms` is any object with `raise_alarm(Alarm)`; the default logs at ERROR.

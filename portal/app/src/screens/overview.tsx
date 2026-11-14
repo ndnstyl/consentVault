@@ -1,26 +1,29 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { ApiError } from '../lib/api/client.ts';
 import { allPages } from '../lib/api/client.ts';
-import type { Billing, Brand, Credential, Disclosure, Health, PolicyItem, Source, System } from '../lib/api/types.ts';
+import type { Billing, Health, PolicyItem, SetupAnswer, SetupStepName, System } from '../lib/api/types.ts';
+import { alarmCopy } from '../lib/alarms.ts';
 import { CAPTURE_REFUSALS, NA } from '../lib/copy.ts';
 import { FLAGS } from '../lib/flags.ts';
 import { usePoll, useResource } from '../lib/hooks.ts';
 import { canDo } from '../lib/roles.ts';
+import { ORDER, RAIL_LABEL, chipFor } from './setup.tsx';
 import { useSession } from '../lib/session.tsx';
 import { fmtDateTime, fmtTime } from '../lib/format.ts';
-import { Banner, Btn, CodeBlock, CopyButton, DataTable, ErrorBlock, KV, LinkBtn, NotAvailable, OrgChip, PageHead, Chip, SetupChecklist, Skeleton, StateBlock, SuccessBanner, Tabs, Tile, Time, Meter } from '../components/ui.tsx';
+import { Banner, Btn, CodeBlock, CopyButton, DataTable, ErrorBlock, KV, LinkBtn, NotAvailable, OrgChip, PageHead, Chip, SetupChecklist, type ChecklistItem, Skeleton, StateBlock, SuccessBanner, Tabs, Tile, Time, Meter } from '../components/ui.tsx';
 
 type Got<T> = { ok: true; v: T } | { ok: false; e: ApiError };
 async function got<T>(p: Promise<T>): Promise<Got<T>> {
   try { return { ok: true, v: await p }; } catch (e) { return { ok: false, e: e as ApiError }; }
 }
 
+const STEP_HREF: Record<SetupStepName, string> = {
+  brand: '/brands', source: '/sources', wording: '/wording/new', credential: '/credentials/new', first_event: '/setup/first-event', policy: '/policies', system: '/systems/new', confirmations: '/confirmations',
+};
+
 interface Setup {
   health: Got<Health>;
-  brands: Got<Brand[]> | null;
-  sources: Got<Source[]> | null;
-  wording: Got<Disclosure[]>;
-  credentials: Got<Credential[]> | null;
+  setup: Got<SetupAnswer>;
   policy: Got<PolicyItem[]>;
   billing: Got<Billing> | null;
   systems: Got<System[]> | null;
@@ -31,17 +34,14 @@ export function Overview() {
   const { api, role, org, orgName, orgId } = useSession();
   const setupRole = canDo(role, 'first-event.send');
   const res = useResource<Setup>(async () => {
-    const [health, brands, sources, wording, credentials, policy, billing, systems] = await Promise.all([
+    const [health, setup, policy, billing, systems] = await Promise.all([
       got(api.session.health()),
-      setupRole ? got(allPages((c) => api.brands.list({ cursor: c }))) : null,
-      setupRole ? got(allPages((c) => api.sources.list({ cursor: c }))) : null,
-      got(allPages((c) => api.disclosures.list({ cursor: c }))),
-      setupRole ? got(allPages((c) => api.credentials.list({ cursor: c }))) : null,
+      got(api.setup.get()),
       got(api.policies.list({ status: 'approved' }).then((p) => p.items)),
       role === 'admin' ? got(api.billing.get()) : null,
       got(allPages((c) => api.systems.list({ cursor: c }))),
     ]);
-    return { health, brands, sources, wording, credentials, policy, billing, systems };
+    return { health, setup, policy, billing, systems } as Setup;
   }, [api, role]);
   const flagKey = `cv.setup.done.${orgId}`;
   const [celebrate, setCelebrate] = useState(false);
@@ -49,20 +49,19 @@ export function Overview() {
   const view = useMemo(() => {
     if (res.status !== 'ok') return null;
     const d = res.data;
-    const doneOf = <T,>(g: Got<T[]> | null, f?: (x: T) => boolean): boolean | null => (g === null ? null : g.ok ? (f ? g.v.some(f) : g.v.length > 0) : null);
-    const firstEventAt = d.health.ok ? d.health.v.first_event?.at ?? null : d.sources && d.sources.ok ? d.sources.v.find((s) => s.last_event_at)?.last_event_at ?? null : null;
-    const firstKnown = d.health.ok ? true : d.sources && d.sources.ok ? true : false;
-    const items = setupRole ? [
-      { label: 'Add a brand', done: doneOf(d.brands), href: '/brands' },
-      { label: 'Add a capture source', done: doneOf(d.sources), href: '/sources' },
-      { label: 'Register your consent wording', done: d.wording.ok ? d.wording.v.length > 0 : null, href: '/wording/new' },
-      { label: 'Issue a capture credential', done: doneOf(d.credentials, (c) => c.scope === 'capture' && !c.revoked_at), href: '/credentials/new' },
-      { label: 'Send a test event', done: firstKnown ? firstEventAt !== null : null, href: '/setup/first-event' },
-    ] : null;
-    return { d, items, firstEventAt };
-  }, [res.status, res.data, setupRole]);
+    // the checklist is the eight steps GET /v1/setup reports: the service decides what is done, this page only draws it
+    const answer = d.setup.ok ? d.setup.v : null;
+    const firstEventAt = (d.health.ok ? d.health.v.first_event?.at : null) ?? answer?.steps.find((s) => s.step === 'first_event')?.evidence?.at ?? null;
+    const items = answer ? ORDER.map((name) => {
+      const st = answer.steps.find((x) => x.step === name);
+      if (!st) return { label: RAIL_LABEL(name), done: null, href: STEP_HREF[name] };
+      const mine = st.roles.includes(role as 'admin' | 'developer');
+      return { label: RAIL_LABEL(name), done: st.status === null ? null : st.status === 'done' || st.status === 'skipped', href: STEP_HREF[name], chip: chipFor(st, role), primary: setupRole && mine && name === answer.current_step };
+    }) : null;
+    return { d, items, answer, firstEventAt };
+  }, [res.status, res.data, setupRole, role]);
 
-  const complete = !!view?.items && view.items.every((i) => i.done === true);
+  const complete = !!view?.answer && view.answer.complete;
   useEffect(() => {
     if (!complete || !orgId) return;
     try { if (!localStorage.getItem(flagKey)) { setCelebrate(true); localStorage.setItem(flagKey, '1'); } } catch { /* storage unavailable: no first-time banner */ }
@@ -71,8 +70,8 @@ export function Overview() {
   const plan = org && 'plan' in org && org.plan ? org.plan.name : null;
   return (
     <>
-      <PageHead title={complete || !view?.items ? 'Overview' : view.items.some((i) => i.done === false) ? 'Welcome to ConsentVault' : 'Overview'}
-        lede={view?.items && view.items.some((i) => i.done === false) ? 'Finish these steps to record your first test event. About 15 minutes.' : 'Where your organization stands: policy, sealing, deliveries and usage.'}
+      <PageHead title={complete || !view?.items ? 'Overview' : 'Welcome to ConsentVault'}
+        lede={view?.items && !complete ? (role === 'compliance_viewer' ? 'Setup is still in progress. An admin finishes these steps.' : 'Finish these steps to record your first test event. About 15 minutes.') : 'Where your organization stands: policy, sealing, deliveries and usage.'}
         meta={<>{orgName} · <OrgChip status={org?.status ?? null} />{plan && <> · {plan} plan</>}</>} />
       {res.status === 'loading' && <Skeleton what="overview" rows={4} variant="tiles" />}
       {res.status === 'error' && <ErrorBlock title="The overview did not load" err={res.error} override="your organization's status could not be read" next="Try again. Capture from your website and systems is not affected by this page." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
@@ -81,12 +80,12 @@ export function Overview() {
   );
 }
 
-interface OverviewView { d: Setup; items: { label: string; done: boolean | null; href: string }[] | null; firstEventAt: string | null }
+interface OverviewView { d: Setup; items: ChecklistItem[] | null; answer: SetupAnswer | null; firstEventAt: string | null }
 function OverviewBody({ v, celebrate, role }: { v: OverviewView; celebrate: boolean; role: ReturnType<typeof useSession>['role'] }) {
   const { d, items } = v;
   const failed: string[] = [];
   const note = (name: string, g: Got<unknown> | null) => { if (g && !g.ok) failed.push(name); };
-  note('Health counts', d.health); note('Policy', d.policy); note('Usage', d.billing); note('Systems', d.systems);
+  note('Health counts', d.health); note('Setup progress', d.setup); note('Policy', d.policy); note('Usage', d.billing); note('Systems', d.systems);
   const h = d.health.ok ? d.health.v : null;
   const policy = d.policy.ok ? d.policy.v[0] ?? null : undefined;
   const dead = h ? h.dead_deliveries : null;
@@ -96,13 +95,28 @@ function OverviewBody({ v, celebrate, role }: { v: OverviewView; celebrate: bool
   const billing = d.billing && d.billing.ok ? d.billing.v : null;
   const usageNA = !billing || !billing.used || !billing.included;
   const usageFailed = !!d.billing && (!d.billing.ok || (billing !== null && billing.plan !== null && usageNA));
-  const incomplete = items?.some((i) => i.done === false) ?? false;
+  const incomplete = !!v.answer && !v.answer.complete;
   const nullTiles = (h && (h.unsealed_events_over_1h === null || h.dead_deliveries === null)) || !d.health.ok || (showUsage && usageFailed) || (showPolicy && policy === undefined);
   return (
     <>
       {celebrate && v.firstEventAt && <SuccessBanner>{`Setup is complete. Your first test event was recorded on ${fmtDateTime(v.firstEventAt)}.`}</SuccessBanner>}
+      {h && h.alarms === null && <Banner kind="warning" title="Open alarms did not load">Not available right now, never read as none. Reload to try again.</Banner>}
+      {h?.alarms && h.alarms.length > 0 && (
+        <div className="mb5" role="region" aria-label="Open alarms">
+          {h.alarms.map((a) => {
+            const c = alarmCopy(a);
+            return (
+              <Banner key={`${a.name}:${a.since}`} kind="danger" title={c.title} action={c.href ? <LinkBtn href={c.href} size="sm">Open</LinkBtn> : undefined}>
+                <p>{c.what}</p>
+                <p className="hint">Since <Time iso={a.since} />.</p>
+                <p><b>Next:</b> {c.next}</p>
+              </Banner>
+            );
+          })}
+        </div>
+      )}
       {nullTiles && <Banner kind="warning" title="Some figures did not load">{`${showUsage && usageFailed ? 'Usage is not available right now. ' : ''}Figures that did not load read Not available, never zero. Everything else on this page is current.`}</Banner>}
-      {items && (incomplete || celebrate) && <div className="mb5"><SetupChecklist items={items} /></div>}
+      {items && (incomplete || celebrate) && <div className="mb5"><SetupChecklist items={items} readOnly={role === 'compliance_viewer'} /></div>}
       {items && !incomplete && !celebrate && null}
       <div className="grid g4">
         {showPolicy && (policy === undefined

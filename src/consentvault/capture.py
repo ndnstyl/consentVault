@@ -6,6 +6,7 @@ from typing import Iterable
 
 import psycopg
 
+from .safelog import describe
 from .errors import EmptyConsentError, UncheckedConsentError
 from .ledger import Event, record_event
 
@@ -60,7 +61,7 @@ def capture_and_release(conn: psycopg.Connection, **kwargs) -> tuple[Event, dict
     try:
         res = release_after_grant(conn, ev.event_id)
     except ConsentVaultError as exc:
-        return ev, None, f"{type(exc).__name__}: {exc}"
+        return ev, None, f"{describe(exc)}"
     return ev, {"released_channels": list(res.released_channels),
                 "refusals": {c: list(v) for c, v in res.refusals.items()}}, None
 

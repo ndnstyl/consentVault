@@ -10,6 +10,9 @@ show that the person ticking the box controls the number or address, so such a g
 ``contact_control_unverified`` and a pending ``release`` review row is opened for a person to look at. The release insert
 trigger enforces the same rule.
 
+The quiet window ignores the contact-log rows the confirmation service wrote (``recorded_by = 'confirmations'``): its opt-out, HELP and
+START replies each answer the person's own message, so none of them is contact since the stop (confirmations.md, core change C2).
+
 A stop that arrived after the grant is never lifted by it: the decision is refused with cause ``stop_after_grant``,
 and the view ranks a release at the position of its grant, so the same holds for any release row.
 
@@ -30,6 +33,7 @@ from dataclasses import dataclass, field
 
 import psycopg
 
+from .safelog import describe
 from .errors import ConsentVaultError, InvalidEventError
 from .ledger import VERIFIED, record_event
 
@@ -79,7 +83,7 @@ def release_after_grant(
             conn.execute(LEDGER_LOCK_SQL)
             return _decide(conn, grant_event_id, require_no_contact_since_stop)
     except psycopg.Error as exc:
-        raise ConsentVaultError(f"release decision refused by the database: {exc}") from exc
+        raise ConsentVaultError(f"release decision refused by the database: {describe(exc)}") from exc
 
 
 def _decide(conn, grant_event_id, require_no_contact_since_stop) -> ReleaseResult:
@@ -87,7 +91,7 @@ def _decide(conn, grant_event_id, require_no_contact_since_stop) -> ReleaseResul
     try:
         grant = conn.execute("SELECT * FROM consentvault.event WHERE event_id = %s::uuid", (str(grant_event_id),)).fetchone()
     except psycopg.Error as exc:
-        raise ConsentVaultError(f"cannot read the grant event: {exc}") from exc
+        raise ConsentVaultError(f"cannot read the grant event: {describe(exc)}") from exc
     if grant is None:
         raise InvalidEventError(f"no event {grant_event_id!r} in the ledger")
     if grant["event_type"] != "grant":
@@ -123,7 +127,7 @@ def _decide(conn, grant_event_id, require_no_contact_since_stop) -> ReleaseResul
     def quiet_broken(channel: str, channel_stops: list[dict]) -> bool:
         return conn.execute(
             "SELECT 1 FROM consentvault.contact_log WHERE contact_kind = %s AND contact_norm = %s AND channel = %s"
-            " AND recorded_at > %s AND recorded_at <= %s LIMIT 1",
+            " AND coalesce(recorded_by, '') <> 'confirmations' AND recorded_at > %s AND recorded_at <= %s LIMIT 1",
             (grant["contact_kind"], grant["contact_norm"], channel,
              channel_stops[-1]["received_at"], grant["received_at"]),
         ).fetchone() is not None
@@ -259,7 +263,7 @@ def release_after_tenant_grant(
             conn.execute(TENANT_LOCK_SQL)
             return _decide_tenant(conn, crypto, grant_event_id, _require_no_contact(require_no_contact_since_stop))
     except psycopg.Error as exc:
-        raise ConsentVaultError(f"release decision refused by the database: {exc}") from exc
+        raise ConsentVaultError(f"release decision refused by the database: {describe(exc)}") from exc
 
 
 def _decide_tenant(conn, crypto, grant_event_id, require_quiet: bool) -> ReleaseResult:
@@ -316,7 +320,8 @@ def _decide_tenant(conn, crypto, grant_event_id, require_quiet: bool) -> Release
     def quiet_broken(channel: str, channel_stops: list[dict]) -> bool:
         return conn.execute(
             "SELECT 1 FROM consentvault.contact_log WHERE org_id = consentvault.current_org() AND contact_kind = %s"
-            " AND contact_fp = %s AND channel = %s AND recorded_at > %s AND recorded_at <= %s LIMIT 1",
+            " AND contact_fp = %s AND channel = %s AND coalesce(recorded_by, '') <> 'confirmations'"
+            " AND recorded_at > %s AND recorded_at <= %s LIMIT 1",
             (grant["contact_kind"], fp, channel, channel_stops[-1]["received_at"], grant["received_at"]),
         ).fetchone() is not None
 

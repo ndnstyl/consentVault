@@ -50,8 +50,30 @@ def test_the_scrubber_redacts_tenant_tokens_and_secrets_in_key_value_form():
         assert token not in out and "hunter2" not in out and "sk_live" not in out, out
 
 
+def test_a_phone_number_glued_to_a_word_character_is_still_redacted():
+    for text in ("key +13055550150_sms held", "dial +13055550150x now", "id=+13055550150_sms", "job +15551234567-retry failed",
+                 "queue sms-18135550199 done"):
+        out = logscrub.scrub(text)
+        assert not any(d in out for d in ("3055550150", "5551234567", "8135550199")) and logscrub.REDACTED in out, out
+
+
+def test_the_phone_rule_never_touches_a_uuid():
+    """A UUID holding 10 digits in a row is never protected (it may be a number dressed as one); every other one survives."""
+    import re
+    import uuid as _uuid
+    kept = 0
+    for _ in range(20000):
+        u = str(_uuid.uuid4())
+        if re.search(r"\d{10}", u):
+            assert "[redacted]" in logscrub.scrub(f"org {u}, ok")
+            continue
+        assert logscrub.scrub(f"org {u}, ok") == f"org {u}, ok"
+        kept += 1
+    assert kept > 19000
+
+
 def test_the_scrubber_leaves_ordinary_operational_text_alone():
-    text = "sync job finished: 42 rows in 1.5 s, org 3f2c8a1e-0000-4000-8000-000000000000, status 200"
+    text = "sync job finished: 42 rows in 1.5 s, org 3f2c8a1e-7b1a-4c3e-9f6e-2a1b3c4d5e6f, status 200"
     assert logscrub.scrub(text) == text
 
 
@@ -78,7 +100,10 @@ def test_an_installed_scrubber_redacts_messages_args_and_exceptions(caplog):
     assert len(caplog.records) == 2 and "capture failed for" in text
 
 
-def test_a_tenant_flow_logged_at_debug_emits_no_contact_ip_or_token(dsn, pg_server, caplog):
+def test_a_tenant_flow_logged_at_debug_emits_no_contact_ip_or_token(dsn, pg_server, caplog, monkeypatch):
+    # no scrubber at all: an entry point run by an earlier test may have installed the scrubbing record factory, so the plain one
+    # is put back for this test (the code must emit nothing personal on its own; the scrubber is the second line)
+    monkeypatch.setattr(logging, "_logRecordFactory", logging.LogRecord)
     caplog.set_level(logging.DEBUG)
     t = build_tenancy(dsn, pg_server["port"])
     token = t.token(t.a)

@@ -1,0 +1,68 @@
+rules:
+  - id: cv-nonconstant-time-compare-py
+    languages: [python]
+    severity: ERROR
+    message: A signature, digest, MAC or token is compared with == or !=; use hmac.compare_digest (webhook standard rule W-I2).
+    patterns:
+      - pattern-either:
+          - pattern: $A == $B
+          - pattern: $A != $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: (?i).*(signature|digest|hmac|_mac$|^mac$|sig$|secret|token_hash|mac_hex).*
+      - pattern-not: $A == None
+      - pattern-not: $A != None
+      - pattern-not: $A == ""
+      - pattern-not: $A != ""
+      - pattern-not: $A == $B.$C
+  - id: cv-nonconstant-time-compare-ts
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: A signature, digest, MAC or token is compared with ===, !==, == or !=; use crypto.subtle.verify or timingSafeEqual (webhook standard rule W-I2).
+    patterns:
+      - pattern-either:
+          - pattern: $A === $B
+          - pattern: $A !== $B
+          - pattern: $A == $B
+          - pattern: $A != $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: (?i).*(signature|digest|hmac|^mac$|_mac$|sig$|secret).*
+      - pattern-not: $A === undefined
+      - pattern-not: $A !== undefined
+      - pattern-not: $A === null
+      - pattern-not: $A !== null
+      - pattern-not: $A === ""
+      - pattern-not: $A !== ""
+  - id: cv-eval-ts
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: eval or new Function runs a string as code.
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+  - id: cv-innerhtml-ts
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Assigning to innerHTML or outerHTML, or dangerouslySetInnerHTML, writes unescaped markup.
+    pattern-either:
+      - pattern: $X.innerHTML = $Y
+      - pattern: $X.outerHTML = $Y
+      - pattern: <$T dangerouslySetInnerHTML={...} />
+  - id: cv-shell-exec-ts
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: child_process exec or execSync with a non-literal command string.
+    patterns:
+      - pattern-either:
+          - pattern: exec($CMD, ...)
+          - pattern: execSync($CMD, ...)
+      - pattern-not: exec("...", ...)
+      - pattern-not: execSync("...", ...)
+  - id: cv-shell-true-py
+    languages: [python]
+    severity: ERROR
+    message: subprocess with shell=True, or os.system, runs a string through a shell.
+    pattern-either:
+      - pattern: subprocess.$F(..., shell=True, ...)
+      - pattern: os.system(...)

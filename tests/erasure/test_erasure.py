@@ -4,6 +4,7 @@ the ledger is written before anything is deleted, and queued work resumes on rel
 import psycopg
 import pytest
 
+from consentvault import db, dbclock
 from consentvault.evidence import contact_has_records
 from consentvault.providers.errors import EvidenceStoreError
 from consentvault.tenancy import erasure, holds
@@ -24,7 +25,7 @@ def _request(env, org, contact=PHONE):
 
 def _confirm(env, org, eid, **kw):
     with env.operator() as c:
-        return erasure.confirm_erasure(c, token_key=env.t.key, ledger=env.ledger, operator_id=OPERATOR,
+        return erasure.confirm_erasure(c, token_key=env.t.key, crypto=env.t.crypto, ledger=env.ledger, operator_id=OPERATOR,
                                        request_id="req-op", org_id=org.org_id, erasure_id=eid, **kw)
 
 
@@ -56,10 +57,15 @@ def test_erasure_deletes_the_key_and_the_fingerprint_still_matches_its_stop(env,
     finally:
         cloud.close()
     entries = env.ledger.entries(t.a.org_id)
-    assert [(e["kind"], e["contact_fp"]) for e in entries] == [("erasure_intent", env.fp(t.a)),
-                                                               ("erasure_commit", env.fp(t.a))]
-    assert entries[1]["intent_seq"] == entries[0]["seq"]
+    assert [(e["kind"], e["contact_fp"]) for e in entries] == [("erasure_stop", env.fp(t.a)),
+                                                               ("erasure_intent", env.fp(t.a)),
+                                                               ("erasure_commit", env.fp(t.a)),
+                                                               ("erasure_stop_commit", env.fp(t.a))]
+    assert entries[2]["intent_seq"] == entries[1]["seq"] and entries[3]["stop_seq"] == entries[0]["seq"]
     assert PHONE not in str(entries) and PHONE[1:] not in str(entries)
+    stop_entry = next(e for e in entries if e["kind"] == "erasure_stop")
+    assert set(stop_entry) == {"kind", "contact_fp", "erasure_id", "channels", "stopped_at", "seq", "org_id", "at", "v",
+                               "prev_sha256"}, sorted(stop_entry)
     with env.admin(t.a) as ctx:
         got = erasure.get_erasure(ctx, req["erasure_id"])
     assert got["status"] == "completed" and got["contact_fp_hint"] == env.fp(t.a)[:8]
@@ -76,7 +82,7 @@ def test_nothing_is_deleted_when_the_archive_store_refuses_the_ledger_entry(env)
 
     req = _request(env, env.t.a)
     with env.operator() as c, pytest.raises(LedgerUnavailableError):
-        erasure.confirm_erasure(c, token_key=env.t.key, ledger=LifecycleLedger(Refusing()), operator_id=OPERATOR,
+        erasure.confirm_erasure(c, token_key=env.t.key, crypto=env.t.crypto, ledger=LifecycleLedger(Refusing(), clock=dbclock.datetime_clock(lambda: db.connect(env.t.app_dsn))), operator_id=OPERATOR,
                                 request_id="req-op", org_id=env.t.a.org_id, erasure_id=req["erasure_id"])
     assert env.key_present(env.t.a)
     with env.admin(env.t.a) as ctx:
@@ -137,14 +143,14 @@ def test_a_confirmed_erasure_under_a_hold_is_queued_and_runs_when_the_hold_is_re
     with env.admin(t.a) as ctx:
         holds.release_hold_member(ctx, hold["hold_id"], {"reason": "matter closed"}, ledger=env.ledger, crypto=env.t.crypto)
     with env.operator() as c:
-        resumed = holds.resume(c, token_key=t.key, ledger=env.ledger, custody=env.custody, org_id=t.a.org_id,
+        resumed = holds.resume(c, token_key=t.key, crypto=t.crypto, ledger=env.ledger, custody=env.custody, org_id=t.a.org_id,
                                request_id="req-resume")
     assert resumed["erasures_completed"] == 1
     assert not env.key_present(t.a)
     kinds = [e["kind"] for e in env.ledger.entries(t.a.org_id)]
     assert kinds[:3] == ["hold_set", "hold_released", "erasure_intent"]
     with env.operator() as c:  # the commit entry, if the release path did not write it, comes from the erasure job's sweep
-        erasure.resume_waiting(c, token_key=t.key, ledger=env.ledger, request_id="req-sweep", org_id=t.a.org_id)
+        erasure.resume_waiting(c, token_key=t.key, crypto=t.crypto, ledger=env.ledger, request_id="req-sweep", org_id=t.a.org_id)
     kinds = [e["kind"] for e in env.ledger.entries(t.a.org_id)]
     assert kinds == ["hold_set", "hold_released", "erasure_intent", "erasure_commit"]
 

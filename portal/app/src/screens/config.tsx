@@ -8,6 +8,7 @@ import { canDo } from '../lib/roles.ts';
 import { useSession } from '../lib/session.tsx';
 import { useToast } from '../lib/toast.tsx';
 import { Dialog, ConfirmDialog } from '../components/Dialog.tsx';
+import type { Embedded } from '../components/ui.tsx';
 import { Banner, Btn, Check, Chip, CopyButton, DataTable, ErrorBlock, ErrorSummary, KV, LinkBtn, NotAvailable, PageHead, Radio, SelectField, Skeleton, StateBlock, SuccessBanner, TextArea, TextField, Time } from '../components/ui.tsx';
 
 // ---------- 07 Brands ----------
@@ -306,7 +307,7 @@ function SecretReveal({ issued, onDone }: { issued: CredentialIssued; onDone: ()
   );
 }
 
-export function CredentialNew() {
+export function CredentialNew({ embedded }: { embedded?: Embedded } = {}) {
   const { api, role, orgName, status } = useSession();
   const { search, navigate } = useRouter();
   const res = useResource(async () => {
@@ -351,7 +352,8 @@ export function CredentialNew() {
     try { sessionStorage.removeItem('cv.draft.credential-new'); } catch { /* nothing to clear */ }
     const idLine = c.site_key_id ? `Client id ${c.site_key_id}.` : c.client_id ? `Client id ${c.client_id}.` : '';
     toast(`${c.name} issued. Recorded in the audit log.`);
-    navigate(`/credentials?issued=${encodeURIComponent(c.name)}&id=${encodeURIComponent(c.site_key_id ?? c.client_id ?? '')}`);
+    if (embedded) embedded.onDone(`${c.name} issued.${idLine ? ` ${idLine}` : ''} Recorded in the audit log.`);
+    else navigate(`/credentials?issued=${encodeURIComponent(c.name)}&id=${encodeURIComponent(c.site_key_id ?? c.client_id ?? '')}`);
     void idLine;
   };
   const next1 = () => {
@@ -368,7 +370,7 @@ export function CredentialNew() {
   if (!role || !canDo(role, 'credential.issue')) return null;
   return (
     <>
-      <PageHead title="Issue a credential" lede={`Step ${step === 1 ? 1 : 2} of ${kind === 'jwt_public_key' ? 3 : 2}`} />
+      {!embedded && <PageHead title="Issue a credential" lede={`Step ${step === 1 ? 1 : 2} of ${kind === 'jwt_public_key' ? 3 : 2}`} />}
       {res.status === 'loading' && <Skeleton what="your sources" />}
       {res.status === 'error' && <ErrorBlock title="Your sources did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {suspended && <Banner kind="warning" title="New credentials are paused">{`New credentials are paused while ${orgName} is suspended. Existing capture credentials keep working. Resolve billing to issue new ones.`}</Banner>}

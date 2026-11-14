@@ -14,7 +14,9 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, Protocol
 
+from ..safelog import http_error_response
 from .errors import StripeRejectedError, StripeUnavailableError
+from ..urlguard import require_url, open_no_redirect
 
 API_BASE = "https://api.stripe.com"
 TIMEOUT_SECONDS = 20
@@ -26,6 +28,9 @@ class StripeClient(Protocol):
     def retrieve_invoice(self, invoice_id: str) -> dict[str, Any]: ...
     def retrieve_customer(self, customer_id: str) -> dict[str, Any]: ...
     def retrieve_price(self, price_id: str) -> dict[str, Any]: ...
+    def list_subscriptions(self, customer: str) -> list[dict[str, Any]]: ...
+    def list_open_checkout_sessions(self, customer: str) -> list[dict[str, Any]]: ...
+    def expire_checkout_session(self, session_id: str) -> dict[str, Any]: ...
     def list_prices(self) -> list[dict[str, Any]]: ...
     def create_customer(self, *, org_id: str, idempotency_key: str) -> dict[str, Any]: ...
     def create_checkout_session(self, *, customer: str, line_items: list[dict[str, Any]], org_id: str,
@@ -65,12 +70,14 @@ def _scalar(value: Any) -> str:
 
 
 def urllib_transport(method: str, url: str, body: bytes | None, headers: dict[str, str]) -> tuple[int, bytes]:
+    require_url(url, host_pattern=r"api\.stripe\.com")
     req = urllib.request.Request(url, data=body, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+        with open_no_redirect(req, timeout=TIMEOUT_SECONDS, host_pattern=r"api\.stripe\.com", loopback_http=False) as resp:
             return resp.status, resp.read()
     except urllib.error.HTTPError as exc:  # the status code is the answer; the caller classifies it
-        return exc.code, exc.read()
+        status, _headers, body = http_error_response(exc)
+        return status, body
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise StripeUnavailableError(f"Stripe did not answer: {type(exc).__name__}") from exc
 
@@ -129,7 +136,34 @@ class HttpStripeClient:
         return self._call("GET", f"/v1/customers/{urllib.parse.quote(customer_id, safe='')}")
 
     def retrieve_price(self, price_id: str) -> dict[str, Any]:
-        return self._call("GET", f"/v1/prices/{urllib.parse.quote(price_id, safe='')}", {"expand": ["product"]})
+        return self._call("GET", f"/v1/prices/{urllib.parse.quote(price_id, safe='')}", {"expand": ["product", "tiers"]})
+
+    def list_subscriptions(self, customer: str) -> list[dict[str, Any]]:
+        """The customer's subscriptions Stripe has not cancelled (Stripe's default list), walked to the end."""
+        out: list[dict[str, Any]] = []
+        params: dict[str, Any] = {"customer": customer, "limit": 100}
+        for _ in range(20):
+            page = self._call("GET", "/v1/subscriptions", params)
+            out.extend(page.get("data") or [])
+            if not page.get("has_more") or not page.get("data"):
+                return out
+            params = {**params, "starting_after": page["data"][-1]["id"]}
+        raise StripeUnavailableError("Stripe subscription list did not end after 20 pages")
+
+    def list_open_checkout_sessions(self, customer: str) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        params: dict[str, Any] = {"customer": customer, "status": "open", "limit": 100}
+        for _ in range(20):
+            page = self._call("GET", "/v1/checkout/sessions", params)
+            out.extend(page.get("data") or [])
+            if not page.get("has_more") or not page.get("data"):
+                return out
+            params = {**params, "starting_after": page["data"][-1]["id"]}
+        raise StripeUnavailableError("Stripe checkout session list did not end after 20 pages")
+
+    def expire_checkout_session(self, session_id: str) -> dict[str, Any]:
+        return self._call("POST", f"/v1/checkout/sessions/{urllib.parse.quote(session_id, safe='')}/expire", {},
+                          f"expire:{session_id}")
 
     def list_prices(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []

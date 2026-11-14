@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -30,7 +31,9 @@ from pathlib import Path
 
 import psycopg
 
+from .safelog import describe
 from .errors import ConsentVaultError
+from .urlguard import require_url, open_no_redirect
 from .ledger import HASH_VERSIONS as LEDGER_HASH_VERSIONS, _canon_value, canonical_dumps
 
 ENV_OPENSSL = "CONSENTVAULT_OPENSSL"
@@ -122,7 +125,7 @@ def seal_binds_event(row: dict, hash_version: int, columns, digest_hex: str) -> 
     if hash_version not in SEAL_HASH_VERSIONS or list(columns) != list(SEAL_HASH_VERSIONS[hash_version]):
         return False
     try:
-        return _digest_columns(row, columns).hex() == digest_hex
+        return hmac.compare_digest(_digest_columns(row, columns).hex(), str(digest_hex))
     except SealError:
         return False
 
@@ -199,7 +202,7 @@ def _run(args: list[str], what: str) -> str:
     try:
         r = subprocess.run(args, capture_output=True, text=True, timeout=OPENSSL_TIMEOUT_S)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise SealError(f"{what} could not run: {exc}") from exc
+        raise SealError(f"{what} could not run: {describe(exc)}") from exc
     if r.returncode != 0:
         raise SealError(f"{what} failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()[:300]}")
     return (r.stdout or "") + (r.stderr or "")
@@ -225,18 +228,19 @@ def _verify_reply(ossl: str, tsr: Path, digest_hex: str, query: Path | None) -> 
     try:
         out = _run(args, "verifying the timestamp reply")
     except SealError as exc:
-        raise TsaRefusedError(f"the timestamp reply does not verify: {exc}") from exc
+        raise TsaRefusedError(f"the timestamp reply does not verify: {describe(exc)}") from exc
     if "Verification: OK" not in out:
         raise TsaRefusedError("the timestamp reply did not verify: " + out.strip()[:200])
 
 
 def _post(tsa_url: str, body: bytes, retries: int, delay: float) -> bytes:
+    require_url(tsa_url, schemes=("http", "https"))  # RFC 3161 authorities are often plain http; the reply is signature-checked
     last: Exception | None = None
     for attempt in range(retries + 1):
         req = urllib.request.Request(
             tsa_url, data=body, method="POST", headers={"Content-Type": "application/timestamp-query"})
         try:
-            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
+            with open_no_redirect(req, timeout=HTTP_TIMEOUT_S, schemes=("http", "https")) as resp:
                 reply = resp.read()
                 if resp.status == 200 and reply:
                     return reply
@@ -247,7 +251,7 @@ def _post(tsa_url: str, body: bytes, retries: int, delay: float) -> bytes:
             time.sleep(delay * (2 ** attempt))
     raise TsaUnreachableError(
         f"timestamp authority {tsa_url} unreachable after {retries + 1} attempts "
-        f"({type(last).__name__}: {str(last)[:150]})") from last
+        f"({type(last).__name__}: {describe(last)[:150]})") from last
 
 
 def stamp(digest_hex: str, tsa_url: str, *, backoff: float | None = None,
@@ -315,7 +319,7 @@ def seal_pending(conn: psycopg.Connection, tsa_url: str, limit: int = 100, *,
                     "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                     (event_id, version, list(_columns_for(version)), d, tsa_url, token, gen_time))
         except psycopg.Error as exc:
-            raise SealError(f"could not store the seal for event {event_id}: {exc}") from exc
+            raise SealError(f"could not store the seal for event {event_id}: {describe(exc)}") from exc
         sealed.append(str(event_id))
     return sealed
 
@@ -359,11 +363,11 @@ def _verify_one(conn: psycopg.Connection, seal: dict, row: dict, max_delay: time
         if bad:
             return VerifyResult(eid, False, bad, sid, gen)
     except SealError as exc:
-        return VerifyResult(eid, False, str(exc), sid, gen)
+        return VerifyResult(eid, False, describe(exc), sid, gen)
     try:
         conn.execute("SELECT consentvault.mark_seal_verified(%s::uuid)", (sid,))
     except psycopg.Error as exc:
-        return VerifyResult(eid, False, f"verified, but verified_at could not be recorded: {exc}", sid, gen)
+        return VerifyResult(eid, False, f"verified, but verified_at could not be recorded: {describe(exc)}", sid, gen)
     return VerifyResult(eid, True, "verified", sid, gen)
 
 

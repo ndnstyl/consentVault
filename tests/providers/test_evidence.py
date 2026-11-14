@@ -47,6 +47,9 @@ class FakeS3:
         assert "host" not in headers
         path = url.split("://", 1)[1].split("/", 1)[1]
         if method == "PUT":
+            # S3 refuses (400 InvalidRequest) a write carrying an Object Lock retention without an integrity header.
+            if headers.get("x-amz-object-lock-mode") and not (headers.get("content-md5") or headers.get("x-amz-checksum-sha256")):
+                return 400, {}, b"<Error><Code>InvalidRequest</Code></Error>"
             if headers.get("if-none-match") == "*" and path in self.objects:
                 return 412, {}, b"<Error>PreconditionFailed</Error>"
             self.objects[path] = {
@@ -82,6 +85,33 @@ def test_s3_put_writes_compliance_lock_once_and_reads_back():
     assert "if-none-match" in hdrs["authorization"] and "x-amz-object-lock-mode" in hdrs["authorization"]
     assert store.get("org-a", "events/0001.bin") == b"payload"
     assert store.enforces_retention is True
+
+
+def test_s3_put_carries_the_integrity_headers_object_lock_requires():
+    import base64
+    import hashlib
+
+    fake = FakeS3()
+    store = S3ObjectLockEvidenceStore(endpoint="https://s3.example.com", bucket="evidence-bkt", region="us-east-1",
+                                      access_key="AK", secret_key="SK", transport=fake, clock=lambda: NOW)
+    store.put("org-a", "e/1.json", b"payload", retain_until=LATER)
+    _, _, headers, body = fake.requests[-1]
+    assert headers["content-md5"] == base64.b64encode(hashlib.md5(body).digest()).decode()
+    assert headers["x-amz-checksum-sha256"] == base64.b64encode(hashlib.sha256(body).digest()).decode()
+    assert "content-md5" in headers["authorization"] and "x-amz-checksum-sha256" in headers["authorization"]
+
+
+def test_s3_store_with_a_prefix_keeps_every_object_and_listing_under_it():
+    fake = FakeS3()
+    store = S3ObjectLockEvidenceStore(endpoint="https://s3.example.com", bucket="b-bkt", region="us-east-1",
+                                      access_key="AK", secret_key="SK", transport=fake, clock=lambda: NOW, prefix="anchors")
+    store.put("org-a", "x/1.json", b"d", retain_until=LATER)
+    assert fake.requests[-1][1] == "https://s3.example.com/b-bkt/anchors/org-a/x/1.json"
+    assert store.get("org-a", "x/1.json") == b"d"
+    for bad in ("", "../x", "a/../b", "/abs"):
+        with pytest.raises(ProviderConfigError):
+            S3ObjectLockEvidenceStore(endpoint="https://s3.example.com", bucket="b-bkt", region="us-east-1",
+                                      access_key="AK", secret_key="SK", transport=fake, prefix=bad)
 
 
 def test_s3_overwrite_refused():

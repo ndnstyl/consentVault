@@ -15,6 +15,15 @@ from consentvault.tenancy.tokens import mint_org_token, org_transaction
 from .harness import make_login_role
 
 
+@pytest.fixture(autouse=True)
+def no_records_tables(monkeypatch):
+    """This suite runs on a partial schema that has no contact-record tables, so the writer that fills them is switched off here
+    and nowhere else."""
+    monkeypatch.setattr("consentvault.records.write_event_records", lambda *a, **k: "00000000-0000-0000-0000-000000000000")
+    monkeypatch.setattr("consentvault.confirmations.enqueue_confirmation_intents", lambda *a, **k: 0)  # no confirmation tables here
+    monkeypatch.setattr("consentvault.sync.outbox._echo_targets", lambda conn: set())  # no connector migration here
+
+
 @pytest.fixture
 def dsn(raw_dsn):
     apply_billing_schema(raw_dsn)

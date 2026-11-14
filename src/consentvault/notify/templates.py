@@ -22,26 +22,39 @@ _PHONE_BARE = re.compile(r"\+?\d{10,15}")
 _URL = re.compile(r"https?://\S+")
 
 
+# C0 controls (CR, LF and TAB included), DEL, C1 controls and the Unicode line and paragraph separators: none may reach a
+# subject or a header field, where a line break starts a new header. Every variable is a single-line value.
+_CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+def refuse_control(what: str, value: str, error: type[Exception] = NotifyRefused) -> str:
+    """``value`` unchanged, or ``error`` naming ``what`` when it holds a control character (CR and LF included)."""
+    if _CONTROL.search(str(value)):
+        raise error(f"{what} contains a control character (a line break or another); refused before any send")
+    return value
+
+
 def check_variable(name: str, value: str) -> None:
     text = str(value)
+    refuse_control(f"template variable '{name}'", text)
     if _URL.fullmatch(text):
         return
     if _EMAIL.search(text):
-        raise NotifyRefused(f"template variable '{name}' looks like an email address")
+        raise NotifyRefused(f"template variable '{name}' looks like an email address", code='notify_variable_looks_like_email')
     if _PHONE_BARE.fullmatch(text.replace(" ", "")) or _PHONE_FORMATTED.search(text):
-        raise NotifyRefused(f"template variable '{name}' looks like a phone number")
+        raise NotifyRefused(f"template variable '{name}' looks like a phone number", code='notify_variable_looks_like_phone')
 
 
 def _inv_check(template: str, variables: dict) -> dict[str, str]:
     if template not in TEMPLATE_TYPES:
-        raise NotifyRefused(f"unknown template '{template}'")
+        raise NotifyRefused(f"unknown template '{template}'", code='notify_unknown_template')
     allowed = VARIABLES[template]
     extra = sorted(set(variables) - set(allowed))
     if extra:
-        raise NotifyRefused(f"template '{template}' does not take variable '{extra[0]}'")
+        raise NotifyRefused(f"template '{template}' does not take variable '{extra[0]}'", code='notify_unexpected_variable')
     missing = [k for k in allowed if k not in variables or str(variables[k]).strip() == ""]
     if missing:
-        raise NotifyRefused(f"template '{template}' is missing variable '{missing[0]}'")
+        raise NotifyRefused(f"template '{template}' is missing variable '{missing[0]}'", code='notify_missing_variable')
     clean = {k: str(v) for k, v in variables.items()}
     for k, v in clean.items():
         check_variable(k, v)
@@ -87,7 +100,7 @@ _FOOT = "ConsentVault, consentvault.ai. This is a service message about your acc
 def render(template: str, variables: dict) -> tuple[str, str, str]:
     """Return (subject, text, html). Raises NotifyRefused on any bad template or variable."""
     clean = _inv_check(template, variables)
-    subject = _SUBJECT[template].format(**clean)
+    subject = refuse_control("the subject", _SUBJECT[template].format(**clean))
     text = _TEXT[template].format(**clean) + "\n" + _FOOT + "\n"
     esc = {k: escape(v, quote=True) for k, v in clean.items()}
     body = _TEXT[template].format(**esc)

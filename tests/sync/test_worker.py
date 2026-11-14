@@ -1,6 +1,7 @@
 """The worker: ordering, supersede, retry with backoff, poison, dead, redrive, idempotency, loud failure."""
 
 import json
+import time
 import uuid
 from datetime import timedelta
 
@@ -19,19 +20,19 @@ from .support import PHONES, of
 P1, P2, P3 = PHONES[0], PHONES[1], PHONES[2]
 
 
-def _claim(env, org, limit=50, lease=60, now=None):
+def _claim(env, org, limit=50, lease=60):
     with env.worker_conn() as w:
         token = env.dispatch(w, org)
-        with org_transaction(w, token):
-            return w.execute("SELECT * FROM consentvault.sync_claim(%s, %s, %s)", (limit, lease, now or env.clock())).fetchall()
+        with org_transaction(w, token):   # the database's clock decides what is due
+            return w.execute("SELECT * FROM consentvault.sync_claim(%s, %s)", (limit, lease)).fetchall()
 
 
-def _complete(env, org, row, outcome="acknowledged", status=200, cls=None, next_at=None):
+def _complete(env, org, row, outcome="acknowledged", status=200, cls=None, backoff=None):
     with env.worker_conn() as w:
         token = env.dispatch(w, org)
-        with org_transaction(w, token):
-            return w.execute("SELECT consentvault.sync_complete(%s, %s, %s, %s, %s, NULL, %s, %s) AS f",
-                             (row["outbox_id"], row["attempt"], outcome, status, cls, next_at, env.clock())).fetchone()["f"]
+        with org_transaction(w, token):   # a retry passes its step; the database decides the time
+            return w.execute("SELECT consentvault.sync_complete(%s, %s, %s, %s, %s, NULL, %s) AS f",
+                             (row["outbox_id"], row["attempt"], outcome, status, cls, backoff)).fetchone()["f"]
 
 
 def test_a_push_is_signed_acknowledged_and_idempotent(env):
@@ -214,8 +215,7 @@ def test_a_failed_older_push_is_superseded_not_retried_when_a_newer_state_exists
     env.grant(a, P1)
     rows = _claim(env, a)  # version 1 in flight
     env.stop(a, P1)  # version 2 queued behind it
-    assert _complete(env, a, rows[0], outcome="retry", status=503, cls="http_5xx",
-                     next_at=env.clock() + timedelta(seconds=30)) == "superseded"
+    assert _complete(env, a, rows[0], outcome="retry", status=503, cls="http_5xx", backoff=30) == "superseded"
     env.run_worker()
     sent = env.transport.to(s.endpoint)
     assert [json.loads(r.body)["version"] for r in sent] == [2]
@@ -355,7 +355,7 @@ def test_a_missing_credential_is_a_named_error(env):
     s = env.add_system(a, "crm")
     env.q("UPDATE consentvault.connected_system SET credentials_ct = '\\x00'::bytea WHERE system_id = %s", (s.system_id,))
     env.grant(a, P1)
-    with pytest.raises(WorkerError, match="cannot be opened"):
+    with pytest.raises(WorkerError, match=r"CredentialError \(code credential_unopenable\)"):  # the cause, by class and code
         env.run_worker()
     assert env.outbox(a)[0]["status"] == "failed"  # counted as an attempt (second-wave review)
 
@@ -440,11 +440,11 @@ def test_a_redriven_push_gets_a_fresh_retry_window(env):
     env.transport.script(s.endpoint, 400)
     env.grant(a, P1)
     env.run_worker()
+    # the first window ended long ago (five hours, on the database's clock, which stamps push starts)
+    env.q("UPDATE consentvault.outbox SET window_start = window_start - interval '5 hours' WHERE org_id = %s", (a.org_id,))
     before = env.outbox(a)[0]["window_start"]
-    env.clock.advance(hours=5)
     _redrive(env, a, s)
     assert env.outbox(a)[0]["window_start"] > before
-    env.q("UPDATE consentvault.outbox SET window_start = %s WHERE org_id = %s", (env.clock(), a.org_id))  # the database clock, moved with the test's
     env.transport.script(s.endpoint, 503)
     env.run_worker()
     assert env.outbox(a)[0]["status"] == "failed"  # not dead at once: the window restarted at the redrive
@@ -531,7 +531,9 @@ def test_the_loop_runs_until_stopped_and_logs_a_failed_pass(env, caplog):
     worker = env.make_worker()
     with caplog.at_level("ERROR", logger="consentvault.sync"):
         worker.run_loop(connect, stop, interval_seconds=0)
-    assert "the database is down" in caplog.text
+    # the failure is logged loudly by its class; the exception's own text is free text and never reaches a log line (safelog)
+    assert any(r.levelname == "ERROR" and "error=WorkerError" in r.getMessage() for r in caplog.records)
+    assert "the database is down" not in caplog.text
     assert env.outbox(a)[0]["status"] == "acknowledged"
 
 
@@ -557,7 +559,7 @@ def test_concurrent_workers_never_double_claim_and_never_skip_ahead(env):
                 barrier.wait(timeout=30)
                 for _ in range(3):
                     with org_transaction(w, token):
-                        claimed.extend(w.execute("SELECT * FROM consentvault.sync_claim(2, 60, %s)", (env.clock(),)).fetchall())
+                        claimed.extend(w.execute("SELECT * FROM consentvault.sync_claim(2, 60)").fetchall())
         except Exception as exc:  # reported through the list so the main thread asserts it
             errors.append(repr(exc))
 
@@ -725,3 +727,64 @@ def test_the_pool_size_is_bounded():
     for bad in (0, 65):
         with pytest.raises(WorkerError, match="max_parallel_orgs"):
             WorkerConfig(max_parallel_orgs=bad)
+
+
+def test_the_backoff_counts_from_the_attempt_however_long_the_push_takes(env):
+    """The wait between attempts is exactly the backoff from the attempt the claim stamped, even when the push itself takes
+    five seconds (once measured from the clock read after the push, the push's own time leaked into the delay)."""
+    a = env.t.a
+    s = env.add_system(a, "crm")
+    env.transport.script(s.endpoint, 503)
+    real_send = env.transport.send
+
+    def slow_send(request):
+        env.clock.advance(seconds=5)  # the push takes five seconds by the injected clock
+        return real_send(request)
+    env.transport.send = slow_send
+    env.grant(a, P1)
+    env.run_worker()
+    row = env.outbox(a)[0]
+    assert row["status"] == "failed" and (row["next_attempt_at"] - row["last_attempt_at"]).total_seconds() == 30
+
+
+def test_each_push_in_a_batch_is_stamped_when_it_starts_and_waits_exactly_the_backoff_from_there(env):
+    """Two pushes claimed together; the first takes 0.3 seconds. The second is stamped (on the database's clock) when its own push
+    starts (at least 0.3 seconds after the first), so its delay is exactly the backoff, not short by the first push's time."""
+    a = env.t.a
+    s = env.add_system(a, "crm")
+    env.transport.script(s.endpoint, 503, 503)
+    real_send, seen = env.transport.send, []
+
+    def first_is_slow(request):
+        if not seen:
+            time.sleep(0.3)
+        seen.append(1)
+        return real_send(request)
+    env.transport.send = first_is_slow
+    env.grant(a, P1)
+    env.grant(a, P2)
+    env.run_worker()
+    rows = sorted(env.outbox(a), key=lambda r: r["last_attempt_at"])
+    assert [r["status"] for r in rows] == ["failed", "failed"] and len(seen) == 2
+    assert [(r["next_attempt_at"] - r["last_attempt_at"]).total_seconds() for r in rows] == [30, 30]
+    assert (rows[1]["last_attempt_at"] - rows[0]["last_attempt_at"]).total_seconds() >= 0.3
+
+
+def test_a_row_another_worker_took_before_its_push_started_is_counted_stale_not_a_failed_run(env):
+    """Worker one claims a row; before its push starts its lease runs out and worker two claims and delivers it. Worker one's
+    push-start stamp is refused by the database (the attempt is no longer open): that row is counted stale and the run goes on."""
+    a = env.t.a
+    env.add_system(a, "crm")
+    env.grant(a, P1)
+    first = env.make_worker()
+    real_deliver, second = first._deliver, []
+
+    def taken_before_the_push(conn, token, org_id, row, report):
+        env.clock.advance(seconds=env.config.lease_seconds + 1)  # worker one's lease runs out
+        second.append(env.run_worker())  # worker two claims the row and delivers it
+        return real_deliver(conn, token, org_id, row, report)
+    first._deliver = taken_before_the_push
+    with env.worker_conn() as w:
+        rep = first.run_once(w)
+    assert of(rep, a).stale == 1 and of(second[0], a).acknowledged == 1
+    assert len(env.transport.sent) == 1 and env.outbox(a)[0]["status"] == "acknowledged"

@@ -17,9 +17,11 @@ from consentvault.providers.keys import LocalFileKeyProvider
 from consentvault.tenancy import admin
 from consentvault.tenancy.admin_routes import AdminApp, Request
 from consentvault.tenancy.session import SessionMinter
-from consentvault.tenancy.tokens import TokenKey
+from consentvault.tenancy.tokens import TokenKey, token_expires_at
 
 ISSUER = "https://idp.example.com"
+
+REFRESH_LEAD_SECONDS = 30
 
 
 class FakeIdentity:
@@ -73,9 +75,24 @@ class Person:
     subject: str
     member_id: str
     token: str
+    minted: str | None = None  # the tenant token sign_in chose; kept fresh the way the portal edge keeps it (gateway.ts)
+
+    def _fresh_token(self) -> str:
+        """The portal edge re-chooses the organization when its tenant token has under 30 seconds left (REFRESH_LEAD_SECONDS in
+        edge/src/gateway.ts), so a signed-in person's token never runs out under them however long a test takes. Only the token
+        sign_in minted is refreshed: a token a test set by hand is sent exactly as set."""
+        if self.minted is None or self.token != self.minted:
+            return self.token
+        if (token_expires_at(self.token) - datetime.now(timezone.utc)).total_seconds() >= REFRESH_LEAD_SECONDS:
+            return self.token
+        with self.vault.appconn() as c:
+            s = self.vault.sessions.choose_org(c, self.vault.idp.issue(self.subject, self.email), self.org_id,
+                                               request_id="req-refresh")
+        self.token = self.minted = s.token
+        return self.token
 
     def call(self, method, path, query=None, body=None):
-        return self.vault.app.handle(Request(method, path, query or {}, body, tenant_token=self.token,
+        return self.vault.app.handle(Request(method, path, query or {}, body, tenant_token=self._fresh_token(),
                                              request_id="req-" + uuid.uuid4().hex[:8]))
 
     def ok(self, method, path, query=None, body=None):
@@ -106,6 +123,7 @@ class Vault:
     app: AdminApp
     people: int = 0
     migrator_dsn: str = ""
+    records_jobs_dsn: str = ""  # the login the records export worker runs as (a member of consentvault_records_jobs)
 
     def operator(self) -> psycopg.Connection:
         """The operator console's login (a member of consentvault_console); owns nothing."""
@@ -139,7 +157,7 @@ class Vault:
         idt = self.idp.issue(subject, email)
         with self.appconn() as c:
             s = self.sessions.choose_org(c, idt, org_id, request_id="req-signin")
-        return Person(self, org_id, s.role, email, subject, s.member_id, s.token)
+        return Person(self, org_id, s.role, email, subject, s.member_id, s.token, s.token)
 
     def org_with_admin(self, name: str, email: str, **kw) -> tuple[dict, Person]:
         org = self.create_org(name, email, **kw)

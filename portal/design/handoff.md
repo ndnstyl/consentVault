@@ -2,7 +2,7 @@
 
 Status: written against the low-fidelity wireframes and the live site tokens. **Hi-fi review is pending**: when
 web-designer delivers screens, ui-ux reviews them against this file and lists every divergence, then this file is
-re-issued. Build target: `/Users/oxfloors/debwe/portal/` (Next.js static export, same design system as consentvault.ai).
+re-issued. Build target: `portal/` (Next.js static export, same design system as consentvault.ai).
 
 Companion files in this folder: `ia.md` (routes), `flows.md`, `roles.md`, `copy-rules.md`, `accessibility.md`,
 `contract-gaps.md`, `ux-audit.md`, `wireframes/*.html` (every state), `wireframes/README.md`.
@@ -156,7 +156,7 @@ ARIA · acceptance criteria.
   wording fingerprint; site-key and server-token variants in tabs), `LiveStatus`.
 - Data: prerequisites as 05; arrival **gap B19**; refusals from contracts/capture.md and the core's `docs/api.md`.
 - The snippet body uses the core's field names: `contact, event_type, channels, purposes, checked, brand_ids,
-  disclosure_sha256, source_id` (`/Users/oxfloors/debwe/docs/api.md` lines 22-37; capture.md).
+  disclosure_sha256, source_id` (`docs/api.md` lines 22-37; capture.md).
 - AC: 06-1 Copy button puts the exact snippet text on the clipboard. 06-2 With no wording fixture, the page shows
   "Two steps come first" (or the count that applies) and a "Register your consent wording" button. 06-3 When the
   arrival fixture flips to an unsealed event, the status region text becomes "Event received at ..." within one poll.
@@ -332,7 +332,7 @@ ARIA · acceptance criteria.
 
 ## Component inventory
 
-Existing (adapt from the site; file paths under `/Users/oxfloors/brain/projects/consentVault/site/src/`):
+Existing (adapt from the site; file paths under the marketing site's `src/`):
 
 | Component | Source | Change |
 |---|---|---|
@@ -396,3 +396,241 @@ New (props and states):
 6. Does an invitation bind to the invited email address? Recommended: yes; a different signed-in address gets the
    "wrong account" state.
 7. Who issues the credential that may claim a verified contact point? Recommended: the operator only, never the portal.
+
+---
+
+## Additions 2026-10-30: Records, Setup walkthrough, Confirmation messages
+
+Written against low-fidelity wireframes 23, 24, 25 (hi-fi pending, same review rule as the rest of this file). Contracts
+are **proposed**: `contracts/records.md`, `contracts/confirmations.md`, and contract-gaps.md section F. Until accepted,
+build behind flags `gap_records`, `gap_setup`, `gap_confirmations`; a flagged region renders its partial state.
+
+### 23 Records
+- Route `/records`. Filters live in the query string (`channel, status, purpose, has_stop, source_id, date_field, from,
+  to, trial, sort`) so a filtered view can be bookmarked; a contact point is never in the URL. Roles: admin, compliance
+  viewer (masked, reveal on request), developer (fingerprints, rows not links, no search, reveal or export).
+- States and triggers: loading (first fetch); empty: no records yet (`total: 0` with no filters); empty: no match (`items:
+  []` with filters); partial: `partial` contains `contact_mask` (contact column "Not available", banner), summary failed
+  (tiles "Not available", chart replaced by the named banner), `total: null` ("Showing 1 to 50. Total not available.");
+  error: list failed; error: `audit_unavailable` (no rows shown); reveal confirm (first reveal in a session); revealed;
+  search found; search no record; developer view; export dialog, building, ready, failed, `export_too_large`;
+  suspended (export disabled with reason); role refused (developer deep link to an export).
+- Components: `AppShell`, `Tile` x3, new `BarChart`, new `ShareBar`, `FilterBar`, new `ContactSearch` (from
+  `ContactInput`), new `RevealToggle`, `DataTable` (card collapse under 760px), `EvidenceStatusChip`, `Pager`,
+  `ConfirmDialog`, new `ExportDialog`, `LiveStatus` (export progress), `StatusBanner`.
+- Data: tiles `GET /v1/records/summary` (`total`, `new_in_range`, `with_stop`); chart `new_per_day` with `tz` = viewer's
+  zone; share bars `by_channel` (Call = voice plus artificial_voice summed per status); table `GET /v1/records`;
+  confirmation column `record.confirmation`; reveal `POST /v1/records:reveal` with the current page's `record_id`s;
+  search `POST /v1/records:search`; export `POST /v1/records/exports` then poll `GET /v1/records/exports/{id}` every 3 s.
+  All fetched, not realtime; "as of" time shown under the tiles.
+- Name and Company columns (admin, compliance viewer) from `record.person`: "Not captured" when never sent, "Not
+  available" when `partial` names `person`. Developers get neither column. Neither is filterable or searchable.
+- Table cells: Email, Text, Call show one chip per channel: with a purpose filter, that purpose's status; without, the
+  counts "Consent record found (2)" and "Stop on record (1)" side by side, stop first. Never a policy action.
+- Reveal: toggle off on every new session. While on, each page fetch is followed by one reveal call; the banner shows the
+  audit time. Turning it off clears revealed values from memory and the DOM.
+- Keyboard and focus: tab order is tiles' links, chart table disclosure, filters left to right, Clear filters, search
+  input, Find, reveal switch, Export, table rows (the contact cell is the link), pager. Changing a filter keeps focus on
+  that control and announces "312 records" through a polite live region. After search, focus moves to the result banner.
+- ARIA: chart is `role="img"` with an `aria-label` naming range and peak, and a `<details>` table; share bars `role="img"`
+  with all four percentages in the label and the same numbers in visible text; reveal is `role="switch"`; patterns, not
+  shade alone, separate statuses.
+- AC: 23-1 With the records fixture, the URL after any filter change contains no `@` and no run of 7 or more digits.
+  23-2 A summary failure renders "Not available" in each tile and never "0". 23-3 `partial: ["contact_mask"]` renders
+  "Not available" in every contact cell and still renders every stop chip. 23-4 An `audit_unavailable` list answer renders
+  no table rows. 23-5 Turning on reveal calls `POST /v1/records:reveal` once with exactly the visible page's ids; turning
+  it off removes every full contact point from the DOM. 23-6 Developer fixture: no search box, no reveal switch, no export
+  button, contact cells contain a fingerprint and are not links. 23-7 Search sends the contact in the body; the URL is
+  unchanged. 23-8 A row link goes to `/evidence?record=<record_id>`. 23-9 Export with "Full" selected and an empty reason
+  shows the inline error and sends nothing. 23-10 At 375px, `document.documentElement.scrollWidth` equals the viewport
+  width. 23-11 Each status chip carries its text label; the share bars carry three visible percentages (found, stop, no
+record) and no "Record incomplete" anywhere on the screen. 23-12 Developer fixture: no Name or
+Company column and no name or company string anywhere in the DOM. 23-13 `partial: ["person"]` renders "Not available"
+in Name and Company and still renders every row. 23-14 An erased fixture row reads "Erased" in Contact, Name and
+Company and keeps its stop chip. 23-15 A search for "555-01" shows the inline invalid-contact error and sends no request.
+23-16 A 429 from search or reveal shows the rate-limit banner with the wait time and leaves masked values in place.
+23-17 A list fixture with names writes nothing to the DOM for a developer. (Name and company now read with the display
+key; screen 13 opened by record id shows the masked contact and a "Show full contact point" button that calls reveal.)
+
+### 24 Setup walkthrough
+- Route `/setup`, `/setup?step=<brand|source|wording|credential|first_event|policy|system|confirmations>`. Roles: admin,
+  developer; compliance viewer gets the role refusal with a link to the overview.
+- States and triggers: empty (welcome: no step done, reached from 02 success); loading; default (resumed at
+  `current_step`, "Welcome back" when any step is done); step success; step error (the step endpoint's named error, form
+  kept); waiting (step 5 polling); partial (a step in `partial`: "Not available", Check again, other steps usable);
+  blocked (`blocked_reason: org_suspended` or a prerequisite); developer view (admin steps "Waiting on an admin"); skip
+  dialog; error (setup read failed); role refused; success (complete, skipped steps listed with "Turn on").
+- Components: new `SetupRail` (`steps[], current, onSelect`; under 760px a select), the existing step components in a
+  `mode="setup"` prop that hides the page heading and shows Back, Skip for now (optional steps only), primary, Leave
+  setup. Step 6 opens the policy editor in setup mode and returns to `/setup?step=system` after approval.
+- Data: `GET /v1/setup` on load and after every step write (contracts/setup.md); each step writes through its own
+  screen's endpoint (07, 08, 10, 09, 06, 11, 15, 25); skip `POST /v1/setup/steps/{step}:skip`.
+- Screen 05 change: `SetupChecklist` reads `GET /v1/setup` and lists the same 8 steps (optional ones marked); its primary
+  button reads "Resume setup: <step label>" and opens `/setup?step=<current_step>`. AC 05-1 becomes "8 items".
+- Keyboard and focus: on step change, focus moves to the step heading (`h2`); the rail is an ordered list of links with
+  `aria-current="step"`; the live status in step 5 is `aria-live="polite"`.
+- AC: 24-1 Loading `/setup` with a fixture where steps 1 and 2 are done opens step 3. 24-2 Reloading after step 3
+  succeeds opens step 4 (no client storage involved: clearing storage gives the same result). 24-3 Skip appears only on
+  steps 7 and 8. 24-4 Developer fixture shows "Waiting on an admin" on steps 3, 6 and 8 and no form on them. 24-5 A
+  `partial: ["credential"]` fixture shows "Not available" on step 4 and never "Done". 24-6 Compliance viewer gets the role
+  refusal with a link to `/`. 24-7 Overview checklist and setup rail show the same status for every step on one fixture.
+
+### 25 Confirmation messages
+- Route `/confirmations`, `/confirmations/[source_id]/[channel]` (edit). Roles per roles.md additions.
+- States and triggers: loading; empty (no sending account); default; texts off (`texting_registration.status:
+  not_marked`, text toggles `aria-disabled` with the reason as visible text); registration dialog; edit with preview;
+  saved; replies to read; partial (any `counts` field null, opt-out check failed); alarm (opt-out check added stops);
+  error (settings read failed); sending account failing; suspended; developer read-only; role refused.
+- Components: `Tile` x4, new `Toggle` (`role="switch"`), `DataTable`, new `TemplateEditor` (editable fields plus locked
+  fixed parts rendered from `:preview`), new `MessagePreview` (email and text, characters and segments), `ConfirmDialog`
+  (registration statement, record a stop with reason), `StatusBanner`.
+- Data: tiles and toggles `GET /v1/confirmations/settings` and `/rules`; preview `POST /v1/confirmations:preview` on
+  field change (debounced 400 ms); activity `GET /v1/confirmations/sends?limit=5`; replies
+  `GET /v1/confirmations/replies?state=to_read`; all fetched.
+- Screen 13 change: the timeline adds contact log entries (Confirmation sent, Not sent: reason, Reply, Stop from a reply)
+  from `contact_log`, each with its seal chip and "Show the exact text" (A, V).
+- Keyboard and focus: toggles operate with Space; a disabled toggle stays focusable and its reason is its description
+  (`aria-describedby`). Dialog focus starts on the first field and returns to the opener.
+- Revised 2026-10-30 (compliance gate and design review). Added states: connect text provider (four steps, waiting
+  for test reply, test reply arrived, no test reply in 15 minutes), wording link host, withdraw registration, disconnect
+  account, undelivered sends, replies unread over 24 hours, inbound signature alarm,
+  public email stop page. Text messages are fixed text (no editor for text). The registration dialog shows all four fixed
+  texts and needs both boxes ticked. Activity filter offers Sent, Sent delivered, Retrying, Undelivered, Not sent.
+- AC: 25-8 With the text account `awaiting_test_reply`, every text toggle is `aria-disabled` with "no test reply has
+  reached ConsentVault". 25-9 The text preview contains "Msg frequency varies. Msg & data rates may apply." and the
+  agreement time with zone, and no input field. 25-10 No email preview contains "reply STOP". 25-11 The stop page shows
+  two buttons, "Stop email" and "Stop everything". 25-12 The record-a-stop dialog names texts, calls and AI-voice calls
+  and says email is not affected. 25-13 Every link in a preview uses the organization's link host, never a ConsentVault
+  host. 25-14 A replies fixture with one reply older than 24 hours renders the alarm banner. 25-15 A disconnect answered
+  `inbound_still_pointed_here` renders the named error and the account stays connected. 25-16 A START refused fixture
+  shows the cause in plain words and the contact-us reply, never "sign up again". 25-17 With `provider_replies.stop`
+  true, the activity row reads "Opt-out reply sent by Twilio". Twilio is the first provider in the connect picker. 25-18 The Twilio connect form asks for an API key SID and secret for sending and the auth token labelled "signature checks only". 25-19 No copy anywhere says ConsentVault reads Twilio's opt-out settings or list.
+- AC: 25-1 With `not_marked`, every text toggle has `aria-disabled="true"` and the visible reason. 25-2 Mark complete is
+  disabled until the statement box is ticked. 25-3 The template editor offers only subject and opening line; the fixed
+  parts render read only from the preview and have no input. 25-4 A null `counts.to_read` renders "Not
+  available". 25-5 A provider-refusal fixture (Twilio 21610) renders the alarm banner naming the count and records a stop. 25-6 Developer fixture shows no
+  reply text. 25-7 Record a stop needs a reason before the button enables.
+
+### Component inventory additions
+
+| Component | Props | States |
+|---|---|---|
+| `BarChart` | `series[{date,count}], label, tableCaption` | loading, failed (named banner), reduced motion static |
+| `ShareBar` | `channel, counts{found,stop,incomplete,none}` | missing (Not available) |
+| `ContactSearch` | `onFind` | invalid phone, invalid email, found, none |
+| `RevealToggle` | `on, onChange` | off, confirming, on, failed (returns to off) |
+| `ExportDialog` | `count, onBuild` | reason required for full, building, ready, failed, too large |
+| `SetupRail` | `steps[], current` | each step status; select under 760px |
+| `Toggle` | `checked, disabled, reason` | on, off, disabled with reason |
+| `TemplateEditor` | `template, fixedParts` | editing, invalid, saving |
+| `MessagePreview` | `channel, rendered` | loading, failed |
+
+### Not in scope (these additions)
+- Loading earlier website signups recorded before the vault existed (they would carry today's receipt time).
+- Model reading of replies: replies that are not a keyword always go to a person.
+- Quiet hours for confirmations (they go out within minutes of the person's own submission or not at all).
+- A people view joining several contact points into one person, beyond the linked-record count.
+- Search or filter by name or company (both are encrypted per contact).
+- A START reply turning texts back on (recorded, changes nothing).
+
+### Owner rulings 2026-10-30 (applied above and in both contracts)
+8. Confirmations send from the customer's own email domain and texting number, never ConsentVault's.
+9. A stop word in a reply to a text stops texts, calls and AI-voice calls; email keeps its own consent. Not a setting.
+   (Compliance gate 2026-10-30 overrides the earlier "texts only" ruling.)
+10. Texts link to the full wording page and never include the wording. Email carries it in full.
+11. Records show name and company when captured, encrypted under the contact's own key and erased with it; developers
+    never see them. Capture gains two optional fields (records.md section 9).
+12. Confirmations cost nothing extra: each recorded confirmation counts as one normal event; message cost sits on the
+    customer's own accounts.
+
+### Superseded open questions (kept for the record)
+8. Who sends confirmation messages? Recommended: the organization's own connected email and text accounts, so messages
+   leave under its identity and its texting registration; launch with Amazon SES or Postmark, and Twilio.
+9. What does a STOP reply stop by default? Recommended: texts only, all purposes, matching the site's wording "Reply
+   STOP to opt out of texts"; the organization can widen it.
+10. Should a confirmation text carry the full wording or a link to it? Recommended: a link to the agreed-wording page;
+    the full wording runs to about seven text segments. Email always carries it in full.
+11. Should the vault hold names and company for the Records list? Recommended: no; it keeps contact points only and the
+    owner reads names in the CRM.
+12. How are confirmation messages charged? Recommended: counted as usage, included up to a plan amount.
+
+---
+
+## Build handoff list (Records, Setup walkthrough, Confirmation messages), in build order
+
+Contracts of record: the cloud contracts for records, confirmations and setup, with amendments in the auth and
+billing contracts and the contracts index. Migration numbers are the next
+free ones at build time; renumber if taken. Every migration ships with its down file.
+
+### 1. Migrations
+1. `migrations/0029_records.sql`: tables `record` (never rebuilt, never deleted; one active row per
+   fingerprint), `record_index` (derived, rebuildable), `record_display` (name and company under the display key, never
+   hashed), `org_display_key` (wrapped by the org key), `org_alarm` (every feature's alarms); owner-rights functions `record_upsert`, `record_index_refresh`,
+   `record_display_write`, `record_index_set_confirmation`, `record_index_rebuild`, modelled on `sync_advance_state`
+   (`0004_sync.sql` line 201); redefinition of `consentvault.erase_contact(text)` (defined in `0014_erasure_holds.sql`
+   line 213) to delete the display row, null `mask_ct` and set `record.erased_at`. Rebuild the security manifest with
+   `scripts/build_security_manifest.py` and pass `--check` in the same change. (records.md 8, 9)
+2. `migrations/0030_confirmations.sql`: `confirmation_send_intent` (unique on organization,
+   fingerprint, channel and basis event), `confirmation_send`, `confirmation_send_status`, `confirmation_reply`,
+   `confirmation_settings`, `confirmation_rule`, `confirmation_template`, `sending_account`, `confirmation_connect_test`, `confirmation_inbound_seen`
+   (unique on organization, provider and provider message id), and the dated area code to single time zone table.
+   (confirmations.md)
+3. `migrations/0031_setup.sql`: `setup_step_skip`. (setup.md)
+4. Later, before any message is called sealed: a migration adding `basis_event_id` and `message_sha256` to `contact_log`
+   and joining it to the chain (core change C3).
+
+### 2. Core changes (this open-source repository), in order
+1. **K1** display key: `src/consentvault/tenancy/keys_adapter.py` (`new_display_key`, `display_key`, loader scope
+   `worker:display_key`), `src/consentvault/tenancy/key_rotation.py` (`display_key` in `CENSUS_KINDS`, re-wrap beside the
+   fingerprint secret), organization creation.
+2. **P1** `src/consentvault/tenancy/pipeline.py`: `parse_capture` strips and validates `display` before the unknown-field
+   check; the stored and hashed body is the canonical JSON of the rest (records.md section 9).
+3. **R1** `src/consentvault/ledger.py`: `record_tenant_event` takes `display`, and beside `enqueue_event_pushes` calls the
+   records functions (Python wrappers in new `src/consentvault/records.py`) and `enqueue_confirmation_intents` (new
+   `src/consentvault/confirm/intents.py`), all in the event's transaction; `src/consentvault/capture.py`
+   `tenant_capture` passes `display` through.
+4. **C4** `src/consentvault/gate.py`: `record_tenant_contact` (fingerprint plus `contact_ct` by `encrypt_field`, bound by
+   `field_aad`; the confirmations service's `capture_verified` token; no `INSERT ... RETURNING`).
+5. **C2** `src/consentvault/release.py`: both `quiet_broken` queries ignore rows with `recorded_by = 'confirmations'`.
+6. Confirmations service writes stops through `record_tenant_event` and START through `tenant_capture` with
+   `checked: true`, in process inside `org_transaction`, never through the capture pipeline (confirmations.md section 7).
+7. **S1** `src/consentvault/stopwords.py`: `start` only for a message that is exactly START, UNSTOP or YES; a start word
+   with other words is `needs_review` (confirmations.md section 10).
+8. **C3** contact log sealing: the migration in 1.4, `src/consentvault/seal.py`, `src/consentvault/proof.py`.
+
+### 3. Cloud contract changes outside the new files
+1. Capture: proof-export.md, capture.md, members.md and admin.md carry their 2026-10-30 amendments (applied in those files).
+2. `POST /v1/proof` and `POST /v1/exports` accept `{record_id}`; by record id the proof returns the masked contact only.
+3. `GET /v1/audit` items gain an optional `detail` object; new audit actions from records.md, confirmations.md, setup.md.
+4. auth.md: portal scope `records_read`; developer and compliance viewer rows as amended.
+5. billing.md: `contact_log` rows with `recorded_by = 'confirmations'` count as events; skips and retries do not.
+6. admin.md: one operator-issued `capture_verified` credential per organization for the confirmations service.
+7. `GET /v1/health`: confirmation counts (contract-gaps.md row F7).
+
+### 4. Endpoints, in build order
+1. Setup: `GET /v1/setup`, `POST /v1/setup/steps/{step}:skip`, `POST /v1/setup/steps/{step}:unskip`.
+2. Records: `GET /v1/records`, `GET /v1/records/summary`, `POST /v1/records:search`, `POST /v1/records:reveal`,
+   `POST /v1/records/exports`, `GET /v1/records/exports`, `GET /v1/records/exports/{export_id}`,
+   `POST /v1/records/exports/{export_id}:link`.
+3. Confirmations, configuration: `GET` and `PUT /v1/confirmations/settings`, `POST /v1/confirmations/sending-accounts`,
+   `POST /v1/confirmations/sending-accounts/{id}:check`, `DELETE /v1/confirmations/sending-accounts/{id}`,
+   `POST /v1/confirmations/link-host`, `POST /v1/confirmations/link-host:verify`,
+   `POST /v1/confirmations/texting-registration`, `POST /v1/confirmations/texting-registration:withdraw`,
+   `GET /v1/confirmations/rules`, `PUT /v1/confirmations/rules/{source_id}/{channel}`, `GET /v1/confirmations/templates`,
+   `GET /v1/confirmations/templates/{template_id}`, `POST /v1/confirmations/templates`, `POST /v1/confirmations:preview`.
+4. Confirmations, inbound before outbound (a stop must be catchable before anything is sent):
+   `POST /v1/confirmations/inbound/{inbound_key}` (Twilio; Telnyx out of scope until built), then the sender worker, then
+   `POST /v1/confirmations:test`.
+5. Confirmations, reads and actions: `GET /v1/confirmations/sends`, `GET /v1/confirmations/replies`,
+   `POST /v1/confirmations/replies/{reply_id}:mark`.
+6. Public pages on the organization's link host: `GET /c/r/{token}`, `GET` and `POST /c/stop/{token}`.
+
+### 5. Portal screens
+Screen 24 setup walkthrough and the screen 05 checklist change; screen 23 records and the screen 13 changes (open by record
+id, masked heading, "Show full contact point", contact log entries in the timeline); screen 25 confirmation messages;
+navigation changes in ia.md.
+
+### 6. Owner finding carried into the build
+The published Terms say "To rejoin, sign up again as you did the first time or text START". The core does not let a
+new web-form sign-up lift a stop (`docs/api.md`, the paragraph on `contact_control_unverified`), so
+only the START half is true. The Terms page wording is the owner's to change.

@@ -24,9 +24,11 @@ from typing import Any, Iterable, Optional
 
 import psycopg
 
+from .. import dbclock
+from ..safelog import describe
 from .admin_base import ROLE_ADMIN, ApiError, Ctx, body_dict, iso, need_text, to_uuid, want_enum
 from .erasure import (VIEW_HIDDEN, VIEW_NEUTRAL, LifecycleError, LifecycleLedger, audit_org, audit_platform, commit_after,
-                      covering_hold, erase_in_org, held_note, hold_view, ledger_hint, now_utc, operator_org,
+                      covering_hold, erase_in_org, held_note, hold_view, ledger_hint, operator_org,
                       purge_export_cache)
 from .offboard import DestructionError, _open_request, _record, _step, any_hold, schedule_key_destruction
 from .tokens import TokenKey
@@ -76,7 +78,7 @@ def sealed_key_version(sealed: str) -> int:
         packed = base64.urlsafe_b64decode(sealed[len(SEALED_PREFIX):])
         return struct.unpack(">HI", packed[:6])[1]
     except (ValueError, struct.error) as exc:
-        raise LifecycleError(f"a sealed reason is malformed: {exc}") from exc
+        raise LifecycleError(f"a sealed reason is malformed: {describe(exc)}") from exc
 
 
 def open_reason(crypto, org, hold_id, column: str, sealed: str) -> str:
@@ -122,7 +124,7 @@ def place_in_org(conn, *, ledger: LifecycleLedger, actor_kind: str, actor_id: st
         raise ApiError("validation_failed", f"a contact hold names 1 to {MAX_CONTACTS} contacts", {"contacts": "1 to 1000"})
     fps = [] if scope == "org" else sorted(set(contact_fps))
     org = conn.execute("SELECT consentvault.lifecycle_lock() AS o").fetchone()["o"]
-    hold_id, set_at = uuid.uuid4(), now_utc()
+    hold_id, set_at = uuid.uuid4(), dbclock.now(conn)
     reason = seal_reason(crypto, org, hold_id, "legal_hold.reason", reason)
     seq, _ = ledger.append(org, {"kind": "hold_set", "hold_id": str(hold_id), "scope": scope, "contact_fps": fps,
                                  "set_by_kind": actor_kind, "set_by": actor_id, "set_at": set_at.isoformat(),
@@ -133,6 +135,9 @@ def place_in_org(conn, *, ledger: LifecycleLedger, actor_kind: str, actor_id: st
         " legal_process_id, set_ledger_seq) VALUES ((SELECT consentvault.current_org()), %s, %s, %s, %s, %s, %s, %s, %s,"
         " %s) RETURNING " + HOLD_COLUMNS,
         (hold_id, scope, fps, actor_kind, actor_id, set_at, reason, legal_process_id, seq)).fetchone()
+    from ..sync.connectors import twenty as twenty_connector  # a hold blocks the Twenty clear, never a stop (twenty.md 5.1)
+
+    twenty_connector.on_hold_placed(conn, crypto, org, fps or None)
     if legal_process_id is None:  # a legal-process hold reaches the tenant's chain only once the customer is notified
         audit_org(conn, actor_kind=actor_kind, actor_id=actor_id, action="legal_hold.set", target_kind="legal_hold",
                   target_id=hold_id, reason=None if actor_kind == "operator" else AUDIT_NOTE, request_id=request_id)
@@ -194,7 +199,7 @@ def enforce_on_keys(conn: psycopg.Connection, *, token_key: TokenKey, custody, o
         restore_scheduled_versions(conn)
         req = _open_request(conn)
         if req is not None:  # the step is tenant-readable: a neutral held state; the record keeps the hold id
-            _step(conn, req["request_id"], "key_destruction", {"status": "held", "at": iso(now_utc())})
+            _step(conn, req["request_id"], "key_destruction", {"status": "held", "at": iso(dbclock.now(conn))})
             _record(conn, req["request_id"], "held", hold_id=uuid.UUID(hold))
         audit_org(conn, actor_kind="system", actor_id=actor_id, action="offboarding.destruction_held",
                   target_kind="org", target_id=org, reason=held_note(conn, hold), request_id=request_id)
@@ -215,7 +220,7 @@ def release_in_org(conn, *, ledger: LifecycleLedger, actor_kind: str, actor_id: 
         raise ApiError("role_not_allowed", "a hold set for legal process is released only by the operator",
                        {"role": "admin"})
     view = hold_view(conn, hid)
-    at = now_utc()
+    at = dbclock.now(conn)
     reason = seal_reason(crypto, org, hid, "legal_hold.release_reason", reason)
     seq, _ = ledger.append(org, {"kind": "hold_released", "hold_id": str(hid), "released_by_kind": actor_kind,
                                  "released_by": actor_id, "released_at": at.isoformat(), "release_reason": reason},
@@ -228,6 +233,9 @@ def release_in_org(conn, *, ledger: LifecycleLedger, actor_kind: str, actor_id: 
                        " (SELECT consentvault.current_org()) AND hold_id = %s", (hid,)).fetchone()
     if row is None or row["released_at"] is None or row["released_by"] != actor_id:
         raise LifecycleError(f"hold {hid} was not recorded as released by {actor_kind} {actor_id}")
+    from ..sync.connectors import twenty as twenty_connector  # a release writes current state back to Twenty (rule R7)
+
+    twenty_connector.on_hold_released(conn, crypto, org, list(h["contact_fps"]) or None)
     if view != VIEW_HIDDEN:  # a hold the customer was never told of is never released in front of them
         audit_org(conn, actor_kind=actor_kind, actor_id=actor_id, action="legal_hold.released",
                   target_kind="legal_hold", target_id=hid, reason=tenant_note(view), request_id=request_id)
@@ -250,12 +258,12 @@ def release_hold_operator(conn: psycopg.Connection, *, token_key: TokenKey, ledg
                              hold_id=hold_id, reason=reason, crypto=crypto)
         audit_platform(conn, operator_id=operator_id, action="legal_hold.released", target_kind="legal_hold",
                        target_id=out["hold_id"], reason=AUDIT_NOTE, request_id=request_id)
-    out["resumed"] = resume(conn, token_key=token_key, ledger=ledger, custody=custody, org_id=org,
-                            request_id=request_id, export_cache=export_cache)
+    out["resumed"] = resume(conn, token_key=token_key, ledger=ledger, custody=custody, crypto=crypto,
+                            org_id=org, request_id=request_id, export_cache=export_cache)
     return out
 
 
-def resume(conn: psycopg.Connection, *, token_key: TokenKey, ledger: LifecycleLedger, custody, org_id,
+def resume(conn: psycopg.Connection, *, token_key: TokenKey, ledger: LifecycleLedger, custody, crypto, org_id,
            request_id: str, export_cache=None, window_days: int = 30) -> dict:
     """Resume queued work that no active hold covers any more: confirmed erasures run, unconfirmed ones return to the
     operator's queue, and a held key destruction is scheduled again (a fresh window of at least 30 days)."""
@@ -281,7 +289,7 @@ def resume(conn: psycopg.Connection, *, token_key: TokenKey, ledger: LifecycleLe
                 continue
             conn.execute("UPDATE consentvault.erasure_request SET held_by = NULL, held_since = NULL"
                          " WHERE org_id = (SELECT consentvault.current_org()) AND erasure_id = %s", (q["erasure_id"],))
-            out = erase_in_org(conn, ledger=ledger, erasure_id=q["erasure_id"], actor_kind="system",
+            out = erase_in_org(conn, ledger=ledger, crypto=crypto, erasure_id=q["erasure_id"], actor_kind="system",
                                actor_id="hold-release", request_id=request_id)
         if out["status"] != "completed":  # waiting on delivery (a visible held state): resume_waiting runs it later
             done["erasures_waiting"].append(str(q["erasure_id"]))

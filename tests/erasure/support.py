@@ -7,6 +7,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
+from consentvault import db, dbclock
 from consentvault.evidence import LocalEcdsaSigner
 from consentvault.notify.errors import NotifyRefused
 from consentvault.providers.evidence import LocalAppendOnlyEvidenceStore
@@ -50,7 +51,7 @@ class Env:
         self.t = t
         self.clock = Clock()
         self.archive = LocalAppendOnlyEvidenceStore(tmp_path / "archive")
-        self.ledger = LifecycleLedger(self.archive)
+        self.ledger = LifecycleLedger(self.archive, clock=dbclock.datetime_clock(lambda: db.connect(t.app_dsn)))
         self.custody = LocalFileKeyProvider(tmp_path / "keys", TEST_PASSPHRASE, clock=self.clock)
         self.notifier = RecordingNotifier()
         self.signer = LocalEcdsaSigner.generate("evidence-test", 1)

@@ -27,6 +27,7 @@ from datetime import datetime
 
 import psycopg
 
+from ..safelog import caller_detail
 from ..errors import ConsentVaultError, NormalizationError
 from ..ledger import CHANNELS, record_tenant_event
 from ..normalize import normalize_contact
@@ -129,7 +130,7 @@ def process_signal(
     try:
         kind, norm = normalize_contact(signal.contact, None, region)
     except NormalizationError as exc:
-        raise InvalidContactError(str(exc)) from exc
+        raise InvalidContactError(caller_detail(exc)) from exc
     fp = crypto.contact_fingerprint(org_id, kind, norm)
     data_key = ensure_contact_key(conn, crypto, org_id, fp)
     mac = tc.payload_mac(data_key, f"{system_id}\x1f{signal.external_ref}".encode("utf-8"))

@@ -28,6 +28,9 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
+from ...safelog import describe, http_error_response
+from ...lengths import is_bytes_of_len
+from ...urlguard import open_no_redirect
 from ..errors import CredentialError, TransportError
 
 HEADER_SIGNATURE = "X-ConsentVault-Signature"
@@ -78,26 +81,26 @@ def idempotency_key(org_id, contact_fp: str, channel: str, purpose: str, version
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def sign_body(signature: str, secret: bytes, body: bytes) -> str:
-    if signature == "hmac":
+def sign_body(scheme: str, secret: bytes, body: bytes) -> str:
+    if scheme == "hmac":
         if not isinstance(secret, bytes) or len(secret) < 16:
             raise CredentialError("an HMAC secret must be at least 16 bytes")
         return "hmac-sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
-    if signature == "ed25519":
+    if scheme == "ed25519":
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-        if not isinstance(secret, bytes) or len(secret) != 32:
+        if not is_bytes_of_len(secret, 32):
             raise CredentialError("an Ed25519 private key is 32 raw bytes")
         return "ed25519=" + Ed25519PrivateKey.from_private_bytes(secret).sign(body).hex()
-    raise CredentialError(f"unknown signature kind {signature!r}")
+    raise CredentialError(f"unknown signature kind {scheme!r}")
 
 
-def verify_signature(signature: str, key: bytes, body: bytes, header: str) -> bool:
+def verify_signature(scheme: str, key: bytes, body: bytes, header: str) -> bool:
     """The receiver's check, kept here so the sender's tests can prove a round trip. ``key`` is the HMAC secret or the
     raw 32-byte Ed25519 public key."""
-    if signature == "hmac":
+    if scheme == "hmac":
         return hmac.compare_digest(sign_body("hmac", key, body), header)
-    if signature == "ed25519":
+    if scheme == "ed25519":
         from cryptography.exceptions import InvalidSignature
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
@@ -150,7 +153,7 @@ class EgressTransport:
     egress_url: str
     secret: str = field(repr=False)
     timeout: float = EGRESS_TIMEOUT_SECONDS
-    opener: Callable[..., object] = urllib.request.urlopen
+    opener: Callable[..., object] = open_no_redirect
 
     def __post_init__(self) -> None:
         if not self.egress_url.startswith("https://") or not self.secret:
@@ -165,10 +168,55 @@ class EgressTransport:
             with self.opener(http, timeout=self.timeout) as res:
                 status, raw = res.status, res.read()
         except urllib.error.HTTPError as exc:
-            status, raw = exc.code, exc.read()
+            status, _headers, raw = http_error_response(exc)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise TransportError(f"the egress door could not be reached: {type(exc).__name__}: {exc}") from exc
+            raise TransportError(f"the egress door could not be reached: {describe(exc)}") from exc
         return interpret_egress(status, raw)
+
+    def call(self, method: str, url: str, headers: dict, payload):
+        """One call to a connected system's JSON API through the door's ``/call`` (the Twenty connector). Returns a
+        ``twenty_api.CallResult``; the door itself failing raises ``TransportError``."""
+        wire = json.dumps({"target_url": url, "method": method, "headers": dict(headers), "payload": payload},
+                          separators=(",", ":")).encode("utf-8")
+        http = urllib.request.Request(self.egress_url.rstrip("/") + "/call", data=wire, method="POST", headers={
+            "Content-Type": "application/json", "Authorization": f"Bearer {self.secret}"})
+        try:
+            with self.opener(http, timeout=self.timeout) as res:
+                status, raw = res.status, res.read()
+        except urllib.error.HTTPError as exc:
+            status, _headers, raw = http_error_response(exc)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise TransportError(f"the egress door could not be reached: {describe(exc)}") from exc
+        return interpret_call(status, raw)
+
+
+def interpret_call(status: int, raw: bytes):
+    """Read the door's ``/call`` answer: the receiver's status, its rate-limit headers and its JSON body; or one of the door's
+    named outcomes (timeout, unreachable, refused). A redirect or an oversized answer is the receiver's; anything else is the
+    door failing and raises ``TransportError``."""
+    from .twenty_api import CallResult
+
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        data = None
+    if not isinstance(data, dict):
+        raise TransportError(f"the egress door answered {status} with a body that is not JSON")
+    code, msg = data.get("error"), str(data.get("message") or "")
+    if status == 200 and isinstance(data.get("receiver_status"), int):
+        headers = data.get("receiver_headers") if isinstance(data.get("receiver_headers"), dict) else {}
+        return CallResult("response", data["receiver_status"], headers, data.get("receiver_body"))
+    if code == "receiver_redirect" and isinstance(data.get("receiver_status"), int):
+        return CallResult("response", data["receiver_status"], {}, None, "redirects are not followed")
+    if code == "receiver_body_too_large":
+        return CallResult("response", 502, {}, None, "the answer was over 256 KB")
+    if code == "receiver_timeout":
+        return CallResult("timeout", detail=msg)
+    if code in _UNREACHABLE_BY_DOOR:
+        return CallResult("unreachable", detail=f"{code}: {msg}")
+    if code in _REFUSED_BY_DOOR:
+        return CallResult("refused", detail=f"{code}: {msg}")
+    raise TransportError(f"the egress door answered {status} {code!r}: {msg}")
 
 
 def interpret_egress(status: int, raw: bytes) -> TransportResult:

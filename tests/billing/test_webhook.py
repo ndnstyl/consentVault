@@ -27,10 +27,56 @@ def test_checkout_completed_links_customer_subscription_and_plan(tenancy, stripe
     row = account(tenancy, org)
     assert row["stripe_customer_id"] == cus and row["stripe_subscription_id"] == sub
     assert (row["plan_id"], row["plan_name"], row["included_events"], row["included_gate_checks"]) == (
-        "starter", "Starter", 10000, 200000)
+        "starter", "Starter", 1000, 25000)
     assert row["price_id"] == "price_starter" and row["status"] == "active"
     assert row["period_start"] is not None and row["period_end"] is not None
     assert status_of(tenancy, org) == "active"  # linking is not a payment: the status moves on the paid invoice
+
+
+def test_enterprise_limits_come_from_the_subscriptions_contract_metadata(tenancy, stripe):
+    org = tenancy.a
+    contract = {"contract_included_events": "250000", "contract_included_gate_checks": "9000000",
+                "contract_systems": "40"}
+    cus, sub = subscribed(stripe, org, status="active", price_id="price_enterprise_acme", contract=contract)
+    session = stripe.add_session(cus, sub, str(org.org_id))
+    status, body = send(routes_for(tenancy, stripe), event("checkout.session.completed", session, "checkout.session"))
+    assert (status, body["outcome"]) == (200, "linked")
+    row = account(tenancy, org)
+    assert (row["plan_id"], row["plan_name"], row["included_events"], row["included_gate_checks"]) == (
+        "enterprise", "Enterprise", 250000, 9000000)
+    assert row["price_id"] == "price_enterprise_acme"
+
+
+@pytest.mark.parametrize("contract", [{}, {"contract_included_events": "250000"},
+                                      {"contract_included_gate_checks": "9000000"},
+                                      {"contract_included_events": "lots", "contract_included_gate_checks": "9000000"}])
+def test_an_enterprise_subscription_missing_contract_limits_is_flagged_not_recorded_as_unlimited(tenancy, stripe, contract):
+    org = tenancy.a
+    cus, sub = subscribed(stripe, org, status="active", price_id="price_enterprise_acme", contract=contract)
+    session = stripe.add_session(cus, sub, str(org.org_id))
+    status, body = send(routes_for(tenancy, stripe), event("checkout.session.completed", session, "checkout.session"))
+    assert (status, body["outcome"]) == (200, "linked")  # billing never refuses the event
+    row = account(tenancy, org)
+    assert row["plan_id"] == "enterprise_contract_incomplete"
+    assert (row["included_events"], row["included_gate_checks"]) == (None, None)
+    assert row["stripe_subscription_id"] == sub and row["status"] == "active"
+    with tenancy.superuser() as su:
+        alarms = su.execute("SELECT name, error_class, ref_kind FROM consentvault.operator_alarm WHERE org_id = %s",
+                            (org.org_id,)).fetchall()
+    assert [a["name"] for a in alarms] == ["billing.enterprise_contract_incomplete"]
+
+
+def test_the_incomplete_contract_heals_when_the_values_arrive(tenancy, stripe):
+    org = tenancy.a
+    cus, sub = subscribed(stripe, org, status="active", price_id="price_enterprise_acme")
+    session = stripe.add_session(cus, sub, str(org.org_id))
+    r = routes_for(tenancy, stripe)
+    send(r, event("checkout.session.completed", session, "checkout.session"))
+    stripe.subscriptions[sub]["metadata"].update(contract_included_events="250000",
+                                                 contract_included_gate_checks="9000000")
+    send(r, event("customer.subscription.updated", sub, "subscription"))
+    row = account(tenancy, org)
+    assert (row["plan_id"], row["included_events"], row["included_gate_checks"]) == ("enterprise", 250000, 9000000)
 
 
 def test_checkout_completed_for_a_customer_of_another_org_does_not_cross_over(tenancy, stripe):

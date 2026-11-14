@@ -26,6 +26,7 @@ jobs:
       - run: pytest -m "not network"
         env:
           PG_BIN: /usr/lib/postgresql/16/bin
+          TWENTY_CONFORMANCE_WALKS: "120"  # the Twenty model conformance, its model kept in tests/connectors/twenty/model
 
   suites:
     runs-on: ubuntu-24.04
@@ -80,3 +81,21 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  security-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: "24.0.0"
+      - name: Security gate (static analysis, npm and pip audits, secret scan, infrastructure and image scans)
+        env:
+          CV_GATE_STRICT: "1"
+          SECURITY_GATE_STEPS: allowlist,suppressions,sast,npm-audit,pip-audit,secrets,iac,image
+        run: bash scripts/security_gate.sh

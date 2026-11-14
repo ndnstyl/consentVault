@@ -180,7 +180,7 @@ def test_signal_lookup_and_record_never_cross_organisations(two):
 def test_claim_hands_a_worker_only_its_own_organisations_pushes(two):
     env, a, b = two
     with worker_as(env, b.org) as w:
-        rows = w.execute("SELECT * FROM consentvault.sync_claim(50, 60, %s)", (env.clock(),)).fetchall()
+        rows = w.execute("SELECT * FROM consentvault.sync_claim(50, 60)").fetchall()
     assert [r["outbox_id"] for r in rows] == [b.pending["outbox_id"]]
     assert row_of(env, a.pending["outbox_id"])["status"] == "pending" and row_of(env, a.pending["outbox_id"])["attempts"] == 0
     assert all(r["system_id"] == b.system.system_id for r in rows)
@@ -189,15 +189,15 @@ def test_claim_hands_a_worker_only_its_own_organisations_pushes(two):
 def test_complete_and_release_never_touch_another_organisations_attempt(two):
     env, a, b = two
     with worker_as(env, a.org) as w:
-        held = w.execute("SELECT * FROM consentvault.sync_claim(50, 60, %s)", (env.clock(),)).fetchall()
+        held = w.execute("SELECT * FROM consentvault.sync_claim(50, 60)").fetchall()
     assert [r["outbox_id"] for r in held] == [a.pending["outbox_id"]]
     with pytest.raises(psycopg.errors.NoDataFound):
         with worker_as(env, b.org) as w:
-            w.execute("SELECT consentvault.sync_complete(%s, 1, 'acknowledged', 200, NULL, NULL, NULL, %s)",
-                      (a.pending["outbox_id"], env.clock()))
+            w.execute("SELECT consentvault.sync_complete(%s, 1, 'acknowledged', 200, NULL, NULL, NULL)",
+                      (a.pending["outbox_id"],))
     with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
         with worker_as(env, b.org) as w:
-            w.execute("SELECT consentvault.sync_release(%s, 1, %s)", (a.pending["outbox_id"], env.clock()))
+            w.execute("SELECT consentvault.sync_release(%s, 1, 60)", (a.pending["outbox_id"],))
     now = row_of(env, a.pending["outbox_id"])
     assert (now["status"], now["attempts"]) == ("sent", 1)
     assert env.q("SELECT status FROM consentvault.delivery WHERE outbox_id = %s", (a.pending["outbox_id"],)) == [{"status": "sent"}]
@@ -328,7 +328,7 @@ def test_capture_side_functions_refuse_a_worker_token(two, fn, args):
 
 
 @pytest.mark.parametrize("fn,args", [
-    ("sync_claim(5, 60, now())", ()),
+    ("sync_claim(5, 60)", ()),
     ("sync_dead_groups()", ()),
     ("sync_refresh_redrives()", ()),
     ("sync_ack_alarms(ARRAY[]::uuid[])", ()),
@@ -371,7 +371,7 @@ def test_the_worker_role_cannot_call_the_capture_side_and_the_app_role_cannot_ca
     with env.t.app() as c:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             with org_transaction(c, env.t.token(a.org, scopes=("capture",))):
-                c.execute("SELECT * FROM consentvault.sync_claim(5, 60, now())")
+                c.execute("SELECT * FROM consentvault.sync_claim(5, 60)")
 
 
 def test_the_internal_helpers_are_callable_by_nobody_but_the_owner(two):
@@ -386,11 +386,18 @@ def test_every_sync_function_is_owned_by_the_schema_owner_and_pins_its_search_pa
     rows = env.q("SELECT p.proname, pg_get_userbyid(p.proowner) AS owner, p.prosecdef, p.proconfig, r.rolsuper, r.rolbypassrls"
                  " FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner JOIN pg_namespace n ON n.oid = p.pronamespace"
                  " WHERE n.nspname = 'consentvault' AND p.proname LIKE 'sync\\_%'")
-    assert len(rows) == 21, sorted(r["proname"] for r in rows)  # 21: sync_system_unbind_credential (0011)
+    # 21: sync_system_unbind_credential (0011); 36 with the Twenty connector's 15 (0060); 37 with sync_attempt_started (0062),
+    # which stamps a push's attempt time when that push starts
+    assert len(rows) == 37, sorted(r["proname"] for r in rows)
     for r in rows:
-        assert r["prosecdef"] and not r["rolsuper"] and not r["rolbypassrls"], r["proname"]
+        # the receiver resolver reads across organisations by design (only the hash it is given; it answers an org, a system
+        # and a status), as resolve_site_key does: its owner is the operator role, which bypasses row security
+        assert r["prosecdef"] and not r["rolsuper"] and (not r["rolbypassrls"] or r["proname"] == "sync_receiver_resolve"), r["proname"]
         assert any("search_path=pg_catalog, pg_temp" in c for c in (r["proconfig"] or [])), r["proname"]
-    assert len({r["owner"] for r in rows}) == 1
+    # the Twenty receiver resolves its id before a tenant is entered, so the operator role owns that one reader (as the
+    # site-key lookup); every other sync function has the schema owner
+    assert {r["owner"] for r in rows if r["proname"] == "sync_receiver_resolve"} == {"consentvault_operator"}
+    assert len({r["owner"] for r in rows if r["proname"] != "sync_receiver_resolve"}) == 1
 
 
 def test_the_row_level_fence_holds_even_without_a_functions_own_filter(two):
@@ -429,6 +436,6 @@ def test_a_forged_token_is_refused_by_every_function(two):
             with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
                 o.execute("SELECT * FROM consentvault.sync_targets()")
             with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
-                o.execute("SELECT * FROM consentvault.sync_claim(5, 60, now())")
+                o.execute("SELECT * FROM consentvault.sync_claim(5, 60)")
         finally:
             o.execute("SELECT set_config('consentvault.org_token', '', false)")

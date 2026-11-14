@@ -242,20 +242,23 @@ def test_a_migration_that_leaves_the_owner_role_is_rolled_back_by_name(pg_server
     create_vault_database(port, name)
     with psycopg.connect(_dsn(port, "postgres"), autocommit=True) as su:
         su.execute(f'CREATE ROLE "{login}" LOGIN IN ROLE cv_test_owner')  # no default role
-    (tmp_path / "0001_leak.sql").write_text("CREATE TABLE consentvault.before_reset (i int);\nRESET ROLE;\n"
-                                           "CREATE TABLE consentvault.after_reset (i int);\n")
-    with db.connect(_dsn(port, name, login)) as m:
-        with pytest.raises(MigrationError, match=f"ALTER ROLE {login} SET role = cv_test_owner"):
-            db.migrate(m, tmp_path)
-        assert m.execute("SELECT current_user AS u").fetchone()["u"] == login
-    with psycopg.connect(_dsn(port, name), row_factory=psycopg.rows.dict_row) as su:
-        assert su.execute("SELECT to_regclass('consentvault.before_reset') AS a, to_regclass('consentvault.after_reset')"
-                          " AS b").fetchone() == {"a": None, "b": None}
-        assert su.execute("SELECT pg_get_userbyid(nspowner) AS o FROM pg_namespace WHERE nspname = 'consentvault'"
-                          ).fetchone()["o"] == "cv_test_owner"
-    with psycopg.connect(_dsn(port, "postgres"), autocommit=True) as su:
-        # a second migration login on the shared owner would read, rightly, as one left open to every later start check
-        su.execute(f'DROP ROLE "{login}"')
+    try:
+        (tmp_path / "0001_leak.sql").write_text("CREATE TABLE consentvault.before_reset (i int);\nRESET ROLE;\n"
+                                               "CREATE TABLE consentvault.after_reset (i int);\n")
+        with db.connect(_dsn(port, name, login)) as m:
+            with pytest.raises(MigrationError, match=f"ALTER ROLE {login} SET role = cv_test_owner"):
+                db.migrate(m, tmp_path)
+            assert m.execute("SELECT current_user AS u").fetchone()["u"] == login
+        with psycopg.connect(_dsn(port, name), row_factory=psycopg.rows.dict_row) as su:
+            assert su.execute("SELECT to_regclass('consentvault.before_reset') AS a, to_regclass('consentvault.after_reset')"
+                              " AS b").fetchone() == {"a": None, "b": None}
+            assert su.execute("SELECT pg_get_userbyid(nspowner) AS o FROM pg_namespace WHERE nspname = 'consentvault'"
+                              ).fetchone()["o"] == "cv_test_owner"
+    finally:
+        # a second migration login on the shared owner would read, rightly, as one left open to every later start check;
+        # dropped whether the assertions above passed or not
+        with psycopg.connect(_dsn(port, "postgres"), autocommit=True) as su:
+            su.execute(f'DROP ROLE IF EXISTS "{login}"')
 
 
 def test_the_down_file_returns_the_release_to_its_earlier_shape_and_takes_the_console_grants(env):

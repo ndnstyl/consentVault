@@ -17,20 +17,22 @@ Every principal is produced here from what the request proves, never from what i
 from __future__ import annotations
 
 import json
-import logging
+from .safelog import describe
+from . import dbclock, safelog
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Optional
 
 import psycopg
 
 from .errors import ConsentVaultError
 
 TENANT_TOKEN_PREFIX = "v1."
+EDGE_ASSERTION_HEADER = "x-consentvault-edge-assertion"
 DEFAULT_OPERATOR_MAX_SIGNIN_AGE_S = 900  # an operator proved who they are within the last 15 minutes, configurable
 
-_log = logging.getLogger("consentvault.route_wiring")
+_log = safelog.get("consentvault.route_wiring")
 
 
 @dataclass
@@ -107,12 +109,13 @@ class Authenticator:
 
     def __init__(self, *, connect: Callable[[], psycopg.Connection], access_tokens, identity=None,
                  operators: Mapping[tuple[str, str], str] | None = None,
-                 max_signin_age_s: int = DEFAULT_OPERATOR_MAX_SIGNIN_AGE_S, clock: Callable[[], float] = time.time) -> None:
+                 max_signin_age_s: int = DEFAULT_OPERATOR_MAX_SIGNIN_AGE_S, clock: Optional[Callable[[], float]] = None) -> None:
         if not isinstance(max_signin_age_s, int) or isinstance(max_signin_age_s, bool) or not 1 <= max_signin_age_s <= 86400:
             raise ConsentVaultError("operator max_signin_age_s must be a whole number of seconds from 1 to 86400")
         self._connect, self._access, self._identity = connect, access_tokens, identity
         self._operators = dict(operators or {})
-        self._max_age, self._clock = max_signin_age_s, clock
+        self._max_age = max_signin_age_s
+        self._clock = clock or dbclock.epoch_clock(connect)   # tests pin one; production reads the database's
 
     def portal(self, headers) -> PortalPrincipal | None:
         from .tenancy.admin_base import ApiError
@@ -181,7 +184,7 @@ class Authenticator:
         from .billing.routes import Caller
 
         p = self.portal(headers)
-        return None if p is None else Caller(p.org_id, p.role, _rid(headers))
+        return None if p is None else Caller(p.org_id, p.role, _rid(headers), p.member_id)
 
 
 def record_operator_refusal(owner_connect, decision: OperatorDecision, method: str, handler: str, rid: str) -> None:
@@ -199,7 +202,10 @@ def record_operator_refusal(owner_connect, decision: OperatorDecision, method: s
         finally:
             conn.close()
     except (ConsentVaultError, psycopg.Error) as exc:  # AuditError and DatabaseError are both ConsentVaultError
-        raise OperatorRefusalNotRecorded(f"{type(exc).__name__}: {exc}") from exc
+        raise OperatorRefusalNotRecorded(f"{describe(exc)}") from exc
+
+
+PORTAL_ONLY_HANDLERS = frozenset({"proof", "evidence_export_start"})
 
 
 class AdminRoutes:
@@ -211,7 +217,10 @@ class AdminRoutes:
     def handles(self, method: str, path: str) -> bool:
         from .tenancy.admin_routes import Request
 
-        return self._app._match(Request(method, path))[0] is not None
+        route = self._app._match(Request(method, path))[0]
+        # POST /v1/proof and POST /v1/exports also answer machine credentials: the server's own proof route and the evidence
+        # package routes serve them; the admin app answers the same paths only for a portal session in its own tests
+        return route is not None and route.handler not in PORTAL_ONLY_HANDLERS
 
     def handle(self, method, path, *, body=b"", headers=None, caller=None, query=None) -> Reply:
         from .tenancy.admin_routes import Request
@@ -231,11 +240,14 @@ class AdminRoutes:
                     record_operator_refusal(getattr(self._app, "_owner_connect", None), decision, method, route.handler,
                                             rid)
                 except OperatorRefusalNotRecorded as exc:
-                    _log.critical("operator refusal NOT recorded (request %s): %s", rid or "-", exc)
+                    _log.critical("operator refusal NOT recorded", request_id=rid, error=type(exc).__name__)
                     return _err(503, "audit_unavailable", "the attempt was refused, but its audit row could not be "
                                 "written; nothing else was done", rid)
         res = self._app.handle(Request(method, path, dict(query or {}), parsed, tenant_token=tenant,
-                                       identity_token=identity, request_id=rid, operator_id=operator_id))
+                                       identity_token=identity, edge_assertion=_lower(headers).get(EDGE_ASSERTION_HEADER), request_id=rid,
+                                       operator_id=operator_id))
+        if isinstance(res.body, (bytes, bytearray)):  # a records export download: the file itself, not JSON
+            return Reply(res.status, None, dict(res.headers or {}), bytes(res.body))
         return Reply(res.status, res.body, dict(res.headers or {}))
 
 
@@ -297,6 +309,25 @@ class ExportRouteAdapter:
                 principal = Principal(p.org_id, uuid.UUID(p.member_id), "portal", role=p.role)
         res = handle(self._service, Request(method, path, dict(query or {}), parsed, principal, rid))
         return Reply(res.status, res.body, dict(res.headers or {}), res.raw)
+
+
+class TwentyWebhookAdapter:
+    """``POST /v1/connectors/twenty/{receiver_id}/webhook`` (twenty.md 3.1): no bearer and no session; the receiver id resolves to
+    one organisation and system, and the signature over the RAW body is the authentication (``twenty_receiver``). The body
+    bytes are handed through untouched, never parsed and re-serialised here."""
+
+    _PATH = __import__("re").compile(r"^/v1/connectors/twenty/([A-Za-z0-9_-]{1,128})/webhook$")
+
+    def __init__(self, receiver) -> None:
+        self._receiver = receiver
+
+    def handles(self, method: str, path: str) -> bool:
+        return method == "POST" and self._PATH.match(path) is not None
+
+    def handle(self, method, path, *, body=b"", headers=None, caller=None, query=None) -> Reply:
+        receiver_id = self._PATH.match(path).group(1)
+        status, payload = self._receiver.handle(receiver_id, dict(headers or {}), bytes(body or b""))
+        return Reply(status, payload)
 
 
 def lifecycle_routes(app, auth): from .tenancy.lifecycle_routes import LifecycleRoutes; return LifecycleRoutes(app, auth)  # noqa: E701,E702,E704  erasure, offboarding, legal holds, operator access

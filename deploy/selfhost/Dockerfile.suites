@@ -11,6 +11,10 @@ RUN apt-get update \
 
 RUN pip install --no-cache-dir "psycopg[binary]==3.3.6" "cryptography==50.0.2" "pytest==9.2.0"
 
+# The runner never needs root: the source is mounted read-only and every test writes only under its own temp folders.
+RUN useradd --system --uid 10002 --create-home suites
+USER suites
+
 ENV PYTHONPATH=/repo/src \
     PYTHONDONTWRITEBYTECODE=1 \
     PG_BIN=/usr/bin

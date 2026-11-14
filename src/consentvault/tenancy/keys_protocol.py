@@ -24,7 +24,8 @@ class KeyProvider(Protocol):
     def wrap_data_key(self, org_id: uuid.UUID, data_key: bytes) -> WrappedKey:
         """Wrap a 32-byte contact data key under the organisation's active key version.
 
-        The implementation binds the call to the organisation (KMS encryption context ``{"org_id": ...}``), so a key
+        The implementation binds the call to the organisation (the managed KMS adapter sends the encryption context ``{"cv_org": <org id>}``, which the
+        cloud roles' key policies require), so a key
         wrapped for one organisation never unwraps for another.
         """
         ...

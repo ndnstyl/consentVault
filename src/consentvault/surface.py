@@ -29,6 +29,7 @@ from pathlib import Path
 import psycopg
 from psycopg.rows import tuple_row
 
+from .safelog import describe
 from .errors import ConsentVaultError
 
 FORMAT = "consentvault-security-manifest/1"
@@ -193,7 +194,7 @@ def live_surface(conn: psycopg.Connection) -> dict:
             rows = cur.execute(_SURFACE_SQL, {"schemas": list(SCHEMAS)}).fetchall()
     except psycopg.Error as exc:
         raise ManifestError(f"the security surface could not be read from the database: "
-                            f"{exc.diag.message_primary or type(exc).__name__}") from exc
+                            f"{describe(exc)}") from exc
     objects: dict[str, str] = {}
     for key, canon in rows:
         if canon is None:
@@ -220,7 +221,7 @@ def load_manifest(path: Path | None = None) -> dict:
     try:
         data = p.read_bytes()
     except OSError as exc:
-        raise ManifestError(f"the security manifest at {p} cannot be read: {exc}") from exc
+        raise ManifestError(f"the security manifest at {p} cannot be read: {describe(exc)}") from exc
     return parse_manifest(data, str(p))
 
 
@@ -229,7 +230,7 @@ def parse_manifest(data: bytes, source: str) -> dict:
     try:
         lines = data.decode("utf-8").splitlines()
     except UnicodeDecodeError as exc:
-        raise ManifestError(f"the security manifest at {source} is not UTF-8: {exc}") from exc
+        raise ManifestError(f"the security manifest at {source} is not UTF-8: {describe(exc)}") from exc
     if len(lines) < 3 or lines[0] != f"# {FORMAT}":
         raise ManifestError(f"the security manifest at {source} is not format {FORMAT}")
     m = re.fullmatch(r"# postgres_major (\d+)", lines[1])

@@ -9,13 +9,16 @@ by itself. A rule reference is a citation, an official link and a review date, n
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
 import uuid
 from typing import Any
 
 import psycopg
+from psycopg import sql
 
+from ..safelog import caller_detail
 from .admin_base import (ROLE_ADMIN, ROLE_DEVELOPER, ROLE_VIEWER, ApiError, Ctx, body_dict, invalid, iso, need_iso_time,
                          need_list, need_text, opt_text, page_list, paginate, to_uuid, want_enum)
 
@@ -163,7 +166,7 @@ def _attestation_row(ctx: Ctx) -> dict:
                          " ORDER BY version DESC LIMIT 1").fetchone()
     if r is None:
         raise ApiError("not_found", "no attestation text is published; policies cannot be approved")
-    if hashlib.sha256(r["text"].encode("utf-8")).hexdigest() != r["sha256"]:
+    if not hmac.compare_digest(hashlib.sha256(r["text"].encode("utf-8")).hexdigest(), str(r["sha256"])):
         raise ApiError("attestation_mismatch", "the published attestation does not match its digest; nothing was approved")
     return r
 
@@ -262,7 +265,7 @@ def validate_rules(ctx: Ctx, rules: Any) -> dict:
         try:
             out["narrowing"] = check_narrowing(rules["narrowing"])
         except PolicyRuleError as exc:
-            raise invalid(**{"rules.narrowing": str(exc)}) from None
+            raise invalid(**{"rules.narrowing": caller_detail(exc)}) from None
         bad = sorted({c for r in out["narrowing"] for c in (r.get("channels") or []) if c not in channels})
         if bad:
             raise ApiError("invalid_channel", "a channel is not one this organization has", {"channel": bad[0][:64]})
@@ -314,10 +317,14 @@ def _version(value) -> int:
     return v
 
 
+def _next_version_sql(table: str) -> sql.Composed:
+    return sql.SQL("SELECT coalesce(max(version), 0) + 1 AS v FROM consentvault.{}"
+                   " WHERE org_id = (SELECT consentvault.current_org())").format(sql.Identifier(table))
+
+
 def _next_version(ctx: Ctx, table: str, lock: str) -> int:
     ctx.conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s || (SELECT consentvault.current_org())::text))", (lock,))
-    return ctx.conn.execute(f"SELECT coalesce(max(version), 0) + 1 AS v FROM consentvault.{table}"
-                            " WHERE org_id = (SELECT consentvault.current_org())").fetchone()["v"]
+    return ctx.conn.execute(_next_version_sql(table)).fetchone()["v"]
 
 
 def create_policy(ctx: Ctx, body: Any) -> dict:

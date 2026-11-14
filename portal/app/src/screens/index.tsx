@@ -7,7 +7,10 @@ import { Wording, WordingNew, WordingDetail } from './wording.tsx';
 import { Policies, PolicyNew, PolicyDetail, PolicyApprove, Checklists, ChecklistDetail } from './policies.tsx';
 import { EvidenceLookup, Exports, ExportDetailScreen } from './evidence.tsx';
 import { Systems, SystemNew, SystemDetail } from './systems.tsx';
-import { Retention, Members, Audit, BillingScreen, Settings, References } from './org.tsx';
+import { Records } from './records.tsx';
+import { Setup } from './setup.tsx';
+import { Confirmations, ConfirmationEdit } from './confirmations.tsx';
+import { Retention, Members, Audit, BillingScreen, Settings, References, CompanySignIn } from './org.tsx';
 
 export function Screen({ route, params }: { route: RouteDef; params: Record<string, string> }) {
   switch (route.id) {
@@ -41,9 +44,14 @@ export function Screen({ route, params }: { route: RouteDef; params: Record<stri
     case 'system-detail': return <SystemDetail id={params.system_id} />;
     case 'retention': return <Retention />;
     case 'members': return <Members />;
+    case 'sso': return <CompanySignIn />;
     case 'audit': return <Audit />;
     case 'billing': return <BillingScreen />;
     case 'settings': return <Settings />;
     case 'references': return <References />;
+    case 'records': return <Records />;
+    case 'setup': return <Setup />;
+    case 'confirmations': return <Confirmations />;
+    case 'confirmation-edit': return <ConfirmationEdit sourceId={params.source_id} channel={params.channel} />;
   }
 }

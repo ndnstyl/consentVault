@@ -62,17 +62,22 @@ class Sys:
 
 
 class Clock:
-    """Real time plus an offset the test moves: the database stamps rows with its own clock, so a frozen fake clock
-    would sit before them."""
+    """Real time plus an offset the test moves. The database decides every sync time on its own clock (claims, leases, the
+    retry window and the next attempt), so moving the clock also moves the sync rows' times back by the same span: time passes
+    for both sides alike."""
 
     def __init__(self) -> None:
         self.offset = timedelta(0)
+        self.on_advance = None
 
     def __call__(self) -> datetime:
         return datetime.now(timezone.utc) + self.offset
 
     def advance(self, **kw) -> None:
-        self.offset += timedelta(**kw)
+        delta = timedelta(**kw)
+        self.offset += delta
+        if self.on_advance is not None:
+            self.on_advance(delta)
 
 
 class FakeTransport:
@@ -116,6 +121,7 @@ class SyncEnv:
         self.dbname = t.app_dsn.rsplit("/", 1)[1]
         self.worker_dsn = make_login_role(port, self.dbname, "consentvault_worker")
         self.clock = Clock()
+        self.clock.on_advance = self.age_rows
         self.transport = FakeTransport()
         self.alarms = RecordingAlarms()
         # batch x send timeout must fit in the lease (second-wave review): 4 x 15 s = 60 s
@@ -214,6 +220,15 @@ class SyncEnv:
             sql += f" AND {k} = %s"
             params.append(v)
         return self.q(sql + " ORDER BY created_at, version", params)
+
+    def age_rows(self, delta: timedelta) -> None:
+        """Time passes for the database's side: every sync row's times move back by ``delta`` (seconds, so no zone moves them)."""
+        secs = delta.total_seconds()
+        self.q("UPDATE consentvault.outbox SET next_attempt_at = next_attempt_at - make_interval(secs => %s),"
+               " claimed_until = claimed_until - make_interval(secs => %s), last_attempt_at = last_attempt_at - make_interval(secs => %s),"
+               " window_start = window_start - make_interval(secs => %s)", [secs, secs, secs, secs])
+        self.q("UPDATE consentvault.connector_person_lease SET lease_until = lease_until - make_interval(secs => %s)", [secs])
+        self.q("UPDATE consentvault.connector_rate SET refilled_at = refilled_at - make_interval(secs => %s)", [secs])
 
     def ageing(self, org: Org, **where) -> None:
         """Make every waiting push due now (tests that do not move the clock)."""

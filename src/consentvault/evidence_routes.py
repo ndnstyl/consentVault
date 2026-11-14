@@ -16,6 +16,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from .safelog import caller_detail
 from .evidence import Actor, ExportError, ExportService
 
 _ID = r"(?P<id>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
@@ -155,9 +156,9 @@ def handle(service: ExportService, req: Request) -> Response | None:
         return Response(202, service.resume(org, p.actor, groups["id"], request_id=req.request_id),
                         {"Cache-Control": "no-store"})
     except _Refusal as r:
-        return _error(req, r.name, r.detail, r.fields)
+        return _error(req, r.name, caller_detail(r), r.fields)
     except ExportError as exc:
-        return _error(req, getattr(exc, "error_name", "export_failed"), str(exc))
+        return _error(req, getattr(exc, "error_name", "export_failed"), caller_detail(exc))
 
 
 def _create(service: ExportService, req: Request) -> Response:

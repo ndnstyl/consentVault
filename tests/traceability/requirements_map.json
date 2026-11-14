@@ -134,7 +134,7 @@
     "tests/test_crypto.py::test_each_contact_gets_its_own_random_key_wrapped_per_organisation",
     "tests/admin/test_orgs.py::test_creation_makes_the_key_chain_prefix_lists_retention_and_invite"
    ],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): hardware protection (KMS or HSM) is infrastructure, tofu/data and runbooks/key-management.md"
+   "owner": "ops repo: hardware protection (KMS or HSM) is infrastructure, tofu/data and runbooks/key-management.md"
   },
   "FR-007": {
    "tests": [
@@ -146,7 +146,7 @@
     "tests/sync/test_outbox.py::test_the_payload_is_a_ciphertext_under_the_contacts_key",
     "tests/isolation/test_capture_pipeline.py::test_a_capture_writes_its_encrypted_evidence_object_before_the_ledger_row"
    ],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): encryption of backups is infrastructure (tofu/data)"
+   "owner": "ops repo: encryption of backups is infrastructure (tofu/data)"
   },
   "FR-008": {
    "tests": [
@@ -158,13 +158,13 @@
   },
   "FR-009": {
    "tests": [
-    "tests/test_ledger_tenancy.py::test_shredding_a_contact_key_leaves_every_link_verifiable",
+    "tests/test_ledger_tenancy.py::test_a_contact_key_deleted_by_hand_keeps_every_link_verifiable_and_reads_as_a_break_not_an_erasure",
     "tests/erasure/test_erasure.py::test_erasure_deletes_the_key_and_the_fingerprint_still_matches_its_stop",
     "tests/providers/test_keys.py::test_destruction_after_window_reports_destroyed_and_is_final",
     "tests/providers/test_keys.py::test_nothing_destroyed_before_window_elapses",
     "tests/erasure/test_cross_lane.py::test_an_organisation_closes_only_after_its_destruction_record_and_the_job_closes_it"
    ],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): unreadability inside real backups and write-once storage is checked on the infrastructure"
+   "owner": "ops repo: unreadability inside real backups and write-once storage is checked on the infrastructure"
   },
   "FR-010": {
    "tests": [
@@ -172,7 +172,7 @@
     "tests/export/test_bundle.py::test_an_evidence_key_kept_inside_the_bundle_is_refused",
     "tests/export/test_service.py::test_a_signer_that_fails_marks_the_job_failed_by_name"
    ],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): the signing key living in the key service and never leaving it is infrastructure"
+   "owner": "ops repo: the signing key living in the key service and never leaving it is infrastructure"
   },
   "FR-011": {
    "tests": [
@@ -221,7 +221,7 @@
     "tests/test_seal.py::test_seal_against_public_authority",
     "tests/selfhost/test_write_once_store.py::test_delete_of_the_locked_version_is_refused_even_with_the_governance_bypass"
    ],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): real S3 Object Lock in the cloud account; the self-host tests: whoever runs tests/selfhost/run_suites.sh against the running self-host stack (deploy/selfhost), which writes the receipt",
+   "owner": "ops repo: real S3 Object Lock in the cloud account; the self-host tests: whoever runs tests/selfhost/run_suites.sh against the running self-host stack (deploy/selfhost), which writes the receipt",
    "receipt": "tests/selfhost/receipts/selfhost-suites.json",
    "covered_by": {
     "tests/test_seal.py::test_seal_against_public_authority": [
@@ -265,7 +265,7 @@
   },
   "FR-017": {
    "tests": [],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): private network and no inbound path are tofu/network and cloudflare/tunnel-ingress.yaml; tested there"
+   "owner": "ops repo: private network and no inbound path are tofu/network and cloudflare/tunnel-ingress.yaml; tested there"
   },
   "FR-018": {
    "tests": [
@@ -275,7 +275,7 @@
     "tests/sync/test_connector.py::test_the_egress_transport_needs_https_and_a_secret",
     "tests/sync/test_connector.py::test_the_egress_transport_posts_the_exact_signed_body_and_the_door_secret"
    ],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): the network-level allow-list of destinations is infrastructure"
+   "owner": "ops repo: the network-level allow-list of destinations is infrastructure"
   },
   "FR-019": {
    "tests": [
@@ -335,7 +335,7 @@
     "tests/erasure/test_erasure.py::test_erasure_deletes_the_key_and_the_fingerprint_still_matches_its_stop",
     "tests/erasure/test_erasure.py::test_erasure_expires_the_contacts_cached_packages_and_deletes_them_where_the_cache_can",
     "tests/erasure/test_attacks_wave3_lifecycle.py::test_a_committed_erasure_writes_intent_then_commit_and_survives_a_restore",
-    "tests/test_ledger_tenancy.py::test_shredding_a_contact_key_leaves_every_link_verifiable"
+    "tests/test_ledger_tenancy.py::test_a_contact_key_deleted_by_hand_keeps_every_link_verifiable_and_reads_as_a_break_not_an_erasure"
    ]
   },
   "FR-025": {
@@ -348,15 +348,15 @@
     "tests/isolation/test_operator_console.py::test_every_kind_of_refused_operator_attempt_writes_a_row_and_a_success_writes_no_refusal",
     "tests/admin/test_orgs.py::test_status_transitions_follow_the_billing_table_and_are_audited"
    ],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): anchoring the audit log outside the service and its retention period are infrastructure"
+   "owner": "ops repo: anchoring the audit log outside the service and its retention period are infrastructure"
   },
   "FR-026": {
    "tests": [],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): governance/controls.md (control owner, rule, check, evidence); Mike signs"
+   "owner": "ops repo: governance/controls.md (control owner, rule, check, evidence); Mike signs"
   },
   "FR-027": {
    "tests": [],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): governance/ai-use-register.md; Mike signs"
+   "owner": "ops repo: governance/ai-use-register.md; Mike signs"
   },
   "FR-028": {
    "tests": [],
@@ -364,7 +364,7 @@
   },
   "FR-029": {
    "tests": [],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): CI release gate (dependency scan needs network, outside this checkpoint); this checkpoint script runs the secret scan, isolation and integrity suites"
+   "owner": "ops repo: CI release gate (dependency scan needs network, outside this checkpoint); this checkpoint script runs the secret scan, isolation and integrity suites"
   },
   "FR-030": {
    "tests": [
@@ -373,11 +373,11 @@
     "tests/erasure/test_attacks_wave3_lifecycle.py::test_restore_refuses_to_serve_while_a_seal_does_not_verify",
     "tests/erasure/test_attacks_wave3_lifecycle.py::test_restore_tries_every_contact_key_in_batches"
    ],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): encrypted backups, separate location and the quarterly drill (runbooks/restore.md)"
+   "owner": "ops repo: encrypted backups, separate location and the quarterly drill (runbooks/restore.md)"
   },
   "FR-031": {
    "tests": [],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): governance/subprocessors.md; Mike signs"
+   "owner": "ops repo: governance/subprocessors.md; Mike signs"
   },
   "FR-032": {
    "tests": [
@@ -385,7 +385,7 @@
     "tests/notify/test_notify.py::test_failed_send_logged_alarmed_and_raised",
     "tests/isolation/test_integration_seams.py::test_an_alarm_that_cannot_be_written_fails_the_request_by_name"
    ],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): runbooks/incident.md and the channel the operator watches"
+   "owner": "ops repo: runbooks/incident.md and the channel the operator watches"
   },
   "FR-033": {
    "tests": [
@@ -484,7 +484,7 @@
     "tests/providers/test_keys.py::test_wrap_unwrap_roundtrip_and_isolation_between_orgs",
     "tests/export/test_bundle.py::test_the_bundle_carries_wording_attribution_receipts_and_the_cover"
    ],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): the scheduled run of these validations is infrastructure"
+   "owner": "ops repo: the scheduled run of these validations is infrastructure"
   },
   "FR-043": {
    "tests": [
@@ -553,7 +553,7 @@
     "tests/erasure/test_attacks_wave3_final.py::test_the_api_refuses_an_app_login_that_can_set_role_to_a_bypassrls_role",
     "tests/erasure/test_attacks_wave3_final.py::test_a_console_member_that_bypasses_row_security_or_acts_as_the_owner_is_a_violation"
    ],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): holding records apart from client systems is infrastructure (separate account and network)"
+   "owner": "ops repo: holding records apart from client systems is infrastructure (separate account and network)"
   },
   "FR-051": {
    "tests": [
@@ -589,7 +589,7 @@
   "FR-054": {
    "tests": [
     "tests/billing/test_routes.py::test_summary_reports_plan_period_inclusions_and_usage_against_them",
-    "tests/billing/test_routes.py::test_plans_come_from_the_stripe_prices_sorted_by_amount",
+    "tests/billing/test_routes.py::test_plans_come_from_the_stripe_prices_sorted_by_amount_and_enterprise_has_no_list_price",
     "tests/billing/test_schema.py::test_capture_is_recorded_while_an_org_is_past_due_or_in_trial"
    ],
    "note": "overage billing itself happens at Stripe from the reported usage; no test here exceeds a limit and checks capture is not refused"
@@ -657,11 +657,11 @@
     "tests/isolation/test_rls.py::test_a_clear_contact_point_is_refused_outside_the_home_organisation",
     "tests/test_log_scrub.py::test_a_tenant_flow_logged_at_debug_emits_no_contact_ip_or_token"
    ],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): the clear-text scan of write-once storage and backups runs on the infrastructure"
+   "owner": "ops repo: the clear-text scan of write-once storage and backups runs on the infrastructure"
   },
   "SC-004": {
    "tests": [
-    "tests/test_ledger_tenancy.py::test_shredding_a_contact_key_leaves_every_link_verifiable",
+    "tests/test_ledger_tenancy.py::test_a_contact_key_deleted_by_hand_keeps_every_link_verifiable_and_reads_as_a_break_not_an_erasure",
     "tests/isolation/test_erasure_isolation.py::test_erase_contact_under_one_org_never_touches_the_other",
     "tests/isolation/test_erasure_isolation.py::test_offboarding_one_org_leaves_the_other_untouched",
     "tests/erasure/test_cross_lane.py::test_an_organisation_closes_only_after_its_destruction_record_and_the_job_closes_it"
@@ -707,7 +707,7 @@
   },
   "SC-010": {
    "tests": [],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): governance/controls.md sample of ten controls; Mike signs"
+   "owner": "ops repo: governance/controls.md sample of ten controls; Mike signs"
   },
   "SC-011": {
    "tests": [
@@ -715,7 +715,7 @@
     "tests/erasure/test_attacks_wave3_lifecycle.py::test_restore_refuses_to_serve_while_a_chain_does_not_verify",
     "tests/erasure/test_attacks_wave3_lifecycle.py::test_restore_refuses_to_serve_while_a_seal_does_not_verify"
    ],
-   "owner": "ops repo (/Users/oxfloors/consentvault-ops): the quarterly drill and its recovery time (runbooks/restore.md)"
+   "owner": "ops repo: the quarterly drill and its recovery time (runbooks/restore.md)"
   },
   "SC-012": {
    "tests": [

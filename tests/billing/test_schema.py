@@ -59,6 +59,7 @@ def test_trial_and_past_due_orgs_are_live_for_capture_lookups(tenancy, status, e
     assert (tenancy.a.org_id in live) == (expected == "active") and bool(members) == (expected == "active")
 
 
+
 def test_capture_is_recorded_while_an_org_is_past_due_or_in_trial(tenancy):
     """Nothing in billing can refuse an event for non-payment: the ledger path never reads the status."""
     for status in ("past_due", "trial"):

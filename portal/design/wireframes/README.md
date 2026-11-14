@@ -186,3 +186,46 @@ States: default, opening checkout, no plans, payment confirming, checkout failed
 
 ## 22 Global states
 Role refusal, not found, offline, session ending (2 minutes), organization switched in another tab, saved toast.
+
+## 23 Records (added 2026-10-30)
+```
+   Records    Every phone number and email address the organization holds.
+   [Records held 312] [New in last 30 days 71] [With a stop 9 (show only these)]
+   New records per day  ||| |||| ||||||  (Show the chart as a table)
+   Email  [#########################=-]  found 94% . stop 3% . no record 3%
+   Text   [###############=----------]
+   Call   [###############-----------]
+   Filters: Channel . Evidence status . Purpose . Source . Has a stop . Date (first recorded / last event) . From . To . Test events [Clear]
+   Find one exact phone number or email [__________] [Find]
+   (o) Show full contact points (audited)                         [Export this list]
+   | Contact | Name | Company | First recorded | Source | Email | Text | Call | Stop | Confirmation |  (developer: no Name, no Company)
+   Showing 1 to 50 of 312                                   [Newer] [Older]
+```
+375px: tiles stack, chart keeps its own width with the table alternative, filters wrap, rows become cards.
+
+## 24 Setup walkthrough (added 2026-10-30)
+```
+   Set up The Innovative Native
+   +----------------------------+------------------------------------------+
+   | Done  1 Add a brand        | 3. Register your consent wording          |
+   | Done  2 Add a source       |  label . exact wording . channels .       |
+   | >To do 3 Wording           |  purposes . replaces                      |
+   | To do 4 Credential         | [Back] [Register wording]   Leave setup   |
+   | To do 5 Test event         |                                          |
+   | To do 6 Policy             |                                          |
+   | To do 7 System (optional)  |                                          |
+   | To do 8 Confirmations (opt)|                                          |
+   +----------------------------+------------------------------------------+
+```
+375px: the rail becomes "Step 3 of 8" with a step picker above the panel.
+
+## 25 Confirmation messages (added 2026-10-30)
+```
+   [Email account: Connected] [Text account: Connected] [Texting registration: Not marked] [Replies to read: 2]
+   | Source               | Email | Text                         | Last sent | Failed 24 h | [Edit] |
+   | Early access form    | (On)  | (Off) until registration     | Oct 30    | 0           |
+   | Field guide download | (On)  | (Off) until registration     | Oct 30    | 1           |
+   Recent activity: | When | Contact | Channel | What happened |
+   Edit: on/off . subject . opening line . fixed parts (locked) . options . [Save] [Send a test to my own address]
+   Text preview with character and segment count
+```

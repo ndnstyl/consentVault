@@ -34,10 +34,15 @@ export const ROUTES: RouteDef[] = [
   { id: 'system-detail', pattern: '/systems/:system_id', title: 'Connected system', chrome: 'app' },
   { id: 'retention', pattern: '/retention', title: 'Retention', chrome: 'app' },
   { id: 'members', pattern: '/members', title: 'Members', chrome: 'app' },
+  { id: 'sso', pattern: '/sso', title: 'Company sign-in', chrome: 'app' },
   { id: 'audit', pattern: '/audit', title: 'Audit log', chrome: 'app' },
   { id: 'billing', pattern: '/billing', title: 'Billing', chrome: 'app' },
   { id: 'settings', pattern: '/settings', title: 'Organization settings', chrome: 'app' },
   { id: 'references', pattern: '/references', title: 'Rule references', chrome: 'app' },
+  { id: 'records', pattern: '/records', title: 'Records', chrome: 'app' },
+  { id: 'setup', pattern: '/setup', title: 'Setup', chrome: 'app' },
+  { id: 'confirmations', pattern: '/confirmations', title: 'Confirmation messages', chrome: 'app' },
+  { id: 'confirmation-edit', pattern: '/confirmations/:source_id/:channel', title: 'Confirmation message', chrome: 'app' },
 ];
 
 export interface Matched { route: RouteDef; params: Record<string, string> }

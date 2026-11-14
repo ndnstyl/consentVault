@@ -129,3 +129,71 @@ test('a fingerprint that does not match is a named error the screen can show', a
   const api = createClient({ baseUrl: 'http://vault.test', fetch: stub });
   await assert.rejects(api.session.confirmFinalExport('req1', 'b'.repeat(64)), (e: unknown) => e instanceof ApiError && e.code === 'validation_failed' && e.fields.sha256 === 'mismatch');
 });
+
+test('records: a contact point travels only in a POST body, filters only in the address', async () => {
+  const api = createClient({ baseUrl: base });
+  const r = await api.records.search('+15555550142');
+  assert.equal(r.items.length, 1);
+  const rv = await api.records.reveal(r.items.map((x) => x.record_id), 'review');
+  assert.equal(rv.items[0].contact, '+15555550142');
+  await api.records.list({ channel: 'sms', status: 'stop_on_record', limit: 5 });
+  const l = await log();
+  const search = l.find((x) => x.url.includes('records:search'))!;
+  assert.equal(search.method, 'POST');
+  assert.equal(search.url, '/v1/records:search');
+  assert.equal(search.body.contact, '+15555550142');
+  const list = l.find((x) => x.url.startsWith('/v1/records?'))!;
+  assert.ok(!/\d{7}/.test(list.url) && !list.url.includes('@'));
+});
+
+test('records: a developer gets fingerprints and no names, and may not search or reveal', async () => {
+  await scenario({ role: 'developer' });
+  const api = createClient({ baseUrl: base });
+  const p = await api.records.list({ limit: 3 });
+  assert.ok(p.items.every((x) => x.contact.masked === null && x.person === null && /^[0-9a-f]{8}$/.test(x.contact.fp_hint)));
+  await assert.rejects(api.records.search('+15555550142'), (e: unknown) => e instanceof ApiError && e.code === 'role_not_allowed');
+  await assert.rejects(api.records.reveal([p.items[0].record_id]), (e: unknown) => e instanceof ApiError && e.status === 403);
+  await assert.rejects(api.records.exportCreate({ filters: {}, contact_form: 'masked', include_person: false }), (e: unknown) => e instanceof ApiError && e.status === 403);
+});
+
+test('setup: skip is for the optional steps only', async () => {
+  const api = createClient({ baseUrl: base });
+  await scenario({ setup: 'almost' });
+  const s = await api.setup.get();
+  assert.equal(s.steps.length, 8);
+  await assert.rejects(api.setup.skip('brand'), (e: unknown) => e instanceof ApiError && e.code === 'step_not_skippable');
+  const k = await api.setup.skip('system', 'later');
+  assert.equal(k.status, 'skipped');
+  assert.equal((await api.setup.unskip('system')).status, 'to_do');
+});
+
+test('confirmations: a rule refuses to turn on until its prerequisites exist, in the contract order', async () => {
+  await scenario({ confirmations: 'empty' });
+  const api = createClient({ baseUrl: base });
+  await assert.rejects(api.confirmations.saveRule('src_web', 'sms', { enabled: true, sending_brand_id: 'brd_acme' }), (e: unknown) => e instanceof ApiError && e.code === 'no_sending_account');
+  await assert.rejects(api.confirmations.saveRule('src_web', 'email', { enabled: true, sending_brand_id: 'brd_acme' }), (e: unknown) => e instanceof ApiError && e.code === 'no_sending_account');
+  await scenario({ confirmations: 'link_unset' });
+  await assert.rejects(api.confirmations.saveRule('src_web', 'email', { enabled: true, sending_brand_id: 'brd_acme' }), (e: unknown) => e instanceof ApiError && e.code === 'link_host_not_verified');
+  const off = await api.confirmations.saveRule('src_web', 'email', { enabled: false, sending_brand_id: 'brd_acme' });
+  assert.equal(off.enabled, false);
+});
+
+test('confirmations: a developer sees sends by fingerprint and may not read replies', async () => {
+  await scenario({ role: 'developer' });
+  const api = createClient({ baseUrl: base });
+  const sends = await api.confirmations.sends({ limit: 5 });
+  assert.ok(sends.items.every((x) => x.contact.masked === null));
+  await assert.rejects(api.confirmations.replies({ state: 'to_read' }), (e: unknown) => e instanceof ApiError && e.status === 403);
+  await assert.rejects(api.confirmations.markReply('rpl_1', 'stop', 'x'), (e: unknown) => e instanceof ApiError && e.status === 403);
+});
+
+test('every request, read or write, is sent with cache no-store so a record response is never kept by the browser', async () => {
+  const seen: (RequestInit | undefined)[] = [];
+  const api = createClient({ baseUrl: base, fetch: (u, i) => { seen.push(i); return fetch(u, i); } });
+  await api.session.get();
+  await api.records.list({ limit: 5 });
+  await api.records.search('+15555550142');
+  await api.records.reveal(['rec_000']);
+  assert.equal(seen.length, 4);
+  assert.ok(seen.every((i) => i?.cache === 'no-store'), JSON.stringify(seen.map((i) => i?.cache)));
+});

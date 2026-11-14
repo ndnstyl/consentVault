@@ -24,7 +24,12 @@ class StripeRejectedError(BillingError):
 
 
 class PlanCatalogError(BillingError):
-    """A Stripe Price that sells a plan is missing the metadata the vault reads, or carries a malformed value."""
+    """A Stripe Price that sells a plan is missing the metadata the vault reads, or carries a malformed value. ``price_id`` and
+    ``check_problem`` carry the same facts as fields, so an alarm names them without reading the error's text."""
+
+    def __init__(self, message: str, *, price_id: str = "", problem: str = "") -> None:
+        super().__init__(message)
+        self.price_id, self.check_problem = price_id, problem
 
 
 class PlanNotFoundError(BillingError):

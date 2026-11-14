@@ -36,8 +36,11 @@ interface Lists { systems: System[] | null; names: Map<string, string>; checklis
 
 export function EvidenceLookup() {
   const { api, role, orgName, status } = useSession();
-  const { navigate } = useRouter();
+  const { navigate, search } = useRouter();
   const toast = useToast();
+  const recordId = search.get('record');
+  const revealRecord = useAction((id: string) => api.records.reveal([id]));
+  const [unreadable, setUnreadable] = useState<string | null>(null);
   const [contact, setContact] = useState<string | null>(null);
   const [proof, setProof] = useState<Proof | null>(null);
   const [lists, setLists] = useState<Lists>({ systems: null, names: new Map(), checklists: new Map() });
@@ -58,10 +61,8 @@ export function EvidenceLookup() {
       const checklists = new Map<number, Map<string, string>>();
       let systems: System[] | null = null;
       await Promise.all([
-        ...(role === 'admin' ? [
-          allPages((x) => api.brands.list({ cursor: x })).then((b) => b.forEach((y) => names.set(y.brand_id, y.display_name))).catch(() => undefined),
-          allPages((x) => api.sources.list({ cursor: x })).then((s) => s.forEach((y) => names.set(y.source_id, y.name))).catch(() => undefined),
-        ] : []),
+        allPages((x) => api.brandNames({ cursor: x })).then((b) => b.forEach((y) => names.set(y.brand_id, y.display_name))).catch(() => undefined),
+        allPages((x) => api.sourceNames({ cursor: x })).then((s) => s.forEach((y) => names.set(y.source_id, y.name))).catch(() => undefined),
         allPages((x) => api.systems.list({ cursor: x })).then((s) => { systems = s; }).catch(() => { systems = null; }),
         ...[...new Set((r.value.doc_check_results ?? []).map((d) => d.checklist_version))].map((v) => api.checklists.get(v).then((cl) => checklists.set(v, new Map(cl.elements.map((e) => [e.element_id, e.name])))).catch(() => undefined)),
       ]);
@@ -89,6 +90,19 @@ export function EvidenceLookup() {
   return (
     <>
       <PageHead title="Evidence lookup" lede={`Everything ${orgName}'s records hold for one phone number or email address.`} />
+      {recordId && !proof && (
+        <Banner kind="info" title="Opened from Records"
+          action={<Btn variant="primary" busy={revealRecord.busy} busyLabel="Showing" onClick={async () => {
+            const r = await revealRecord.run(recordId);
+            const it = r.ok ? r.value.items[0] : null;
+            if (it && it.contact) await run(it.contact);
+            else if (it) setUnreadable(it.cause === 'erased' ? 'This record is erased. Its contact point can no longer be read, and its stop is kept.' : "Your organization's encryption key did not answer. Try again in a minute.");
+          }}>Show full contact point</Btn>}>
+          This page opens by record, so the contact point stays masked until you ask for it. Showing it is recorded in the audit log with your name.
+        </Banner>
+      )}
+      {unreadable && <Banner kind="warning" title="The contact point was not shown">{unreadable}</Banner>}
+      {revealRecord.error && <ErrorBlock title="The contact point was not shown" err={revealRecord.error} next="Try again in a minute. Nothing was changed." />}
       <div className="card"><ContactInput onSubmit={run} busy={lookup.busy} /></div>
       {lookup.busy && <div className="mt5"><Skeleton what="records" rows={4} /></div>}
       {lookupErr && !lookup.busy && (

@@ -5,6 +5,7 @@ succeeded; here it must fail. Names keep the reviewer's labels (attack A1..A5, d
 record and the suite stay joined; the later tests pin the remaining items of the same review.
 """
 
+from error_names import db_codes
 import os
 import subprocess
 import uuid
@@ -198,7 +199,7 @@ def test_the_migration_refuses_a_superuser_owner(pg_server):
     with psycopg.connect(f"postgresql://postgres@127.0.0.1:{pg_server['port']}/postgres", autocommit=True) as s:
         s.execute(f'CREATE DATABASE "{name}"')
     with db.connect(f"postgresql://postgres@127.0.0.1:{pg_server['port']}/{name}") as su:
-        with pytest.raises(MigrationError, match="refusing to migrate as postgres, a superuser or BYPASSRLS role"):
+        with pytest.raises(MigrationError, match=db_codes("inline_code_block", "refusing to migrate as %, a superuser or BYPASSRLS")):
             db.migrate(su)
 
 
@@ -228,7 +229,7 @@ def test_multi_mode_withdraws_the_counting_ids_from_the_runtime_role(tenancy):
 
 def test_multi_mode_refuses_a_new_version_one_row_even_for_the_home_organisation(tenancy):
     with tenancy.app() as app:
-        with pytest.raises(LedgerError, match="multi mode|home organisation"):
+        with pytest.raises(LedgerError, match=db_codes("check_clear_contact_home_only", "clear contact point")):
             with org_transaction(app, tenancy.token_for_home()):
                 record_event(app, contact=PHONE, event_type="revoke", channels=["sms"], purposes=["marketing"],
                              method="keyword", origin="consumer")

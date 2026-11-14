@@ -7,7 +7,11 @@ import { Shell } from './Shell.tsx';
 /** Renders nothing until mounted: the static HTML is an empty shell, the router reads the real address on the client. */
 export function PortalApp({ initial }: { initial: string }) {
   const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    setMounted(true);
+    document.documentElement.dataset.ready = '1'; // tells the page's boot watch that the dashboard started
+    document.getElementById('boot-fail')?.setAttribute('hidden', '');
+  }, []);
   return (
     <RouterProvider initial={initial}>
       <SessionProvider>

@@ -15,6 +15,7 @@ class Message:
     subject: str
     text: str
     html: str
+    template: str | None = None  # the template type; SES tags the send with it so a bounce can name it
 
 
 class Sender(Protocol):
@@ -50,4 +51,8 @@ class InMemorySendLog:
         self.records: list[SendRecord] = []
 
     def append(self, record: SendRecord) -> None:
+        # The Postgres log's rule (migration 0063): one bounced row per provider message.
+        if record.outcome == "bounced" and any(r.outcome == "bounced" and (r.provider, r.provider_message_id) ==
+                                               (record.provider, record.provider_message_id) for r in self.records):
+            return
         self.records.append(record)

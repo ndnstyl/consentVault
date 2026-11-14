@@ -1,9 +1,10 @@
 // node check.mjs : axe + overflow check on every state, both themes, 375 and 1440. Writes ../a11y-report.json
 import { createRequire } from 'module';
 import fs from 'fs'; import path from 'path'; import { fileURLToPath } from 'url';
-const require = createRequire('/Users/oxfloors/brain/projects/ox-floors/training-classroom/package.json');
-const { chromium } = require('playwright-core');
-const axeSrc = fs.readFileSync('/Users/oxfloors/brain/ox-web/node_modules/axe-core/axe.min.js','utf8');
+// playwright and axe-core are the portal app's pinned dev dependencies (portal/app: npm ci).
+const require = createRequire(new URL('../../../app/package.json', import.meta.url));
+const { chromium } = require('playwright');
+const axeSrc = fs.readFileSync(require.resolve('axe-core/axe.min.js'),'utf8');
 const here = path.dirname(fileURLToPath(import.meta.url)); const root = path.resolve(here,'..');
 const pages = ['index','sources-credentials','evidence','deliveries','policies','components'];
 const exe = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';

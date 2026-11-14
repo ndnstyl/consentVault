@@ -88,3 +88,62 @@ a button that does that action. Also say what was **not** changed when that is t
 
 Plain, specific, short. Second person. Verbs first on buttons ("Issue a credential", "Redrive now"). No exclamation
 marks, no "Oops", no "Great job".
+
+## 8. Additions 2026-10-30 (Records, Setup, Confirmation messages)
+
+Added to the banned list (section 1) and to the copy check (handoff G-3):
+
+| Banned | Why | Say instead |
+|---|---|---|
+| consent confirmed, confirmed consent, verified consent | a confirmation message repeats what was captured; it decides nothing | "confirmation sent", "what the person agreed to" |
+| opted in (as a status label) | reads as a conclusion | "Consent record found" |
+| "has consent", "with consent", "without consent" (in labels, tiles and the chart) | conclusion | "consent record found", "no record" |
+| "registered" or "approved" about texting registration as ConsentVault's finding | ConsentVault does not check it | "Marked complete by <name>" |
+
+Label dictionary additions:
+
+| API value | Screen label |
+|---|---|
+| record `state: erased` | Erased (stop kept) |
+| Records list statuses | Only Consent record found, Stop on record, No record. Record incomplete appears only on evidence lookup. |
+| `person.name` or `person.company` null, never captured | Not captured |
+| `partial: person` | Not available (encryption key did not answer) |
+| stop from a text reply | Stop (revoke): texts, calls and AI-voice calls |
+| skip `quiet_hours` (texts only) | Not sent: outside texting hours (<local time> in the person's time zone) |
+| skip `time_zone_unknown` (texts only) | Not sent: the person's time zone could not be told from the number |
+| skip `brand_not_in_grant` | Not sent: the consent does not name <brand> |
+| skip `inbound_not_verified` | Not sent: no test reply has reached ConsentVault |
+| skip `link_host_failing` | Not sent: your wording link host is not answering |
+| skip `no_sending_account` | Not sent: no sending account connected |
+| skip `sending_account_failing` | Not sent: your provider refused the account 5 times in a row; check the account |
+| reply `start` | Reply START: texts on again / Reply START: stop kept (<cause in plain words>) |
+| opt-out reply | Opt-out reply sent / sent by your provider |
+| record erased, name or company | Erased |
+| `contact.masked: null` with `partial: contact_mask` | Not available (encryption key did not answer) |
+| `total: null` | Total not available |
+| confirmation `sent` / `delivered` / `failed` / `dead` | Sent / Sent, delivered / Failed / Undelivered after 2 hours (`failed` is final: the provider refused the message and nothing is retried, so the label is never "Retrying") |
+| skip `channel_not_in_grant` | Not sent: the consent does not name this channel |
+| skip `contact_kind` | Not sent: no address for this channel |
+| skip `late` | Not sent: the consent arrived more than N minutes after it was captured |
+| skip `stop_on_record` | Not sent: stop on record |
+| skip `recent_confirmation` | Not sent: one was sent in the last N hours |
+| skip `texting_not_registered` | Not sent: texting registration not marked |
+| skip `org_not_active` | Not sent: organization not active |
+| skip `test_event` | Not sent: test events are off for this rule |
+| reply `stop` / `help` / `other` / `not_stop` | Reply with a stop word, stop recorded / Reply HELP, help sent / To read / Read, not a stop |
+| stop `recorded_by: provider_refusal` | Stop recorded: your text provider refused a message because the number opted out there |
+| texting registration `not_marked` / `marked` | Not marked / Marked complete by <name>, <date> |
+| setup step `done` / `to_do` / `skipped` / `waiting` / `blocked` | Done / To do / Skipped / Waiting on an admin / Paused |
+
+Fixed sentences (used exactly):
+- Records search hint: "Whole number or address only. Each contact is stored encrypted, so partial search is not possible."
+- Records notice: "Evidence status describes the records held. Your policy outcome for a contact is on its evidence lookup page."
+- Reveal dialog: "Each page you open this way writes one audit row with your name and the records shown."
+- Texting registration dialog: "ConsentVault records who marked it and when. It does not check your registration with carriers or your provider."
+- Text messages (fixed, every word): see contracts/confirmations.md sections 6 and 7; the portal shows them, never edits them.
+- Email stop sentence: "To stop email from <brand>, use this link: <stop link>. The page also lets you stop texts and calls. Texts and calls are not affected unless you choose that." No email says "reply STOP".
+- Export README line: "This file lists the records ConsentVault holds for your organization on the date shown. It is not a legal determination."
+
+Consumer-facing strings (the confirmation messages and the two public pages) follow the organization's own voice but
+keep the fixed parts in contracts/confirmations.md section 6; they never name ConsentVault as deciding anything, and
+the only contact points they carry are the organization's own help contact and stop link.

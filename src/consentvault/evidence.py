@@ -18,7 +18,10 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import psycopg
+from psycopg import sql
 
+from . import dbclock
+from .safelog import describe
 from .errors import ConsentVaultError
 from .ledger import (EVIDENCE_V2, HASH_VERSIONS, _CIPHER_COLUMNS_V2, _canon_value, attribution_digest, canonical_dumps,
                      content_sha256, link_hash)
@@ -571,6 +574,12 @@ _EVENT_COLUMNS_V2 = tuple(dict.fromkeys(tuple(HASH_VERSIONS[2]) + ("prev_hash", 
 _ISO = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 
+def _update_sql(cols) -> sql.Composed:
+    """UPDATE of export_job for ``cols``; every column is a quoted identifier, every value a parameter."""
+    return sql.SQL("UPDATE consentvault.export_job SET {} WHERE org_id = (SELECT consentvault.current_org())"
+                   " AND export_id = %s").format(sql.SQL(", ").join(sql.SQL("{} = %s").format(sql.Identifier(c)) for c in cols))
+
+
 class ExportError(ConsentVaultError):
     """An evidence package could not be built or served. ``error_name`` is the contract's error name."""
 
@@ -667,7 +676,7 @@ class LocalEcdsaSigner:
         try:
             key = serialization.load_pem_private_key(private_key_pem, password=None)
         except (ValueError, TypeError) as exc:
-            raise SigningUnavailableError(f"the evidence signing key could not be loaded: {exc}") from exc
+            raise SigningUnavailableError(f"the evidence signing key could not be loaded: {describe(exc)}") from exc
         if not isinstance(key, ec.EllipticCurvePrivateKey) or key.curve.name != "secp256r1":
             raise SigningUnavailableError("the evidence signing key must be an ECDSA P-256 key")
         self._key = key
@@ -703,7 +712,7 @@ def _sign(signer: EvidenceSigner, message: bytes) -> str:
     except ConsentVaultError:
         raise
     except Exception as exc:
-        raise SigningUnavailableError(f"the evidence key could not sign: {type(exc).__name__}: {exc}") from exc
+        raise SigningUnavailableError(f"the evidence key could not sign: {describe(exc)}") from exc
     if not isinstance(sig, bytes) or not sig:
         raise SigningUnavailableError("the evidence key returned no signature")
     return base64.b64encode(sig).decode("ascii")
@@ -1086,11 +1095,19 @@ class ExportService:
             raise ExportError("the export link secret must be at least 32 bytes")
         self._connect, self._mint, self._crypto, self._signer, self._store = connect, mint_token, crypto, signer, store
         self._secret = link_secret
-        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._clock = clock or self._database_now   # a clock is injected by tests only; every judgement reads the database's
         self._region, self._link_ttl, self._cache_days, self._path = region, link_ttl, cache_days, download_path
         self._dispatch = dispatch or (lambda fn: fn())
 
     # plumbing -----------------------------------------------------------------------------------------------------
+
+    def _database_now(self) -> datetime:
+        """The database's clock on a short connection of its own, so link, cursor and cache expiry never follow this host's."""
+        conn = self._connect()
+        try:
+            return dbclock.now(conn)
+        finally:
+            conn.close()
 
     def _tx(self, org_id, scopes=("proof_read",)):
         from contextlib import contextmanager
@@ -1137,10 +1154,7 @@ class ExportService:
         return row
 
     def _update(self, conn: psycopg.Connection, export_id, **cols) -> None:
-        sets = ", ".join(f"{c} = %s" for c in cols)
-        n = conn.execute(f"UPDATE consentvault.export_job SET {sets}"
-                         " WHERE org_id = (SELECT consentvault.current_org()) AND export_id = %s",
-                         (*cols.values(), uuid.UUID(str(export_id)))).rowcount
+        n = conn.execute(_update_sql(cols), (*cols.values(), uuid.UUID(str(export_id)))).rowcount
         if n != 1:
             raise ExportNotFoundError("the export job vanished while it was being updated")
 
@@ -1442,7 +1456,7 @@ class ExportService:
                 package = tc.decrypt_field(opened[0], org_id, str(job["export_id"]), _PACKAGE_COLUMN, sealed)
             except FieldCryptoError as exc:
                 raise ExportIntegrityError("the cached package failed authentication") from exc
-            if hashlib.sha256(package).hexdigest() != job["package_sha256"]:
+            if not hmac.compare_digest(hashlib.sha256(package).hexdigest(), str(job["package_sha256"])):
                 raise ExportIntegrityError("the cached package does not match its recorded sha256")
             self._update(conn, job["export_id"], downloaded_at=self._clock())
             self._audit(conn, "system", f"export-link:{link['nonce'][:8]}", "export.download", job["export_id"],

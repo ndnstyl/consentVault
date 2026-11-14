@@ -14,12 +14,13 @@ from __future__ import annotations
 import os
 import threading
 import uuid
-from typing import Callable
+from typing import Callable, Optional
 
 import psycopg
 
 from ..providers.errors import KeyProviderError as CustodyKeyError
 from ..providers.keys import KeyProvider as CustodyProvider, wrapped_version
+from ..lengths import is_bytes_of_len
 from .errors import KeyProviderError
 from .keys_protocol import WrappedKey
 
@@ -28,6 +29,9 @@ FINGERPRINT_SECRET_BYTES = 32
 # the only scope the loader's token carries: it opens nothing but the organisation's own row of org_fingerprint_secret
 FINGERPRINT_LOADER_SCOPE = "worker:fingerprint_secret"
 FINGERPRINT_LOADER_TTL = 30
+# the display key (records.md section 8) is stored and read the same way, under its own scope and table
+DISPLAY_LOADER_SCOPE = "worker:display_key"
+DISPLAY_KEY_BYTES = 32
 
 
 class DatabaseFingerprintSecretLoader:
@@ -41,6 +45,11 @@ class DatabaseFingerprintSecretLoader:
     key makes them unreadable everywhere. A key rotation re-wraps the row under the new version; ``forget`` drops the held
     copy so the next read takes the re-wrapped bytes. A missing row or a failed read raises ``KeyProviderError``.
     """
+
+    _SCOPE = FINGERPRINT_LOADER_SCOPE
+    _SQL = ("SELECT wrapped FROM consentvault.org_fingerprint_secret"
+            " WHERE org_id = (SELECT consentvault.current_org())")
+    _WHAT = "fingerprint secret"
 
     def __init__(self, owner_connect: Callable[[], psycopg.Connection], token_key) -> None:
         if not callable(owner_connect):
@@ -59,16 +68,15 @@ class DatabaseFingerprintSecretLoader:
         if held is not None:
             return held
         try:
-            token = mint_org_token(self._key, org, [FINGERPRINT_LOADER_SCOPE], credential_id=None,
+            token = mint_org_token(self._key, org, [self._SCOPE], credential_id=None,
                                    ttl_seconds=FINGERPRINT_LOADER_TTL)
             with self._connect() as conn, org_transaction(conn, token):
-                row = conn.execute("SELECT wrapped FROM consentvault.org_fingerprint_secret"
-                                   " WHERE org_id = (SELECT consentvault.current_org())").fetchone()
+                row = conn.execute(self._SQL).fetchone()
         except psycopg.Error as exc:
-            raise KeyProviderError(f"the fingerprint secret of organisation {org} could not be read:"
+            raise KeyProviderError(f"the {self._WHAT} of organisation {org} could not be read:"
                                    f" {type(exc).__name__}") from exc
         if row is None:
-            raise KeyProviderError(f"no wrapped fingerprint secret is stored for organisation {org}")
+            raise KeyProviderError(f"no wrapped {self._WHAT} is stored for organisation {org}")
         wrapped = bytes(row["wrapped"])
         with self._lock:
             self._held[org] = wrapped
@@ -79,22 +87,38 @@ class DatabaseFingerprintSecretLoader:
             self._held.pop(uuid.UUID(str(org_id)), None)
 
 
-class CustodyKeyAdapter:
-    """Implements ``tenancy.keys_protocol.KeyProvider`` over a providers ``KeyProvider``."""
+class DatabaseDisplayKeyLoader(DatabaseFingerprintSecretLoader):
+    """Reads ``consentvault.org_display_key`` (migration 0044) for ``CustodyKeyAdapter``, exactly as the fingerprint secret
+    is read, under the token scope ``worker:display_key`` (the table's read policy admits no other)."""
 
-    def __init__(self, custody: CustodyProvider, load_wrapped_fingerprint_secret: Callable[[uuid.UUID], bytes]):
+    _SCOPE = DISPLAY_LOADER_SCOPE
+    _SQL = "SELECT wrapped FROM consentvault.org_display_key WHERE org_id = (SELECT consentvault.current_org())"
+    _WHAT = "display key"
+
+
+class CustodyKeyAdapter:
+    """Implements ``tenancy.keys_protocol.KeyProvider`` over a providers ``KeyProvider``. Beyond that protocol it hands out
+    the organisation's display key (``display_key``), which seals the masked contact, name and company of a record."""
+
+    def __init__(self, custody: CustodyProvider, load_wrapped_fingerprint_secret: Callable[[uuid.UUID], bytes],
+                 load_wrapped_display_key: Optional[Callable[[uuid.UUID], bytes]] = None):
         if not isinstance(custody, CustodyProvider):
             raise KeyProviderError("custody must be a consentvault.providers.keys.KeyProvider")
         if not callable(load_wrapped_fingerprint_secret):
             raise KeyProviderError("load_wrapped_fingerprint_secret must be callable")
+        if load_wrapped_display_key is not None and not callable(load_wrapped_display_key):
+            raise KeyProviderError("load_wrapped_display_key must be callable")
         self._custody = custody
         self._load_fp = load_wrapped_fingerprint_secret
+        self._load_display = load_wrapped_display_key
 
     @classmethod
     def from_database(cls, custody: CustodyProvider, owner_connect: Callable[[], psycopg.Connection],
                       token_key) -> "CustodyKeyAdapter":
-        """The production wiring: the fingerprint secret comes from ``consentvault.org_fingerprint_secret``."""
-        return cls(custody, DatabaseFingerprintSecretLoader(owner_connect, token_key))
+        """The production wiring: the fingerprint secret comes from ``consentvault.org_fingerprint_secret`` and the display
+        key from ``consentvault.org_display_key``."""
+        return cls(custody, DatabaseFingerprintSecretLoader(owner_connect, token_key),
+                   DatabaseDisplayKeyLoader(owner_connect, token_key))
 
     @property
     def provable_destruction(self) -> bool:
@@ -103,6 +127,10 @@ class CustodyKeyAdapter:
     def new_fingerprint_secret(self, org_id: uuid.UUID) -> bytes:
         """Generate the organisation's fingerprint secret; returns it wrapped by the org key, for the caller to store."""
         return self._custody.wrap(str(org_id), os.urandom(FINGERPRINT_SECRET_BYTES))
+
+    def new_display_key(self, org_id: uuid.UUID) -> bytes:
+        """Generate the organisation's display key; returns it wrapped by the org key, for the caller to store."""
+        return self._custody.wrap(str(org_id), os.urandom(DISPLAY_KEY_BYTES))
 
     @property
     def custody(self) -> CustodyProvider:
@@ -131,6 +159,25 @@ class CustodyKeyAdapter:
                 raise
             forget(org_id)  # a rotation re-wrapped it and destroyed the version held in memory: read the row again
             secret = self._custody.unwrap(str(org_id), bytes(self._load_fp(org_id)))
-        if len(secret) != FINGERPRINT_SECRET_BYTES:
+        if not is_bytes_of_len(secret, FINGERPRINT_SECRET_BYTES):
             raise KeyProviderError("the stored fingerprint secret is not 32 bytes")
         return secret
+
+    def display_key(self, org_id: uuid.UUID) -> bytes:
+        """The organisation's 32-byte display key, unwrapped on each call (no key is kept in memory)."""
+        if self._load_display is None:
+            raise KeyProviderError("this key adapter was built without a display key loader")
+        wrapped = self._load_display(org_id)
+        if not isinstance(wrapped, (bytes, bytearray)) or not wrapped:
+            raise KeyProviderError(f"no wrapped display key is stored for organisation {org_id}")
+        try:
+            key = self._custody.unwrap(str(org_id), bytes(wrapped))
+        except CustodyKeyError:
+            forget = getattr(self._load_display, "forget", None)
+            if forget is None:
+                raise
+            forget(org_id)  # a rotation re-wrapped it and destroyed the version held in memory: read the row again
+            key = self._custody.unwrap(str(org_id), bytes(self._load_display(org_id)))
+        if not is_bytes_of_len(key, DISPLAY_KEY_BYTES):
+            raise KeyProviderError("the stored display key is not 32 bytes")
+        return key

@@ -195,8 +195,10 @@ def test_a_failing_key_service_blocks_the_rotation_by_name_and_raises_an_alarm(r
         raise CustodyKeyError("key service unreachable")
 
     monkeypatch.setattr(rot.env.custody, "wrap", broken)
-    with pytest.raises(kr.KeyRotationError, match="key service unreachable"):
+    with pytest.raises(kr.KeyRotationError, match=rf"{org}.*rewrap_failed.*KeyProviderError") as blocked:  # the org id stays
         rot.run(org)
+    assert "key service unreachable" not in str(blocked.value)  # the key service's own text never travels
+    assert blocked.value.org_ids == (str(org),)  # the organisation travels as a field, so a report never searches the text
     state = kr.get_rotation_state(rot.env.operator, rot.t.key, org)
     assert state["status"] == "blocked" and state["blocked_reason"].startswith("rewrap_failed:")
     assert rot.sql("SELECT name, error_class FROM consentvault.operator_alarm WHERE org_id = %s", org)[0] == {
@@ -377,3 +379,26 @@ def _keys(env, org):
     with env.t.superuser() as su:
         return su.execute("SELECT version, status, destroy_after FROM consentvault.org_key WHERE org_id = %s"
                           " ORDER BY version", (org,)).fetchall()
+
+
+def test_rotation_rewraps_the_sending_account_secrets_and_leaves_none_on_the_old_key(rot):
+    """confirmations.md section 13 (stored secrets): the provider secret and the auth token are wrapped by the organization key,
+    so the census counts them and the rotation moves them; the old version is destroyed only when none is left on it."""
+    from consentvault.providers.keys import wrapped_version
+
+    org, custody = rot.c, rot.env.custody
+    first, second = b"s" * 20, b"t" * 32
+    with rot.t.superuser() as su:
+        su.execute(
+            "INSERT INTO consentvault.sending_account (org_id, account_id, channel, provider, inbound_key, inbound_url,"
+            " provider_replies, credentials_ct, credential_ids_ct, auth_token_ct) VALUES (%s, gen_random_uuid(), 'sms', 'twilio',"
+            " %s, 'u', '{\"stop\": false, \"help\": false, \"start\": false}'::jsonb, %s, %s, %s)",
+            (org, "k" * 40, custody.wrap(str(org), first), b"ids", custody.wrap(str(org), second)))
+    started = rot.start(org)
+    assert started["remaining_other"] >= 2  # the census counts both blobs
+    done = rot.run(org, backup_retention_days=0)
+    assert done["status"] == "complete" and done["old_version_destroyed"] is True
+    (row,) = rot.sql("SELECT credentials_ct, auth_token_ct FROM consentvault.sending_account WHERE org_id = %s", org)
+    assert wrapped_version(bytes(row["credentials_ct"])) == 2 and wrapped_version(bytes(row["auth_token_ct"])) == 2
+    assert custody.unwrap(str(org), bytes(row["credentials_ct"])) == first
+    assert custody.unwrap(str(org), bytes(row["auth_token_ct"])) == second

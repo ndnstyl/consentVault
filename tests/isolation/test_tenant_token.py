@@ -204,3 +204,57 @@ def test_single_mode_needs_no_token_holds_only_the_home_organisation_and_refuses
         with org_transaction(app, mint_org_token(key, home, ["admin"], credential_id=None)):
             assert app.execute("SELECT count(*) AS n FROM consentvault.disclosure").fetchone()["n"] == 1
         _assert_empty({"forged": _with_setting(app, "v1.single-k.00." + "0" * 64)["disclosure"]})
+
+
+def test_a_token_valid_when_its_transaction_opened_holds_the_tenant_to_the_end_of_that_transaction(tenancy):
+    """Expiry is judged at the start of the transaction that entered the token, so one transaction never loses its tenant
+    part way through (a write after the instant of expiry once failed deep in the sync outbox with "no tenant entered"),
+    and the next transaction with the same token is refused."""
+    with tenancy.app() as app:
+        # minted at a fixed instant once the connection is open, so its expiry is known exactly and nothing slow (opening the
+        # connection under load) eats into its life before the transaction opens
+        issued, ttl = int(time.time()), 3  # ttl: arbitrary test config
+        token = tenancy.token(tenancy.a, ttl_seconds=ttl, now=issued)
+        expires_at = issued + ttl
+        with org_transaction(app, token) as org:
+            while time.time() <= expires_at:  # bounded: at most ttl seconds; past the token's exact expiry, by measurement
+                time.sleep(min(0.05, max(0.0, expires_at - time.time()) + 0.01))
+            assert app.execute("SELECT consentvault.current_org() AS o").fetchone()["o"] == org
+            assert app.execute("SELECT count(*) AS n FROM consentvault.event").fetchone()["n"] > 0
+        _assert_empty(_with_setting(app, token))
+        with pytest.raises(TenantTokenError):
+            with org_transaction(app, token):
+                pass
+
+
+def test_a_token_stamped_120_seconds_in_the_future_sees_nothing_and_cannot_be_entered(tenancy):
+    ahead = tenancy.token(tenancy.a, now=time.time() + 120)
+    with tenancy.app() as app:
+        _assert_empty(_with_setting(app, ahead))
+        with pytest.raises(TenantTokenError):
+            with org_transaction(app, ahead):
+                pass
+
+
+@pytest.mark.parametrize("by", [660.0, -660.0], ids=["ahead", "behind"])
+def test_a_token_minted_by_a_host_eleven_minutes_out_is_refused(tenancy, by):
+    token = tenancy.token(tenancy.a, now=time.time() + by)
+    with tenancy.app() as app:
+        _assert_empty(_with_setting(app, token))
+
+
+def test_a_token_stamped_inside_the_thirty_second_leeway_is_accepted(tenancy):
+    near = tenancy.token(tenancy.a, now=time.time() + 5)
+    with tenancy.app() as app:
+        assert _with_setting(app, near)["event"] > 0
+
+
+def test_a_token_with_no_issued_at_time_sees_nothing(tenancy):
+    now = int(time.time())
+    bare = _sign(tenancy.key.secret, tenancy.key.key_id,
+                 {"org": str(tenancy.a.org_id), "scp": ["gate_read"], "cid": None, "exp": now + 300})
+    garbled = _sign(tenancy.key.secret, tenancy.key.key_id,
+                    {"org": str(tenancy.a.org_id), "scp": ["gate_read"], "cid": None, "iat": "x", "exp": now + 300})
+    with tenancy.app() as app:
+        _assert_empty(_with_setting(app, bare))
+        _assert_empty(_with_setting(app, garbled))

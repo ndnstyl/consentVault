@@ -24,6 +24,13 @@ def owner_dsn(pg_server):
                    " END $$")
         su.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_console')"
                    " THEN CREATE ROLE consentvault_console NOLOGIN; END IF; END $$")
+        su.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_integrity')"
+                   " THEN CREATE ROLE consentvault_integrity NOLOGIN; END IF; END $$")
+        su.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_records_jobs')"
+                   " THEN CREATE ROLE consentvault_records_jobs NOLOGIN; END IF; END $$")
+        for group in ("consentvault_isolation_self_test", "consentvault_restore_drill"):
+            su.execute(f"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{group}')"
+                       f" THEN CREATE ROLE {group} NOLOGIN; END IF; END $$")
         su.execute(f'CREATE ROLE "{owner}" NOLOGIN IN ROLE consentvault_operator')
         su.execute(f'CREATE ROLE "{owner}_m" LOGIN IN ROLE "{owner}"')
         su.execute(f'ALTER ROLE "{owner}_m" SET role = \'{owner}\'')

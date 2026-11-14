@@ -30,6 +30,7 @@ what is due, and records each destruction.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -39,11 +40,14 @@ from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
 import psycopg
+from psycopg import sql
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from .. import dbclock
+from ..safelog import describe
 from . import admin
 from .admin_base import ROLE_ADMIN, ApiError, Ctx, body_dict, iso, need_text, to_uuid
-from .erasure import LifecycleError, audit_org, audit_platform, held_note, now_utc, operator_org
+from .erasure import LifecycleError, audit_org, audit_platform, held_note, operator_org
 from .tokens import TokenKey
 
 MIN_WINDOW_DAYS = 30
@@ -104,19 +108,26 @@ def _open_request(conn, *, lock: bool = True) -> Optional[dict]:
                         " AND state <> 'complete'" + (" FOR UPDATE" if lock else "")).fetchone()
 
 
+def _step_sql(cols) -> sql.Composed:
+    sets = sql.SQL("").join(sql.SQL(", {} = %s").format(sql.Identifier(c)) for c in cols)
+    return sql.SQL("UPDATE consentvault.offboarding_request SET steps = steps || jsonb_build_object(%s::text, %s::jsonb)"
+                   "{} WHERE org_id = (SELECT consentvault.current_org()) AND request_id = %s").format(sets)
+
+
 def _step(conn, request_id, name: str, value: dict, **cols) -> None:
-    sets = "".join(f", {c} = %s" for c in cols)
-    conn.execute(f"UPDATE consentvault.offboarding_request SET steps = steps || jsonb_build_object(%s::text, %s::jsonb)"
-                 f"{sets} WHERE org_id = (SELECT consentvault.current_org()) AND request_id = %s",
-                 (name, json.dumps(value), *cols.values(), request_id))
+    conn.execute(_step_sql(cols), (name, json.dumps(value), *cols.values(), request_id))
+
+
+def _record_sql(cols) -> sql.Composed:
+    names = sql.SQL("").join(sql.SQL(", {}").format(sql.Identifier(c)) for c in cols)
+    marks = sql.SQL("").join(sql.SQL(", %s") for _ in cols)
+    return sql.SQL("INSERT INTO consentvault.destruction_record (org_id, record_id, request_id, kind{})"
+                   " VALUES ((SELECT consentvault.current_org()), %s, %s, %s{})").format(names, marks)
 
 
 def _record(conn, request_id, kind: str, **cols) -> str:
     rid = uuid.uuid4()
-    names = "".join(f", {c}" for c in cols)
-    marks = "".join(", %s" for _ in cols)
-    conn.execute(f"INSERT INTO consentvault.destruction_record (org_id, record_id, request_id, kind{names})"
-                 f" VALUES ((SELECT consentvault.current_org()), %s, %s, %s{marks})",
+    conn.execute(_record_sql(cols),
                  (rid, request_id, kind, *[json.dumps(v) if isinstance(v, dict) else v for v in cols.values()]))
     return str(rid)
 
@@ -193,7 +204,7 @@ def _read_export(conn, *, token_key: TokenKey, custody, store, org_id) -> bytes:
     except ProviderError as exc:
         raise LifecycleError(f"the final export could not be read from the archive store: {type(exc).__name__}") from exc
     package = AESGCM(dk).decrypt(blob[:12], blob[12:], f"{org}:{r['request_id']}:final_export".encode())
-    if hashlib.sha256(package).hexdigest() != r["final_export_sha256"]:
+    if not hmac.compare_digest(hashlib.sha256(package).hexdigest(), str(r["final_export_sha256"])):
         raise LifecycleError("the final export does not match the digest recorded when it was taken")
     return package
 
@@ -219,7 +230,7 @@ def notify_admins(conn, notifier, *, event: str, review_url: str) -> int:
     for addr in to:
         try:
             notifier.send("security_alert", addr, {"company": company, "event": event,
-                                                    "when": now_utc().strftime("%Y-%m-%d %H:%M UTC"),
+                                                    "when": dbclock.now(conn).strftime("%Y-%m-%d %H:%M UTC"),
                                                     "review_url": review_url})
         except (SendFailed, NotifyRefused) as exc:
             raise OffboardNoticeError(f"a tenant admin notice could not be sent ({type(exc).__name__})") from exc
@@ -230,14 +241,14 @@ def notify_admins(conn, notifier, *, event: str, review_url: str) -> int:
 def schedule_key_destruction(conn, *, custody, request: dict, window_days: int, actor_kind: str, actor_id: str,
                              request_id: str) -> dict:
     """Inside the entered organisation: queue under a hold, or schedule with the provider and record it."""
-    from ..providers.errors import KeyProviderError
+    from ..providers.errors import ProviderError
 
     conn.execute("SELECT consentvault.lifecycle_lock()")
     org = conn.execute("SELECT consentvault.current_org() AS o").fetchone()["o"]
     held = any_hold(conn)
     if held is not None:
         # the step and the audit row are tenant-readable: a neutral held state; the record keeps the hold id
-        _step(conn, request["request_id"], "key_destruction", {"status": "held", "at": iso(now_utc())})
+        _step(conn, request["request_id"], "key_destruction", {"status": "held", "at": iso(dbclock.now(conn))})
         rec = _record(conn, request["request_id"], "held", hold_id=uuid.UUID(held),
                       export_sha256=request["final_export_sha256"])
         audit_org(conn, actor_kind=actor_kind, actor_id=actor_id, action="offboarding.destruction_held",
@@ -249,9 +260,13 @@ def schedule_key_destruction(conn, *, custody, request: dict, window_days: int, 
         st = custody.status(str(org))
         if st.state == "destroyed":
             raise DestructionError(f"the provider reports the key of {org} already destroyed")
-        if st.state != "pending":
+        # pending with no date: a provider that records its schedule before asking KMS crashed in between; scheduling
+        # again finishes it (the provider resumes what it recorded) and returns the real date
+        if st.state != "pending" or st.destroy_at is None:
             st = custody.schedule_destruction(str(org), window_days=window)
-    except KeyProviderError as exc:
+        if st.destroy_at is None:
+            raise DestructionError(f"the provider scheduled destruction of {org} but returned no destruction date")
+    except ProviderError as exc:  # a refusal, a throttle, an unreachable service or a missing setting alike
         raise ApiError("key_unavailable", f"the key provider did not schedule destruction ({type(exc).__name__})") from exc
     try:
         with conn.transaction():
@@ -266,7 +281,7 @@ def schedule_key_destruction(conn, *, custody, request: dict, window_days: int, 
     except psycopg.Error as exc:
         try:
             custody.cancel_destruction(str(org))
-        except KeyProviderError as cexc:
+        except ProviderError as cexc:
             raise DestructionError(f"the provider scheduled destruction of {org} but the database refused to record it "
                                    f"({type(exc).__name__}) and the cancel failed ({type(cexc).__name__}): cancel it "
                                    f"by hand before {iso(st.destroy_at)}") from exc
@@ -287,7 +302,7 @@ def schedule_key_destruction(conn, *, custody, request: dict, window_days: int, 
 def run_offboard(conn: psycopg.Connection, *, token_key: TokenKey, custody, crypto, signer, store, notifier,
                  operator_id: str, request_id: str, org_id, reason: Optional[str] = None,
                  window_days: int = MIN_WINDOW_DAYS, review_url: str = "https://app.consentvault.ai/settings",
-                 clock: Callable[[], datetime] = now_utc,
+                 clock: Optional[Callable[[], datetime]] = None,
                  deliver: Optional[Callable[[Any, Any, bytes, str], None]] = None, links=None) -> dict:
     """POST /v1/orgs/{id}/offboard (operator). Re-runnable: each step that is done is not repeated.
 
@@ -320,12 +335,14 @@ def run_offboard(conn: psycopg.Connection, *, token_key: TokenKey, custody, cryp
         # first: an open key rotation is cancelled (visibly), so no job pass re-wraps or destroys under an offboarding
         cancelled = cancel_open_rotation(conn, actor_id=operator_id, request_id=request_id)
         if cancelled is not None:
-            _step(conn, req["request_id"], "rotation_cancelled", {"status": "done", "at": iso(now_utc()),
+            _step(conn, req["request_id"], "rotation_cancelled", {"status": "done", "at": iso(dbclock.now(conn)),
                                                                   "rotation_id": cancelled})
         audit_platform(conn, operator_id=operator_id, action="offboarding.run", target_kind="org", target_id=org,
                        reason=reason, request_id=request_id)
     rid = req["request_id"]
 
+    if clock is None:
+        clock = lambda: dbclock.now(conn)   # noqa: E731  the database's clock; tests inject a pinned one
     if req["final_export_at"] is None:  # step 2
         now = clock()
         with operator_org(conn, token_key, org):
@@ -348,7 +365,7 @@ def run_offboard(conn: psycopg.Connection, *, token_key: TokenKey, custody, cryp
         revoked = conn.execute(
             "UPDATE consentvault.credential SET revoked_at = clock_timestamp(), revoke_reason = 'organization offboarding'"
             " WHERE org_id = (SELECT consentvault.current_org()) AND revoked_at IS NULL RETURNING credential_id").fetchall()
-        _step(conn, rid, "credentials_revoked", {"status": "done", "at": iso(now_utc()), "count": len(revoked)})
+        _step(conn, rid, "credentials_revoked", {"status": "done", "at": iso(dbclock.now(conn)), "count": len(revoked)})
         audit_org(conn, actor_kind="operator", actor_id=operator_id, action="offboarding.credentials_revoked",
                   target_kind="offboarding", target_id=rid, reason=f"{len(revoked)} revoked", request_id=request_id)
 
@@ -366,7 +383,7 @@ def run_offboard(conn: psycopg.Connection, *, token_key: TokenKey, custody, cryp
                                     operator_id=operator_id)
         deliver(org, rid, package, req["final_export_sha256"])
         with operator_org(conn, token_key, org):
-            _step(conn, rid, "final_export_delivered", {"status": "done", "at": iso(now_utc()),
+            _step(conn, rid, "final_export_delivered", {"status": "done", "at": iso(dbclock.now(conn)),
                                                         "sha256": req["final_export_sha256"]})
             audit_org(conn, actor_kind="operator", actor_id=operator_id, action="offboarding.export_delivered",
                       target_kind="offboarding", target_id=rid, reason=None, request_id=request_id)
@@ -387,9 +404,9 @@ def run_offboard(conn: psycopg.Connection, *, token_key: TokenKey, custody, cryp
         try:
             sent = notify_admins(conn, notifier, event=event, review_url=review_url)
         except OffboardNoticeError as exc:  # loud-failure-exempt: recorded as a failed step below and re-raised after commit
-            failed, sent = str(exc), 0
+            failed, sent = describe(exc), 0
         _step(conn, rid, "admin_notified", {"status": "failed", "cause": failed} if failed else
-              {"status": "done", "at": iso(now_utc()), "count": sent})
+              {"status": "done", "at": iso(dbclock.now(conn)), "count": sent})
         out = _answer(_open_request(conn, lock=False) or {}, org)
     if failed:
         raise OffboardNoticeError(f"{failed}; the offboarding steps are recorded and the destruction stays cancellable")
@@ -408,7 +425,7 @@ def _ensure_link(conn, links, notifier, req: dict, org, *, review_url: str, oper
     link = links.issue_final_export_link(org, req["request_id"])
     notify_admins(conn, notifier, event="Offboarding: your final export is ready. The link below downloads it once; "
                   "after the organization key is destroyed it can never be read again", review_url=link["download_url"])
-    _step(conn, req["request_id"], "final_export_link", {"status": "sent", "at": iso(now_utc()),
+    _step(conn, req["request_id"], "final_export_link", {"status": "sent", "at": iso(dbclock.now(conn)),
                                                         "expires_at": link["expires_at"]})
     audit_org(conn, actor_kind="operator", actor_id=operator_id, action="offboarding.export_link_issued",
               target_kind="offboarding", target_id=req["request_id"], reason=f"expires {link['expires_at']}",
@@ -436,7 +453,7 @@ def download_final_export(conn: psycopg.Connection, *, links, token_key: TokenKe
         if req is None:
             raise LifecycleError("the link names no offboarding request of this organization")
         sent = req["steps"].get("final_export_link") or {}
-        _step(conn, req["request_id"], "final_export_link", {**sent, "status": "spent", "spent_at": iso(now_utc()),
+        _step(conn, req["request_id"], "final_export_link", {**sent, "status": "spent", "spent_at": iso(dbclock.now(conn)),
                                                              "via": f"link {nonce[:8]}"})
     package = _read_export(conn, token_key=token_key, custody=custody, store=store, org_id=org)
     sha = hashlib.sha256(package).hexdigest()
@@ -446,7 +463,7 @@ def download_final_export(conn: psycopg.Connection, *, links, token_key: TokenKe
                             (request_id_str,)).fetchone()
         if want is None or want["final_export_sha256"] != sha:
             raise LifecycleError("the final export does not match the request the link names")
-        _step(conn, req["request_id"], "final_export_downloaded", {"status": "served", "at": iso(now_utc()),
+        _step(conn, req["request_id"], "final_export_downloaded", {"status": "served", "at": iso(dbclock.now(conn)),
                                                                    "sha256": sha, "via": f"link {nonce[:8]}"})
     return package, sha
 
@@ -473,7 +490,7 @@ def confirm_final_export(conn: psycopg.Connection, *, token_key: TokenKey, sessi
         if sha256 != req["final_export_sha256"]:
             raise ApiError("validation_failed", "the digest does not match the final export; download it again with "
                            "a new link", {"sha256": "mismatch"})
-        done = {"status": "done", "at": iso(now_utc()), "sha256": sha256, "via": served.get("via"),
+        done = {"status": "done", "at": iso(dbclock.now(conn)), "sha256": sha256, "via": served.get("via"),
                 "confirmed_by": actor_id}
         _step(conn, req["request_id"], "final_export_delivered", done)
         audit_org(conn, actor_kind=actor_kind, actor_id=actor_id, action="offboarding.export_delivered",
@@ -509,7 +526,7 @@ def complete_destructions(conn: psycopg.Connection, *, token_key: TokenKey, cust
                 raise DestructionError(f"a legal hold covers {org} but its scheduled key destruction could not be "
                                        f"cancelled ({type(exc).__name__}); cancel it by hand now") from exc
             restore_scheduled_versions(conn)
-            _step(conn, req["request_id"], "key_destruction", {"status": "held", "at": iso(now_utc())})
+            _step(conn, req["request_id"], "key_destruction", {"status": "held", "at": iso(dbclock.now(conn))})
             _record(conn, req["request_id"], "held", hold_id=uuid.UUID(hold))
             audit_org(conn, actor_kind="system", actor_id="destruction-job", action="offboarding.destruction_held",
                       target_kind="offboarding", target_id=req["request_id"], reason=held_note(conn, hold),
@@ -532,7 +549,7 @@ def complete_destructions(conn: psycopg.Connection, *, token_key: TokenKey, cust
             rec = _record(conn, req["request_id"], "destroyed", key_refs=refs, export_sha256=req["final_export_sha256"],
                           detail={"provider_reports_destroyed": True, "backups": "unreadable from key deletion; copies "
                                   "age out on their own schedule"})
-            _step(conn, req["request_id"], "destroyed", {"status": "done", "at": iso(now_utc()), "record_id": rec})
+            _step(conn, req["request_id"], "destroyed", {"status": "done", "at": iso(dbclock.now(conn)), "record_id": rec})
             conn.execute("UPDATE consentvault.offboarding_request SET state = 'complete'"
                          " WHERE org_id = (SELECT consentvault.current_org()) AND request_id = %s", (req["request_id"],))
             audit_org(conn, actor_kind="system", actor_id="destruction-job", action="offboarding.key_destroyed",

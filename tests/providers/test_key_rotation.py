@@ -6,16 +6,18 @@ import pytest
 from consentvault.providers.errors import KeyDestroyedError, KeyPendingDestructionError, KeyProviderError, UnwrapError
 from consentvault.providers.keys import LocalFileKeyProvider, OpenBaoKeyProvider, wrapped_version
 
-from .test_keys import Clock, FakeBao
+from .test_keys import Clock, FakeBao, external_contract_factory
 
 DK = bytes(range(32))
 DK2 = bytes(range(1, 33))
 
 
-@pytest.fixture(params=["local", "bao"])
+@pytest.fixture(params=["local", "bao", *(["external"] if external_contract_factory() else [])])
 def provider(request, tmp_path):
     clock = Clock()
-    if request.param == "local":
+    if request.param == "external":
+        p = external_contract_factory()(tmp_path, clock)
+    elif request.param == "local":
         p = LocalFileKeyProvider(tmp_path / "keys", "correct horse battery", clock=clock)
     else:
         p = OpenBaoKeyProvider(FakeBao(), tmp_path / "ledger.json", clock=clock)

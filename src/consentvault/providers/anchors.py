@@ -22,6 +22,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
+from ..safelog import describe
+from ..urlguard import open_no_redirect
 from ._names import check_org_id
 from .errors import (
     AnchorSinkError,
@@ -60,7 +62,7 @@ def _canonical(org_id: str, record: Mapping) -> tuple[dict, bytes]:
     try:
         return full, json.dumps(full, sort_keys=True, separators=(",", ":")).encode("utf-8")
     except (TypeError, ValueError) as exc:
-        raise AnchorSinkError(f"anchor record is not JSON-serialisable: {exc}") from exc
+        raise AnchorSinkError(f"anchor record is not JSON-serialisable: {describe(exc)}") from exc
 
 
 def _label_url(url: str) -> str:
@@ -103,28 +105,22 @@ class FileAnchorSink(AnchorSink):
                 fh.flush()
                 os.fsync(fh.fileno())
         except OSError as exc:
-            raise AnchorSinkError(f"cannot append to the anchor file {self._path}: {exc}") from exc
+            raise AnchorSinkError(f"cannot append to the anchor file {self._path}: {describe(exc)}") from exc
         return AnchorReceipt(self.label, str(self._path), hashlib.sha256(line).hexdigest(), self.tenant_owned)
 
 
 WebhookTransport = Callable[[str, Mapping[str, str], bytes], int]
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):  # type: ignore[override]
-        return None
-
-
 def _urllib_post(url: str, headers: Mapping[str, str], body: bytes) -> int:
-    opener = urllib.request.build_opener(_NoRedirect)
     req = urllib.request.Request(url, data=body, method="POST", headers=dict(headers))
     try:
-        with opener.open(req, timeout=HTTP_TIMEOUT_S) as resp:
+        with open_no_redirect(req, timeout=HTTP_TIMEOUT_S) as resp:
             return resp.status
     except urllib.error.HTTPError as exc:
         return exc.code
     except OSError as exc:
-        raise AnchorSinkError(f"anchor webhook {_label_url(url)} unreachable: {exc}") from exc
+        raise AnchorSinkError(f"anchor webhook {_label_url(url)} unreachable: {describe(exc)}") from exc
 
 
 class WebhookAnchorSink(AnchorSink):
@@ -150,7 +146,7 @@ class WebhookAnchorSink(AnchorSink):
             headers["X-ConsentVault-Signature"] = "sha256=" + hmac.new(self._secret, body, hashlib.sha256).hexdigest()
         status = self._post(self._url, headers, body)
         if not 200 <= status < 300:
-            raise AnchorSinkError(f"anchor webhook {self.label} answered HTTP {status}")
+            raise AnchorSinkError(f"anchor webhook {self.label} answered HTTP {status}", code=f"http_{int(status)}")
         return AnchorReceipt(self.label, self.label, hashlib.sha256(body).hexdigest(), self.tenant_owned)
 
 
@@ -178,11 +174,11 @@ class S3ObjectLockAnchorSink(AnchorSink):
             try:
                 existing = json.loads(self._store.get(org_id, key))
             except (EvidenceStoreError, ValueError) as exc:
-                raise AnchorSinkError(f"anchor object {org_id}/{key} exists and cannot be read back: {exc}") from exc
+                raise AnchorSinkError(f"anchor object {org_id}/{key} exists and cannot be read back: {describe(exc)}") from exc
             if (existing.get("seq"), existing.get("row_hash")) != (full["seq"], full["row_hash"]):
                 raise AnchorSinkError(f"anchor object {org_id}/{key} exists with a different head")
         except ProviderError as exc:
-            raise AnchorSinkError(f"cannot write anchor object {org_id}/{key}: {exc}") from exc
+            raise AnchorSinkError(f"cannot write anchor object {org_id}/{key}: {describe(exc)}") from exc
         return AnchorReceipt(self.label, f"{org_id}/{key}", hashlib.sha256(body).hexdigest(), self.tenant_owned)
 
 
@@ -214,6 +210,10 @@ class TenantAnchorSink(AnchorSink):
     @classmethod
     def from_config(cls, cfg: Mapping, *, owner: str, transport=None, clock: Clock = _utcnow) -> "TenantAnchorSink":
         kind = cfg.get("kind")
+        needed = {"webhook": ("url",), "s3": ("endpoint", "bucket", "region", "access_key", "secret_key")}.get(kind, ())
+        missing = [k for k in needed if k not in cfg]  # named from the settings themselves, never from an error's text
+        if missing:
+            raise ProviderConfigError(f"tenant anchor settings are missing {missing[0]!r}", code=f"missing_{missing[0]}")
         try:
             if kind == "webhook":
                 return cls(WebhookAnchorSink(cfg["url"], secret=cfg.get("secret"), transport=transport), owner=owner)
@@ -225,5 +225,5 @@ class TenantAnchorSink(AnchorSink):
                     store, retain_days=cfg.get("retain_days", 365 * 7), clock=clock,
                     label=f"s3://{cfg['bucket']}"), owner=owner)
         except KeyError as exc:
-            raise ProviderConfigError(f"tenant anchor settings are missing {exc.args[0]!r}") from exc
+            raise ProviderConfigError(f"tenant anchor settings are missing a required setting ({describe(exc)})") from exc
         raise ProviderConfigError(f"tenant anchor kind must be 'webhook' or 's3', not {kind!r}")

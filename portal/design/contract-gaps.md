@@ -1,7 +1,7 @@
 # Contract gaps
 
 Every portal element must name its endpoint. Where no contract under
-`/Users/oxfloors/brain/specs/268-consentvault-cloud/contracts/` defines one, it is listed here instead of invented.
+the cloud contracts defines one, it is listed here instead of invented.
 "Suggested" is a shape for the API owner to accept or replace; the portal build must not call any row here until the
 contract carries it. Each row names the screens that wait on it.
 
@@ -43,7 +43,7 @@ contract carries it. Each row names the screens that wait on it.
 | B21 | Health counts: events unsealed past 1 hour, dead deliveries, last chain verification | 05, 13 | `GET /v1/health` (counts, never personal data) |
 | B22 | Usage this period vs plan inclusions | 05, 19 | `GET /v1/billing` -> plan, status, included, used, last_reported_at |
 | B23 | Plan list for checkout (Stripe price metadata) | 04 | `GET /v1/billing/plans` |
-| B24 | Proof answer field schema for the cloud (gate decisions, deliveries, seal status per event, review rows) | 13 | Document on top of the core's keys: `timeline, permissions, disclosures, contact_log, reviews, chain{head,events,path,anchors}` (`/Users/oxfloors/debwe/src/consentvault/proof.py` lines 171-186). |
+| B24 | Proof answer field schema for the cloud (gate decisions, deliveries, seal status per event, review rows) | 13 | Document on top of the core's keys: `timeline, permissions, disclosures, contact_log, reviews, chain{head,events,path,anchors}` (`src/consentvault/proof.py` lines 171-186). |
 | B25 | Audit filters and paging, action name list | 18 | `GET /v1/audit?action=&actor=&from=&to=&cursor=` |
 | B26 | Pending invitations | 17 | `GET /v1/members?include=invites` |
 
@@ -72,3 +72,29 @@ the README's `{"error", "detail"}` shape.
 
 Pagination (cursor), sort order, time zone of timestamps (assume UTC ISO 8601), and maximum list sizes for every list
 endpoint.
+
+## F. Additions 2026-10-30
+
+Two new contracts are proposed in full: `contracts/records.md` and `contracts/confirmations.md`
+(the cloud contracts). They need the README index rows and error names
+listed at their ends. The rows below are the gaps that remain outside those two files.
+
+| # | Missing | Screens | Suggested |
+|---|---|---|---|
+| F1 | **Moved to contracts/setup.md.** Setup progress read, resumable across devices | 05, 24 | `GET /v1/setup` (A, D, V) -> `{steps: [{step: "brand"|"source"|"wording"|"credential"|"first_event"|"policy"|"system"|"confirmations", status: "done"|"to_do"|"skipped"|"blocked", required: bool, evidence: {kind, id, at}|null, blocked_reason|null, skipped_by|null, skipped_at|null, roles: ["admin"|"developer"]}], current_step, complete: bool, partial: [steps not readable]}`. Done is derived from facts (brand exists, source exists, wording registered, active capture credential, first event recorded, policy approved, system with 2xx test push, a confirmation rule on); never a client flag. |
+| F2 | **Moved to contracts/setup.md.** Skip and un-skip an optional step | 24, 05 | `POST /v1/setup/steps/{step}:skip {reason?}`, `:unskip`; only `system` and `confirmations` are skippable (`validation_failed` otherwise); audited `setup.step_skipped`. |
+| F3 | Proof and export keyed by record id | 13, 23 | `POST /v1/proof {record_id}` and `POST /v1/exports {record_id}` (records.md section 9). |
+| F4 | Audit item `detail` object | 18, 23 | additive field on `GET /v1/audit` items (records.md section 6). |
+| F5 | Contact log entries sealed in the chain | 13, 25 | core change C3 in confirmations.md section 10 (new migration, `seal.py`, `proof.py`); until then messages are recorded in `contact_log`, not sealed. |
+| F6 | Withdrawn 2026-10-30. Portal times use the viewer's zone; message times use the recipient's zone (texts from the area code; email from the record or a linked phone, else UTC named), confirmations.md sections 5 and 6. | 23, 25 | none |
+| F7 | Health counts for the overview | 05 | `GET /v1/health` adds `confirmations: {failed_24h, dead_24h, replies_to_read, provider_refusal_stops_24h}` (each null when unreadable). |
+| F8 | Developer access to `GET /v1/records` | 23 | auth.md developer row: records list and summary with fingerprints only. |
+| F9 | Withdrawn 2026-10-30: no time zone is captured; it is derived at send time from the record's area code (confirmations.md section 5). | 25 | none |
+| F10 | START lifting a text stop | 25, 13 | No new core path. The START grant meets `_judge` in `src/consentvault/release.py` as written: `session_ref` set from the provider message id (the `has_session` branch), reply and stop-page stops recorded with releasable methods `keyword`, `written`, `checkbox` (the `RELEASABLE_STOP_METHODS` branch; tuple at line 37), `contact_verification: inbound_keyword`. One core change remains, C2 in confirmations.md section 10: the quiet-window query (lines 123 to 128 and 316 to 321) ignores every contact log row with `recorded_by = 'confirmations'` (opt-out, HELP and START replies); until then a deployment with `CONSENTVAULT_RELEASE_REQUIRE_NO_CONTACT_SINCE_STOP` on refuses START with `contact_since_stop`. Also: the published Terms promise that signing up again rejoins texts, which the core refuses (`docs/api.md` line 50); owner finding. |
+| F11 | Fixed text versioning for confirmation, opt-out, HELP and START texts | 25 | `fixed_text_version` on settings; a change turns text rules off until registration is re-marked. |
+| F12 | Area code to single time zone table | 25 | vault-owned reference table, dated, in `0030_confirmations.sql`; used for texts only (quiet hours); a number whose area code spans zones is unknown and its text is skipped. Email never uses it for sending hours (confirmations.md section 5). |
+| F13 | Tenant contact-log writer | 13, 25 | core change C4 in confirmations.md section 10: a writer in `src/consentvault/gate.py` storing fingerprint plus ciphertext; `record_contact` is refused in multi mode by `migrations/0002_tenancy.sql` lines 566 to 587. |
+| F14 | Name and company display table | 23 | `migrations/0029_records.sql` (records.md section 9); never in the evidence object or the chain. |
+| F15 | Records index written under capture tokens | 23 | owner-rights SQL functions in `0029_records.sql` (records.md section 8); a capture token cannot read `event` or `current_permission` (`0002_tenancy.sql` lines 851 to 853). |
+| F16 | Display key | 23 | core change K1 (records.md sections 8, 9). |
+| F17 | Capture body without `display` | 23 | core change P1 in `pipeline.py` (records.md section 9). |

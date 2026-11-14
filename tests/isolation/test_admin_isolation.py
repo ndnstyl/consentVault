@@ -55,7 +55,8 @@ def populate(vault, name, domain):
     boss.ok("POST", "/v1/members", body={"email": f"pending@{domain}", "role": "developer"})
     invite = [i for i in boss.ok("GET", "/v1/members", {"include": "invites"})["items"] if i["kind"] == "invite"][0]["id"]
     # one event through the ledger so the source and health reads have something to count
-    adapter = CustodyKeyAdapter(vault.custody, lambda oid: bytes(wrapped_fp(vault, str(oid))))
+    adapter = CustodyKeyAdapter(vault.custody, lambda oid: bytes(wrapped_fp(vault, str(oid))),
+                                lambda oid: bytes(wrapped_display(vault, str(oid))))
     crypto = TenantCrypto(adapter)
     with vault.appconn() as c, org_transaction(c, mint_org_token(vault.key, org["org_id"], ["capture"], credential_id=None)):
         e = record_tenant_event(c, crypto, contact="+15555550142", event_type="grant", channels=["sms"], purposes=["marketing"],
@@ -69,6 +70,11 @@ def populate(vault, name, domain):
     t.org, t.boss, t.dev, t.viewer = org, boss, dev, viewer
     t.brand, t.src, t.cred, t.word, t.system, t.invite, t.seq = brand, src, cred, word, system, invite, e.seq
     return t
+
+
+def wrapped_display(vault, org_id):
+    with vault.operator() as c, org_transaction(c, mint_org_token(vault.key, org_id, ["admin", "worker:display_key"], credential_id=None)):
+        return c.execute("SELECT wrapped FROM consentvault.org_display_key").fetchone()["wrapped"]
 
 
 def wrapped_fp(vault, org_id):

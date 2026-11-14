@@ -97,7 +97,7 @@ def test_last_event_fields_come_from_the_ledger_and_carry_no_personal_field(vaul
     from consentvault.ledger import record_tenant_event
     from consentvault.tenancy.crypto import TenantCrypto
     from consentvault.tenancy.keys_adapter import CustodyKeyAdapter
-    adapter = CustodyKeyAdapter(vault.custody, lambda oid: bytes(_fp(vault, str(oid))))
+    adapter = CustodyKeyAdapter(vault.custody, lambda oid: bytes(_fp(vault, str(oid))), lambda oid: bytes(_display(vault, str(oid))))
     crypto = TenantCrypto(adapter)
     with vault.appconn() as c, org_transaction(c, mint_org_token(vault.key, org["org_id"], ["capture", "gate_read"], credential_id=None)):
         from consentvault import disclosure as disc
@@ -110,6 +110,12 @@ def test_last_event_fields_come_from_the_ledger_and_carry_no_personal_field(vaul
     assert "5555550142" not in str(got)
     h = dev.ok("GET", "/v1/health")
     assert h["first_event"]["sealed"] is False
+
+
+def _display(vault, org_id):
+    from consentvault.tenancy.tokens import mint_org_token, org_transaction
+    with vault.operator() as c, org_transaction(c, mint_org_token(vault.key, org_id, ["admin", "worker:display_key"], credential_id=None)):
+        return c.execute("SELECT wrapped FROM consentvault.org_display_key").fetchone()["wrapped"]
 
 
 def _fp(vault, org_id):

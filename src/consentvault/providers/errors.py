@@ -109,3 +109,8 @@ class TokenExpiredError(IdentityError):
 
 class MfaRequiredError(IdentityError):
     """The token does not show a multi-factor login in its amr claim."""
+
+
+class EdgeKeyUnknownError(ProviderConfigError):
+    """The portal edge signed with a key id this vault does not hold. The caller did nothing wrong: the deployment is out of
+    step (a key rotated away or never added), so this is never an authentication failure."""

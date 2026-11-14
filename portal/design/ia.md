@@ -78,3 +78,39 @@ Screen count: 21 screens plus 1 global-states sheet.
 
 Operator console (separate surface), EBR record and DNC scrub upload, legal hold management, operator access approval,
 inbound signal browsing. Reasons and the endpoints each would need: handoff.md "Not in scope" and contract-gaps.md.
+
+## Additions 2026-10-30: Records, Setup walkthrough, Confirmation messages
+
+Navigation changes:
+
+```
+Start
+  Overview ............................ /
+  Setup ............................... /setup            (replaces the "First test event" item; /setup/first-event stays as step 5's own page)
+Evidence
+  Records ............................. /records          (new, first item in the group)
+  Evidence lookup ..................... /evidence         (also /evidence?record=<record_id> from a Records row)
+  Evidence packages ................... /exports
+Configuration
+  ...
+  Connected systems ................... /systems
+  Confirmation messages ............... /confirmations    (new, after Connected systems)
+  Retention ........................... /retention
+```
+
+`Setup` stays in the navigation until every required step is done; then it moves under Overview as a link "Setup
+(complete)" so skipped optional steps stay reachable.
+
+| # | Route | Wireframe | Job |
+|---|---|---|---|
+| 23 | `/records` (filters as query parameters, never a contact point) | wireframes/23-records.html | See every contact point held, filtered by evidence status per channel and purpose, source, date and stop; open one into screen 13. |
+| 24 | `/setup`, `/setup?step=<name>` | wireframes/24-setup.html | Walk a new organization from invitation acceptance to first event, wording, policy and first system, resumable. |
+| 25 | `/confirmations`, `/confirmations/[source_id]/[channel]` | wireframes/25-confirmations.html | Choose per source and channel whether a new consent triggers a confirmation message; read sends and replies. |
+| (public) | `/c/stop/{token}`, `/c/r/{token}` on the app host | described in contracts/confirmations.md | The person's email stop page and agreed-wording page. No sign-in, no contact point shown. |
+
+Entry points added: invitation acceptance (02 success) goes to `/setup` for admins and developers in an organization
+whose setup is not done, otherwise to `/`. The overview setup checklist's button opens `/setup?step=<first open step>`.
+The overview gains a tile "Replies to read" (admins, compliance viewers) when the count is above zero, linking to
+`/confirmations#replies`.
+
+Screen count: 24 screens plus 1 global-states sheet.

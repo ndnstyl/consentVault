@@ -57,7 +57,10 @@ DROP FUNCTION consentvault.usage_record_day(date, bigint, bigint);
 DROP FUNCTION consentvault.usage_events_for_day(date);
 DROP FUNCTION consentvault.usage_require_scope();
 DROP FUNCTION consentvault.billing_apply_status(uuid, text, text, text, text[]);
-DROP FUNCTION consentvault.billing_link_account(uuid, text, text, text, text, text, text, bigint, bigint,
+-- the twelve-argument form 0041 added (a vault that has not run down/0041 first)
+DROP FUNCTION IF EXISTS consentvault.billing_link_account(uuid, text, text, text, text, text, text, bigint, bigint,
+    timestamptz, timestamptz, text);
+DROP FUNCTION IF EXISTS consentvault.billing_link_account(uuid, text, text, text, text, text, text, bigint, bigint,
     timestamptz, timestamptz);
 DROP FUNCTION consentvault.billing_event_outcomes();
 DROP FUNCTION consentvault.billing_finish_event(text, uuid, text);

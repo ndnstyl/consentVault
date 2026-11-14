@@ -162,6 +162,7 @@ function Overlays() {
   return (
     <>
       {!online && <div className="offline-bar" role="status"><Icon name="i-warn" /> You are offline. What is on screen may be out of date. Changes are not sent until you are back online.</div>}
+      {s.signOutError && <div className="offline-bar" role="alert"><Icon name="i-warn" /> {s.signOutError} <Btn size="sm" onClick={s.dismissSignOutError}>Dismiss</Btn></div>}
       {s.sessionEnding && (
         <Dialog title="Your session ends in 2 minutes" onClose={s.dismissEnding} alert>
           <p>Sessions last 8 hours. Sign in again to keep working. Unsaved form entries are kept on this device.</p>

@@ -7,20 +7,15 @@ import ssl
 from email.message import EmailMessage
 from email.utils import make_msgid
 
+from ..safelog import smtp_reply_code
 from .base import Message
-from .errors import NotifyConfigError, SendFailed
+from .errors import NotifyConfigError, NotifyRefused, SendFailed
+from .templates import refuse_control
 
 
 def smtp_code(exc: BaseException) -> int | None:
     """The SMTP reply code of a refusal, without its text (which can quote the address)."""
-    code = getattr(exc, "smtp_code", None)
-    if isinstance(code, int):
-        return code
-    recipients = getattr(exc, "recipients", None)
-    if isinstance(recipients, dict):
-        codes = [v[0] for v in recipients.values() if isinstance(v, tuple) and v and isinstance(v[0], int)]
-        return codes[0] if codes else None
-    return None
+    return smtp_reply_code(exc)
 
 
 class SmtpSender:
@@ -35,6 +30,8 @@ class SmtpSender:
         self._factory = smtp_factory
 
     def send(self, message: Message) -> str:
+        for what, value in (("the subject", message.subject), ("the recipient", message.to), ("the From address", self.sender)):
+            refuse_control(what, value, NotifyRefused)
         msg = EmailMessage()
         msg["From"], msg["To"], msg["Subject"] = self.sender, message.to, message.subject
         msg_id = make_msgid(domain=self.sender.rsplit("@", 1)[-1])

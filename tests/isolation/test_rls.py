@@ -1,5 +1,6 @@
 """Row-level security, the narrow cross-organisation lookups, worker dispatch, composite keys and the replay guard."""
 
+from error_names import db_codes
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -44,7 +45,8 @@ def test_every_tenant_table_forces_row_level_security_bound_to_the_verified_tena
         scoped = {p["tablename"] for p in policies if p["policyname"].endswith("_read_scope")
                   and p["permissive"] == "RESTRICTIVE" and p["cmd"] == "SELECT" and "may_read_evidence" in p["qual"]}
         # the foundation's evidence tables plus the lanes' export jobs and gate decisions
-        assert scoped == {"event", "contact_key", "contact_salt", "contact_log", "review", "export_job", "gate_decision"}
+        assert scoped == {"event", "contact_key", "contact_salt", "contact_log", "review", "export_job", "gate_decision",
+                          "confirmation_send", "confirmation_connect_test", "confirmation_reply"}
         audit = {p["tablename"] for p in policies if p["policyname"].endswith("_read_scope")
                  and p["permissive"] == "RESTRICTIVE" and p["cmd"] == "SELECT" and "may_read_audit" in p["qual"]}
         assert audit == {"audit_event"}
@@ -53,7 +55,16 @@ def test_every_tenant_table_forces_row_level_security_bound_to_the_verified_tena
                      and p["permissive"] == "RESTRICTIVE" and p["cmd"] == "SELECT"
                      and "legal_process_disclosed" in p["qual"]}
         assert disclosed == {"legal_hold"}
-        assert len(policies) == len(tenant) + len(scoped) + len(audit) + len(disclosed)
+        # the contact record list: names open to an admin or a viewer only, the wrapped display key to its loader's scope only
+        names = {p["tablename"]: p["qual"] for p in policies if p["policyname"].endswith("_read_scope")
+                 and p["permissive"] == "RESTRICTIVE" and p["cmd"] == "SELECT"
+                 and ("may_read_names" in p["qual"] or "may_read_display_key" in p["qual"] or "may_read_records" in p["qual"]
+                      or "may_read_record_exports" in p["qual"])}
+        assert set(names) == {"record", "record_index", "record_display", "org_display_key", "record_export", "record_export_link",
+                                "record_export_key", "record_export_record"}
+        assert "may_read_records" in names["record"] and "may_read_records" in names["record_index"]
+        assert "may_read_names" in names["record_display"] and "may_read_display_key" in names["org_display_key"]
+        assert len(policies) == len(tenant) + len(scoped) + len(audit) + len(disclosed) + len(names)
         opts = {r["relname"]: r["reloptions"] for r in owner.execute(
             "SELECT relname, reloptions FROM pg_class WHERE relname = ANY(%s)", (list(views),))}
         assert set(opts) == set(views)
@@ -167,7 +178,8 @@ def test_credentials_keep_their_scope_rules(tenancy, kind, extra, scope):
 
 def test_a_clear_contact_point_is_refused_outside_the_home_organisation(tenancy):
     with tenancy.app() as app:
-        with pytest.raises(LedgerError, match="home organisation"):
+        with pytest.raises(LedgerError, match=db_codes("mint_contact_salt", "home organisation") + "|" +
+                           db_codes("check_clear_contact_home_only", "clear contact point")):
             with org_transaction(app, tenancy.token(tenancy.a)):
                 record_event(app, contact=PHONE, event_type="revoke", channels=["sms"], purposes=["marketing"],
                              method="keyword", origin="consumer")
@@ -184,9 +196,9 @@ def test_the_replay_guard_refuses_a_second_presentation_per_organisation(tenancy
         with pytest.raises(ReplayError):
             claim_nonce(app, tenancy.a.org_id, "jti-0001-abcdef", soon)
         claim_nonce(app, tenancy.b.org_id, "jti-0001-abcdef", soon)
-        with pytest.raises(TenancyError, match="within one day"):
+        with pytest.raises(TenancyError, match=db_codes("claim_replay_nonce", "within one day")):
             claim_nonce(app, tenancy.a.org_id, "jti-0002-abcdef", datetime.now(timezone.utc) + timedelta(days=2))
-        with pytest.raises(TenancyError, match="future"):
+        with pytest.raises(TenancyError, match=db_codes("claim_replay_nonce", "expiry must be in the future")):
             claim_nonce(app, tenancy.a.org_id, "jti-0003-abcdef", datetime.now(timezone.utc) - timedelta(seconds=1))
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             app.execute("SELECT * FROM consentvault.replay_guard")
@@ -200,7 +212,7 @@ def test_the_sweeper_removes_only_expired_nonces_and_a_late_sweep_never_lets_a_r
         claim_nonce(app, tenancy.a.org_id, "live-nonce-0001", soon)
     with tenancy.superuser() as owner:
         owner.execute("INSERT INTO consentvault.replay_guard (org_id, nonce, expires_at)"
-                      " VALUES (%s, 'stale-nonce-0001', now() - interval '1 minute')", (tenancy.a.org_id,))
+                      " VALUES (%s, 'stale-nonce-0001', now() - interval '2 hours')", (tenancy.a.org_id,))
     worker_dsn = make_login_role(pg_server["port"], tenancy.operator_dsn.rsplit("/", 1)[1], "consentvault_worker")
     with tenancy.app() as app:
         with pytest.raises(ReplayError):  # expired but not yet swept: still a replay
@@ -221,7 +233,7 @@ def test_only_a_capture_verified_token_may_claim_a_verified_contact_point(tenanc
                                        disclosure_sha256=tenancy.a.disclosure, contact_verification="otp")
 
     for scopes in (["capture"], ["worker:sync"], ["admin"]):
-        with pytest.raises(LedgerError, match="capture_verified"):
+        with pytest.raises(LedgerError, match=db_codes("check_verified_claim", "capture_verified")):
             grant(scopes)
     assert grant(["capture", "capture_verified"]).seq == 3
 
@@ -248,7 +260,7 @@ def test_a_version_two_release_must_decide_a_grant_of_the_same_fingerprint(tenan
                                 release_of_event_id=g.event_id, release_outcome="released", **common)
         assert r.seq == g.seq + 1
     with tenancy.app() as app:
-        with pytest.raises(LedgerError, match="earlier consumer grant of the same contact point"):
+        with pytest.raises(LedgerError, match=db_codes("check_release_ref", "earlier consumer grant of the same contact point")):
             with org_transaction(app, verified):
                 record_tenant_event(app, tenancy.crypto, contact="+15555550133", event_type="release",
                                     method="checkbox", release_of_event_id=g.event_id, release_outcome="released",
@@ -271,3 +283,18 @@ def test_tenant_visible_rows_carry_random_ids(tenancy, table, column):
     with tenancy.app() as app, org_transaction(app, tenancy.token(tenancy.a)):  # a tenant sees only its own ids
         mine = {r["id"] for r in app.execute(f"SELECT {column} AS id FROM consentvault.{table}")}
     assert mine and mine < set(ids)
+
+
+def test_a_nonce_stays_for_an_hour_after_it_expires_so_clock_skew_cannot_reopen_a_replay(tenancy, pg_server):
+    with tenancy.superuser() as owner:
+        owner.execute("INSERT INTO consentvault.replay_guard (org_id, nonce, expires_at) VALUES"
+                      " (%s, 'just-expired-0001', now() - interval '1 minute'),"
+                      " (%s, 'expired-59min-0001', now() - interval '59 minutes'),"
+                      " (%s, 'expired-61min-0001', now() - interval '61 minutes')",
+                      (tenancy.a.org_id, tenancy.a.org_id, tenancy.a.org_id))
+    worker_dsn = make_login_role(pg_server["port"], tenancy.operator_dsn.rsplit("/", 1)[1], "consentvault_worker")
+    with db.connect(worker_dsn) as worker:
+        assert sweep(worker) == 1
+    with tenancy.superuser() as owner:
+        left = {r["nonce"] for r in owner.execute("SELECT nonce FROM consentvault.replay_guard")}
+    assert {"just-expired-0001", "expired-59min-0001"} <= left and "expired-61min-0001" not in left

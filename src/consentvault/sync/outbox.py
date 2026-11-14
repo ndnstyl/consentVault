@@ -31,8 +31,17 @@ from datetime import datetime, timezone
 
 import psycopg
 
+from ..safelog import db_code, describe, refusal_code
 from ..tenancy import crypto as tc
 from .errors import OutboxError, OutboxTransactionError
+
+# the database's refusal of a push-start stamp on an attempt another worker has taken (its registered code, never its text)
+PUSH_START_REFUSED = db_code("sync_attempt_started", "consentvault sync: a push started on an attempt that is no longer open")
+
+
+def push_start_taken_over(exc: BaseException) -> bool:
+    """Whether a push-start stamp was refused because the attempt is no longer open: another worker took the row."""
+    return isinstance(exc, psycopg.errors.ObjectNotInPrerequisiteState) and refusal_code(exc) == PUSH_START_REFUSED
 
 PAYLOAD_COLUMN = "outbox_payload"
 ERROR_COLUMN = "delivery_error"
@@ -106,13 +115,21 @@ def enqueue_event_pushes(
                              (uuid.UUID(str(event_id)), contact_fp)).fetchall()
         changes = tuple(StateChange(r["channel"], r["purpose"], r["version"], r["state"], str(r["basis_event_id"]),
                                     r["reason"], r["at"]) for r in moved)
+        # Twenty takes its own signals back (the documented echo exception, twenty.md 3.6), and a ledger event that moved no
+        # state still queues a Twenty refresh: the record converges on any fresh fact, not only on the reconcile
+        echo = _echo_targets(conn)
         if not changes:
+            for system_id in sorted(echo):
+                outbox_id = uuid.uuid4()
+                conn.execute("SELECT consentvault.sync_enqueue_refresh(%s, %s, %s, %s)",
+                             (outbox_id, system_id, contact_fp,
+                              tc.encrypt_field(data_key, org, str(outbox_id), PAYLOAD_COLUMN, b'{"kind":"refresh"}')))
             return EnqueueResult((), ())
         targets = conn.execute("SELECT * FROM consentvault.sync_targets()").fetchall()
         queued: list[Queued] = []
         for change in changes:
             for target in targets:
-                if skip is not None and target["system_id"] == skip:
+                if skip is not None and target["system_id"] == skip and skip not in echo:
                     continue
                 outbox_id = uuid.uuid4()
                 body = build_body(org_id=org, contact=contact, contact_fp=contact_fp,
@@ -126,7 +143,12 @@ def enqueue_event_pushes(
                     queued.append(Queued(str(got), str(target["system_id"]), change))
         return EnqueueResult(changes, tuple(queued))
     except psycopg.Error as exc:
-        raise OutboxError(f"the pushes for event {event_id} could not be queued: {type(exc).__name__}: {exc}") from exc
+        raise OutboxError(f"the pushes for event {event_id} could not be queued: {describe(exc)}") from exc
+
+
+def _echo_targets(conn) -> set:
+    """The connected systems that take their own signals back (the Twenty connector, twenty.md 3.6)."""
+    return {r["system_id"] for r in conn.execute("SELECT * FROM consentvault.sync_echo_targets()").fetchall()}
 
 
 def decrypt_payload(data_key: bytes, org_id, outbox_id, payload_ct: bytes) -> bytes:

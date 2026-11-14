@@ -1,4 +1,4 @@
-// Hand-written from /Users/oxfloors/brain/specs/268-consentvault-cloud/contracts/*.md (2026-10-29).
+// Hand-written from the cloud contracts (2026-10-29).
 // Every `T | null` below is a value the API sends as null when it could not be read: the portal renders
 // "Not available" for it and never substitutes 0.
 
@@ -18,10 +18,13 @@ export interface ErrorBody {
 }
 
 // session.md
-export interface Membership { org_id: string; name: string; role: Role; status: OrgStatus | null }
+export interface Membership { org_id: string; name: string; role: Role; status: OrgStatus | null; sso_required?: boolean }
 export interface SessionAnswer { user: { display_name: string; email: string }; items: Membership[]; next_cursor: string | null }
 export interface OffboardingStep { step: 'final_export' | 'credentials_revoked' | 'key_destruction_scheduled' | 'destruction_record'; status: 'pending' | 'done' | 'delayed'; at: string | null }
+export interface SsoSetting { connected: boolean; connection_id: string | null; required: boolean; verified: boolean }
+export interface SsoSaved { version: number; connection_id: string | null; required: boolean; verified: boolean; applies_from: string }
 export interface OrgAdmin {
+  sso?: SsoSetting;
   org_id: string; name: string; status: OrgStatus; region: string; created_at: string;
   plan: { plan_id: string; name: string } | null;
   key: { status: 'active' | 'retired' | 'scheduled_destroy' | 'destroyed'; version: number; destroy_after: string | null } | null;
@@ -35,7 +38,9 @@ export interface OrgAdmin {
 }
 export interface OrgBasic { org_id: string; name: string; status: OrgStatus; region: string; role: Role }
 export type Org = OrgAdmin | OrgBasic;
+export interface OrgAlarm { name: string; since: string; count: number | null; next_action: string }
 export interface Health {
+  alarms?: OrgAlarm[] | null;
   evaluated_at: string;
   unsealed_events_over_1h: number | null;
   dead_deliveries: number | null;
@@ -159,3 +164,110 @@ export type FinalExportConfirmation = {
   request_id: string;
   final_export_delivered: { status: 'done'; at: string; sha256: string; via: string | null; confirmed_by: string };
 };
+
+// records.md
+export type RecordStatus = 'consent_record_found' | 'stop_on_record' | 'no_record';
+export interface RecordChannel { counts: { consent_record_found: number; stop_on_record: number; no_record: number }; purposes: { purpose: string; evidence_status: RecordStatus }[] }
+export interface ConfirmationLatest { last_status: 'sent' | 'delivered' | 'failed' | 'dead' | 'skipped'; channel: string; at: string }
+export interface ContactRecord {
+  record_id: string;
+  contact_kind: 'phone' | 'email';
+  contact: { masked: string | null; fp_hint: string };
+  person: { name: string | null; company: string | null } | null;
+  state: 'active' | 'erased';
+  first_recorded_at: string;
+  last_event_at: string;
+  first_source: { source_id: string; name: string };
+  source_ids: string[];
+  source_count: number;
+  brand_ids: string[];
+  channels: Record<string, RecordChannel>;
+  has_stop: boolean;
+  last_stop_at: string | null;
+  confirmation: ConfirmationLatest | null;
+  recorded_during_trial: boolean;
+  linked_record_count: number;
+}
+export interface RecordsPage { as_of: string; items: ContactRecord[]; next_cursor: string | null; prev_cursor: string | null; total: number | null; partial?: string[] }
+export interface RecordsSummary {
+  as_of: string; tz: string;
+  total: number | null; with_stop: number | null; new_in_range: number | null;
+  new_per_day: { date: string; count: number }[] | null;
+  by_channel: { channel: string; consent_record_found: number; stop_on_record: number; no_record: number }[] | null;
+  call: { consent_record_found: number; stop_on_record: number; no_record: number } | null;
+  partial?: string[];
+}
+export interface RecordFilters {
+  channel?: string; status?: string; purpose?: string; has_stop?: string; source_id?: string; date_field?: string; from?: string; to?: string;
+  contact_kind?: string; state?: string; confirmation?: string; trial?: string; sort?: string;
+}
+export interface RevealAnswer { reveal_id: string; revealed_at: string; items: RevealItem[] }
+export interface RevealItem { record_id: string; contact: string | null; cause: null | 'erased' | 'key_unavailable' }
+export interface RecordsExportItem {
+  export_id: string; status: 'building' | 'ready' | 'failed' | 'expired'; contact_form: 'masked' | 'full' | 'fingerprint'; row_count: number | null;
+  requested_by: string; created_at: string; completed_at: string | null; expires_at: string | null; downloaded_at: string | null; sha256: string | null; failed_cause: string | null;
+}
+export interface RecordsExportDetail extends RecordsExportItem { progress: { done: number; total: number } | null; download_url: string | null }
+
+// setup.md
+export type SetupStepName = 'brand' | 'source' | 'wording' | 'credential' | 'first_event' | 'policy' | 'system' | 'confirmations';
+export interface SetupStep {
+  step: SetupStepName;
+  status: 'done' | 'to_do' | 'skipped' | 'blocked' | null;
+  required: boolean;
+  evidence: { kind: string; id: string; at: string } | null;
+  blocked_reason: string | null;
+  skipped_by: string | null; skipped_at: string | null; skip_reason: string | null;
+  roles: ('admin' | 'developer')[];
+}
+export interface SetupAnswer { steps: SetupStep[]; current_step: SetupStepName | null; complete: boolean; partial: SetupStepName[] }
+
+// confirmations.md
+export interface SendingAccount {
+  account_id: string; channel: 'email' | 'sms'; provider: string;
+  status: 'connected' | 'awaiting_test_reply' | 'failing' | 'disconnected';
+  from: { email_address?: string; display_name?: string; sender_id?: string; number_hint?: string };
+  inbound_url: string | null;
+  provider_replies: { stop: boolean; help: boolean; start: boolean } | null;
+  inbound_verified_at: string | null;
+  last_check: { at: string; result: string; detail: string | null } | null;
+  created_at: string;
+}
+export interface ConfirmationAlarm { kind: string; opened_at: string; detail: Record<string, unknown> | null }
+export interface LinkHost { host: string | null; status: 'unset' | 'pending_dns' | 'verified' | 'failing'; txt_record: string | null; cname_target: string | null; verified_at: string | null }
+export interface FixedText { kind: 'confirmation' | 'optout_reply' | 'help_reply' | 'start_reply'; text: string }
+export interface ConfirmationSettings {
+  version: number;
+  sender: { organization_name: string | null; postal_address: string | null; help_contact: { email: string | null; phone: string | null } | null };
+  send_cap_per_hour?: number;
+  link_host: LinkHost;
+  texting_registration: { status: 'not_marked' | 'marked'; kind: '10dlc' | 'toll_free' | 'short_code' | null; reference: string | null; samples_statement_version: number | null; marked_by: string | null; marked_at: string | null };
+  fixed_text_version?: number;
+  fixed_texts?: { version: number; items: FixedText[] };
+  sending_accounts: SendingAccount[];
+  counts: {
+    sent_24h: number | null; failed_24h: number | null; dead_24h: number | null; to_read: number | null; to_read_oldest_at: string | null;
+    provider_refusal_stops_24h: number | null; inbound_signature_failures_1h: number | null;
+    delivery_reports: { last_at: string | null; stale: boolean };
+  } | null;
+  alarms?: ConfirmationAlarm[];
+}
+export interface ConfirmationRule {
+  source_id: string; source_name: string | null; brand_name: string | null; channel: 'email' | 'sms'; enabled: boolean; sending_brand_id: string | null; template_id: string | null;
+  send_for_test_events: boolean; dedupe_hours: number; max_delay_minutes: number; updated_by: string | null; updated_at: string | null;
+}
+export interface ConfirmationTemplate { template_id: string; channel: 'email'; name: string; body_version: number; status: 'current' | 'superseded'; updated_at: string }
+export interface ConfirmationTemplateDetail extends ConfirmationTemplate { subject: string; opening_line: string | null; version: number; created_by: string | null; created_at: string }
+export interface BrandName { brand_id: string; display_name: string }
+export interface SourceName { source_id: string; name: string }
+export interface ConfirmationPreview { subject: string | null; body: string; segments: number | null; characters: number }
+export interface ConfirmationSend {
+  send_id: string; record_id: string | null; contact: { masked: string | null; fp_hint: string }; channel: 'email' | 'sms'; source_id: string | null; source_name: string | null; brand_id: string | null; brand_name: string | null;
+  status: 'sent' | 'delivered' | 'failed' | 'dead' | 'skipped' | 'sending' | 'intent'; skip_reason: string | null; dead_cause: string | null; failed_code: string | null;
+  provider_status: string | null; attempts: number; first_attempt_at: string | null; last_attempt_at: string | null; at: string;
+}
+export interface ConfirmationReply {
+  reply_id: string; received_at: string; account_id: string; channel: 'sms'; from: { masked: string | null; fp_hint: string }; matched_record_id: string | null;
+  text: string | null; verdict: string; reason: string; matched_words: string[]; state: 'to_read' | 'stop' | 'not_stop' | 'help' | 'start';
+  event_id: string | null; our_reply: 'sent' | 'skipped' | 'provider_replied' | null; marked_by: { member_id: string; display_name: string } | null; marked_at: string | null; mark_reason: string | null; unread_hours: number | null;
+}

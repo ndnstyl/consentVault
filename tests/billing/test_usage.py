@@ -36,7 +36,7 @@ class Alarms:
         return [n for n, _ in self.raised]
 
 
-def backdate_events(tenancy, org, day: date, copies: int) -> None:
+def backdate_events(tenancy, org, day: date, copies: int, first_seq: int = 1000) -> None:
     """Put ``copies`` extra events of ``org`` on a past day, as a DBA could (triggers off for the session only)."""
     stamp = datetime.combine(day, datetime.min.time(), timezone.utc) + timedelta(hours=9)
     with tenancy.superuser() as su, su.transaction():
@@ -46,7 +46,7 @@ def backdate_events(tenancy, org, day: date, copies: int) -> None:
         for i in range(copies):
             su.execute("UPDATE one SET event_id = gen_random_uuid(), seq = %s, received_at = %s, captured_at = %s,"
                        " row_hash = encode(sha256(gen_random_uuid()::text::bytea), 'hex')",
-                       (1000 + i, stamp, stamp))
+                       (first_seq + i, stamp, stamp))
             su.execute("INSERT INTO consentvault.event SELECT * FROM one")
 
 
@@ -199,3 +199,25 @@ def test_a_reported_days_count_cannot_be_rewritten(tenancy, stripe, pg_server):
 def test_closed_day_is_yesterday_in_utc():
     assert closed_day(datetime(2026, 10, 29, 0, 5, tzinfo=timezone.utc)) == date(2026, 10, 28)
     assert closed_day(datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc)) == date(2025, 12, 31)
+
+
+def test_an_incomplete_enterprise_contract_still_counts_but_reports_no_overage_and_alarms(tenancy, stripe, pg_server):
+    backdate_events(tenancy, tenancy.a, YESTERDAY, 4)
+    cus = stripe.add_customer(str(tenancy.a.org_id))
+    sub = stripe.add_subscription(cus, "active", str(tenancy.a.org_id), "price_enterprise_acme")
+    with tenancy.app() as app:
+        app.execute("SELECT consentvault.billing_link_account(%s, %s, %s, 'price_enterprise_acme', 'active',"
+                    " 'enterprise_contract_incomplete', 'Enterprise', NULL, NULL, NULL, NULL)",
+                    (tenancy.a.org_id, cus, sub))
+    alarms = Alarms()
+    with worker_conn(tenancy, pg_server) as w:
+        with pytest.raises(UsageReportError, match="enterprise contract"):
+            run_daily_usage(w, stripe, YESTERDAY, gate_counter=gates(9), alarm=alarms, sleep=lambda s: None)
+    assert "enterprise_contract_incomplete" in alarms.names
+    assert [e for e in stripe.meter_events if e["customer"] == cus] == []
+    row = usage_rows(tenancy, tenancy.a)[0]
+    assert (row["events"], row["gate_checks"], row["reported_at"]) == (4, 9, None)  # counted, kept, not reported
+    with tenancy.superuser() as su:
+        names = [r["name"] for r in su.execute("SELECT name FROM consentvault.operator_alarm WHERE org_id = %s",
+                                               (tenancy.a.org_id,)).fetchall()]
+    assert "billing.enterprise_contract_incomplete" in names

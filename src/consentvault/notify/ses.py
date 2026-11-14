@@ -10,8 +10,12 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from ..safelog import http_error_response
+from ..errors import ConsentVaultError
 from .base import Message
-from .errors import NotifyConfigError, SendFailed
+from .errors import NotifyConfigError, NotifyRefused, SendFailed
+from .templates import refuse_control
+from ..urlguard import require_url, open_no_redirect
 
 
 @dataclass(frozen=True)
@@ -29,12 +33,14 @@ class HttpResponse:
 
 
 def urllib_transport(request: HttpRequest, timeout: float = 20.0) -> HttpResponse:
+    require_url(request.url, host_pattern=r"email\.[a-z0-9-]+\.amazonaws\.com")
     req = urllib.request.Request(request.url, data=request.body, headers=request.headers, method=request.method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with open_no_redirect(req, timeout=timeout, host_pattern=r"email\.[a-z0-9-]+\.amazonaws\.com", loopback_http=False) as resp:
             return HttpResponse(resp.status, resp.read())
     except urllib.error.HTTPError as exc:
-        return HttpResponse(exc.code, exc.read())
+        status, _headers, body = http_error_response(exc)
+        return HttpResponse(status, body)
 
 
 def _hmac(key: bytes, msg: str) -> bytes:
@@ -65,19 +71,34 @@ def sign_v4(*, method: str, host: str, path: str, body: bytes, region: str, serv
 class SesSender:
     provider = "ses"
 
-    def __init__(self, *, region: str, access_key: str, secret_key: str, sender: str,
-                 session_token: str | None = None, transport=urllib_transport, clock=None) -> None:
-        if not (region and access_key and secret_key and sender):
-            raise NotifyConfigError("SES sender needs region, access key, secret key and a from address")
+    def __init__(self, *, region: str, sender: str, access_key: str | None = None, secret_key: str | None = None,
+                 session_token: str | None = None, credentials=None, configuration_set: str | None = None,
+                 transport=urllib_transport, clock=None) -> None:
+        """Static keys, or ``credentials``: an object whose ``get()`` returns the current keys (the task role's,
+        ``providers.rds_iam.ContainerCredentials``), read for every send."""
+        if credentials is not None and (access_key or secret_key or session_token):
+            raise NotifyConfigError("SES sender takes static keys or a credential source, never both")
+        if credentials is not None and not callable(getattr(credentials, "get", None)):
+            raise NotifyConfigError("SES sender's credential source must offer get()")
+        if not (region and sender and (credentials is not None or (access_key and secret_key))):
+            raise NotifyConfigError("SES sender needs region, a from address and an access key and secret key or a "
+                                    "credential source")
+        refuse_control("the From address", sender, NotifyConfigError)
         self.region, self.sender = region, sender
         self._ak, self._sk, self._tok = access_key, secret_key, session_token
+        self._creds = credentials
+        # Sends through this SES configuration set (its bounce and complaint events reach the alarm relay), each tagged
+        # cv_template=<template type> so the event names the template.
+        self.configuration_set = configuration_set
         self._transport = transport
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def send(self, message: Message) -> str:
+        for what, value in (("the subject", message.subject), ("the recipient", message.to), ("the From address", self.sender)):
+            refuse_control(what, value, NotifyRefused)
         host = f"email.{self.region}.amazonaws.com"
         path = "/v2/email/outbound-emails"
-        body = json.dumps({
+        request = {
             "FromEmailAddress": self.sender,
             "Destination": {"ToAddresses": [message.to]},
             "Content": {"Simple": {
@@ -85,9 +106,21 @@ class SesSender:
                 "Body": {"Text": {"Data": message.text, "Charset": "UTF-8"},
                          "Html": {"Data": message.html, "Charset": "UTF-8"}},
             }},
-        }).encode()
+        }
+        if self.configuration_set:
+            request["ConfigurationSetName"] = self.configuration_set
+        if message.template:
+            request["EmailTags"] = [{"Name": "cv_template", "Value": message.template}]
+        body = json.dumps(request).encode()
+        ak, sk, tok = self._ak, self._sk, self._tok
+        if self._creds is not None:
+            try:
+                c = self._creds.get()
+            except (ConsentVaultError, OSError) as exc:  # the task role's keys could not be read: a failed send, named
+                raise SendFailed("ses", "credentials_unavailable", type(exc).__name__) from None
+            ak, sk, tok = c.access_key, c.secret_key, c.session_token
         headers = sign_v4(method="POST", host=host, path=path, body=body, region=self.region, service="ses",
-                          access_key=self._ak, secret_key=self._sk, now=self._clock(), session_token=self._tok)
+                          access_key=ak, secret_key=sk, now=self._clock(), session_token=tok)
         try:
             resp = self._transport(HttpRequest("POST", f"https://{host}{path}", headers, body))
         except (OSError, TimeoutError) as exc:

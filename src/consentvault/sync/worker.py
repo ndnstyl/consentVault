@@ -33,7 +33,8 @@ the transport carries its own timeout.
 
 from __future__ import annotations
 
-import logging
+from ..safelog import describe
+from .. import safelog
 import threading
 import uuid
 from collections import deque
@@ -49,13 +50,14 @@ from ..tenancy.errors import TenancyError
 from ..tenancy.keys_protocol import WrappedKey
 from ..tenancy.tokens import org_transaction
 from .connectors import webhook
-from .errors import AlarmSinkError, CredentialError, SyncError, TransportError, WorkerError
-from .outbox import ERROR_COLUMN, decrypt_payload
+from .errors import AlarmSinkError, CredentialError, StaleAttemptError, SyncError, TransportError, WorkerError
+from .outbox import ERROR_COLUMN, decrypt_payload, push_start_taken_over
 from .systems import Custody, open_credentials
 
-log = logging.getLogger("consentvault.sync")
+log = safelog.get("consentvault.sync")
 
 RELEASE_DELAY_SECONDS = 60
+MAX_BACKOFF_SECONDS = 3600  # the longest retry step the database accepts (sync_complete)
 PAUSED_RESTORE = "restore_in_progress"
 
 
@@ -113,7 +115,9 @@ class LoggingAlarmSink:
     """Writes the alarm at ERROR level. The email and job-health sinks are the notification lane's."""
 
     def raise_alarm(self, alarm: Alarm) -> None:
-        log.error("consentvault sync alarm: %s", alarm.message())
+        log.error("consentvault sync alarm: pushes to a connected system are dead; fix the system, then redrive", count=alarm.count,
+                  system_name=alarm.system_name, system_id=alarm.system_id, org_id=alarm.org_id, error_class=alarm.error_class,
+                  oldest=alarm.oldest)
 
 
 @dataclass
@@ -153,7 +157,8 @@ def _utcnow() -> datetime:
 class SyncWorker:
     def __init__(self, crypto: tc.TenantCrypto, custody: Custody, transport: webhook.Transport,
                  alarms: AlarmSink | None = None, *, config: WorkerConfig | None = None,
-                 clock: Callable[[], datetime] = _utcnow) -> None:
+                 clock: Callable[[], datetime] = _utcnow, twenty=None) -> None:
+        self.twenty = twenty  # the Twenty connector's delivery (connectors/twenty.py); None: Twenty systems are named as unserved
         self.crypto = crypto
         self.custody = custody
         self.transport = transport
@@ -179,7 +184,7 @@ class SyncWorker:
         try:
             restoring = conn.execute("SELECT consentvault.restore_pending() AS p").fetchone()["p"]
         except psycopg.Error as exc:
-            raise WorkerError(f"the worker could not read whether a restore is pending: {type(exc).__name__}: {exc}") from exc
+            raise WorkerError(f"the worker could not read whether a restore is pending: {describe(exc)}") from exc
         if restoring:
             report.paused = PAUSED_RESTORE
             log.warning("consentvault sync paused: a database restore is not yet reconciled; nothing is pushed until it is")
@@ -187,7 +192,7 @@ class SyncWorker:
         try:
             org_ids = [r["org_id"] for r in conn.execute("SELECT * FROM consentvault.dispatch_org_ids('sync') AS org_id")]
         except psycopg.Error as exc:
-            raise WorkerError(f"the worker could not list the organisations: {type(exc).__name__}: {exc}") from exc
+            raise WorkerError(f"the worker could not list the organisations: {describe(exc)}") from exc
         if org_ids:  # a different organisation goes first each run, so none is always last
             start = self._runs % len(org_ids)
             org_ids = org_ids[start:] + org_ids[:start]
@@ -205,7 +210,7 @@ class SyncWorker:
                     token = conn.execute("SELECT consentvault.dispatch_org_token('sync', %s) AS t", (org_id,)).fetchone()["t"]
                     self.run_org(conn, org_id, token, org_report)
                 except Exception as exc:  # one organisation's failure never hides another's; it is named in the report
-                    org_report.errors.append(f"{type(exc).__name__}: {exc}")
+                    org_report.errors.append(f"{describe(exc)}")
         if raise_on_error and not report.ok:
             err = WorkerError("the sync run finished with failures: " + "; ".join(report.errors))
             err.report = report  # type: ignore[attr-defined]
@@ -231,14 +236,14 @@ class SyncWorker:
                     with lock:
                         waiting.append(("drain", ref))
             except Exception as exc:  # one organisation's failure never hides another's; it is named in the report
-                org_report.errors.append(f"{type(exc).__name__}: {exc}")
+                org_report.errors.append(f"{describe(exc)}")
 
         def work() -> None:
             try:
                 conn = connect()
             except Exception as exc:
                 with lock:
-                    report.run_errors.append(f"a pool thread could not open its connection: {type(exc).__name__}: {exc}")
+                    report.run_errors.append(f"a pool thread could not open its connection: {describe(exc)}")
                 return
             try:
                 while (item := take()) is not None:
@@ -260,7 +265,7 @@ class SyncWorker:
                 with connect() as conn:
                     self.run_once(conn, connect=connect)
             except SyncError as exc:
-                log.error("consentvault sync pass failed: %s", exc)
+                log.error("consentvault sync pass failed", error=type(exc).__name__)
             stop.wait(interval_seconds)
 
     # one organisation ----------------------------------------------------------------------------------------------
@@ -277,14 +282,28 @@ class SyncWorker:
         try:
             with org_transaction(conn, token):
                 conn.execute("SELECT consentvault.sync_release(%s, %s, %s)",
-                             (row["outbox_id"], row["attempt"],
-                              self.clock() + timedelta(seconds=RELEASE_DELAY_SECONDS)))
+                             (row["outbox_id"], row["attempt"], RELEASE_DELAY_SECONDS))   # due again that long from the database's now
             report.released += 1
         except psycopg.errors.ObjectNotInPrerequisiteState:
             report.stale += 1
 
     def _deliver(self, conn, token, org_id, row, report: OrgReport) -> None:
         outbox_id, attempt = row["outbox_id"], row["attempt"]
+        # this push's attempt starts now: stamped on the row (last_attempt_at), and the backoff counts from this stamp, so a
+        # batch's later pushes are not dated to the claim and their delay never comes out short
+        try:
+            with org_transaction(conn, token):
+                started = conn.execute("SELECT consentvault.sync_attempt_started(%s, %s) AS t",
+                                       ([outbox_id], [attempt])).fetchone()["t"]   # the database's clock
+        except psycopg.errors.ObjectNotInPrerequisiteState as exc:
+            if not push_start_taken_over(exc):
+                raise
+            # another worker took this row before its push started: it is that worker's now; counted stale, as a take-over
+            # found at completion is, and the run goes on
+            report.stale += 1
+            log.warning("consentvault sync: a push was taken over before it started", attempt=attempt, outbox_id=outbox_id,
+                        error=type(exc).__name__)
+            return
         data_key = None
         try:
             data_key = self.crypto.open_contact_key(org_id, WrappedKey(bytes(row["wrapped_key"]), row["key_version"]))
@@ -294,7 +313,7 @@ class SyncWorker:
             # counted as an attempt: retried with backoff and dead when the window ends (alarmed then), never a
             # silent loop of releases
             report.errors.append(f"push {outbox_id} to {row['system_name']!r} could not be prepared "
-                                 f"({type(exc).__name__}: {exc}); counted as an attempt")
+                                 f"({describe(exc)}); counted as an attempt")
             outcome = webhook.Outcome("retry", PREPARE_FAILED, None, f"preparation failed: {type(exc).__name__}")
         else:
             request = webhook.build_request(
@@ -302,28 +321,25 @@ class SyncWorker:
                 org_id=org_id, contact_fp=row["contact_fp"], channel=row["channel"], purpose=row["purpose"],
                 version=row["version"])
             outcome = webhook.classify(self.transport.send(request))  # TransportError propagates: the door
-        now = self.clock()
-        next_at = None
+        backoff_s = None
         if outcome.kind == "retry":
-            deadline = row["window_start"] + timedelta(hours=row["retry_window_hours"])
-            if now >= deadline:
-                outcome = webhook.Outcome("dead", outcome.error_class, outcome.http_status,
-                                          f"the retry window of {row['retry_window_hours']} h ended; last: {outcome.detail}")
-            else:
-                next_at = min(now + self.config.backoff(attempt), deadline)
+            # the step only, capped; whether the retry window has closed (dead) and when the next attempt is due are the
+            # database's clock, counted from this push's own start as sync_attempt_started stamped it, so the wait between
+            # attempts is exactly the backoff however long the push or the pushes before it in the batch took
+            backoff_s = max(1, min(int(self.config.backoff(attempt).total_seconds()), MAX_BACKOFF_SECONDS))
         error_ct = None
         if outcome.detail and data_key is not None:
             error_ct = tc.encrypt_field(data_key, org_id, f"{outbox_id}:{attempt}", ERROR_COLUMN, outcome.detail)
         try:
             with org_transaction(conn, token):
                 final = conn.execute(
-                    "SELECT consentvault.sync_complete(%s, %s, %s, %s, %s, %s, %s, %s) AS final",
-                    (outbox_id, attempt, outcome.kind, outcome.http_status, outcome.error_class, error_ct, next_at,
-                     now)).fetchone()["final"]
+                    "SELECT consentvault.sync_complete(%s, %s, %s, %s, %s, %s, %s) AS final",
+                    (outbox_id, attempt, outcome.kind, outcome.http_status, outcome.error_class, error_ct,
+                     backoff_s)).fetchone()["final"]
         except psycopg.errors.ObjectNotInPrerequisiteState as exc:
             report.stale += 1
-            log.warning("consentvault sync: attempt %s of push %s was finished after its lease was taken over: %s",
-                        attempt, outbox_id, exc)
+            log.warning("consentvault sync: a push attempt was finished after its lease was taken over", attempt=attempt,
+                        outbox_id=outbox_id, error=type(exc).__name__)
             return
         if final == "acknowledged":
             report.acknowledged += 1
@@ -350,7 +366,7 @@ class SyncWorker:
                     conn.execute("SELECT consentvault.sync_ack_alarms(%s)", (list(g["outbox_ids"]),))
             except Exception as exc:  # any sink or row failure: the rows stay unalarmed and the next run retries
                 report.errors.append(str(AlarmSinkError(
-                    f"the alarm for system {g['system_name']!r} could not be raised: {type(exc).__name__}: {exc}")))
+                    f"the alarm for system {g['system_name']!r} could not be raised: {describe(exc)}")))
                 continue
             report.alarms += 1
 
@@ -366,6 +382,7 @@ class _OrgDrain:
         self.turns = 0
         self.halted = False  # a door failure: no more sends this run
         self.done = False
+        self.twenty_checked = False
 
     def _deadline_error(self) -> None:
         self.report.errors.append(f"the {self.w.config.org_deadline_seconds:.0f} s deadline for this organisation passed "
@@ -385,11 +402,14 @@ class _OrgDrain:
             self._deadline_error()
             return self._finish(conn)
         with org_transaction(conn, self.token):
-            rows = conn.execute("SELECT * FROM consentvault.sync_claim(%s, %s, %s)",
-                                (min(limit, cfg.max_pushes_per_org - self.pushes), cfg.lease_seconds,
-                                 w.clock())).fetchall()
-        if not rows:
+            rows = conn.execute("SELECT * FROM consentvault.sync_claim(%s, %s)",
+                                (min(limit, cfg.max_pushes_per_org - self.pushes), cfg.lease_seconds)).fetchall()
+        group = self._twenty_turn(conn)
+        if not rows and not group:
             return self._finish(conn)
+        if not rows:
+            self.turns += 1
+            return self._finish(conn) if self.halted else True
         self.turns += 1
         report.claimed += len(rows)
         for row in rows:
@@ -404,9 +424,53 @@ class _OrgDrain:
                 self.pushes += 1
             except TransportError as exc:
                 self.halted = True
-                report.errors.append(f"delivery door failure: {exc}")
+                report.errors.append(f"delivery door failure: {describe(exc)}")
                 w._release(conn, self.token, row, report)
         return self._finish(conn) if self.halted else True
+
+    def _twenty_turn(self, conn: psycopg.Connection) -> bool:
+        """Claim and deliver ONE Twenty person group (twenty.md 2.2 step 0). True when a group was claimed."""
+        w, report = self.w, self.report
+        if self.halted or w.clock() >= self.deadline:
+            return False
+        if w.twenty is None:
+            if not self.twenty_checked:
+                self.twenty_checked = True
+                with org_transaction(conn, self.token):
+                    unserved = conn.execute("SELECT count(*) AS n FROM consentvault.connector_systems()"
+                                            " WHERE status = 'active'").fetchone()["n"]
+                if unserved:
+                    report.errors.append(f"{unserved} Twenty system(s) are active but this worker has no Twenty connector "
+                                         "(no call transport); their pushes wait")
+            return False
+        with org_transaction(conn, self.token):
+            group = conn.execute("SELECT * FROM consentvault.sync_claim_person(%s)", (w.config.lease_seconds,)).fetchall()
+        if not group:
+            return False
+        report.claimed += len(group)
+        try:
+            out, _counts = w.twenty.deliver(conn, self.token, self.org_id, group, drain_deadline=self.deadline,
+                                            backoff=w.config.backoff)
+        except StaleAttemptError as exc:
+            report.stale += len(group)
+            log.warning("consentvault sync: a Twenty delivery's lease was taken over", error=type(exc).__name__)
+            return True
+        except TransportError as exc:
+            self.halted = True
+            report.errors.append(f"delivery door failure: {describe(exc)}")
+            for row in group:
+                w._release(conn, self.token, row, report)
+            return True
+        self.pushes += len(group)
+        if out.kind == "acknowledged":
+            report.acknowledged += len(group)
+        elif out.kind == "dead":
+            report.dead += len(group)
+        elif out.kind == "release":
+            report.released += len(group)
+        else:
+            report.retried += len(group)
+        return True
 
     def _finish(self, conn: psycopg.Connection) -> bool:
         self.done = True

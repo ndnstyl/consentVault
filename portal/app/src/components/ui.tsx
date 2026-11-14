@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ApiError } from '../lib/api/client.ts';
-import { SYMBOLS } from '../lib/sprite.ts';
+import { SYMBOLS, reactAttrs } from '../lib/sprite.ts';
 import { DELIVERY_LABEL, DELIVERY_TONE, NA, ORG_STATUS_ICON, ORG_STATUS_LABEL, ORG_STATUS_TONE, causeLine, evidenceLabel, policyLabel } from '../lib/copy.ts';
 import { fmtDateTime } from '../lib/format.ts';
 import type { OrgStatus } from '../lib/api/types.ts';
@@ -13,7 +13,7 @@ export function Sprite() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" className="sr-sprite" aria-hidden="true" focusable="false">
       <defs>
-        {SYMBOLS.map((s) => <symbol key={s.id} id={s.id} viewBox={s.viewBox} dangerouslySetInnerHTML={{ __html: s.svg }} />)}
+        {SYMBOLS.map((s) => <symbol key={s.id} id={s.id} viewBox={s.viewBox}>{s.shapes.map((sh, i) => React.createElement(sh.tag, { key: i, ...reactAttrs(sh.attrs) }))}</symbol>)}
       </defs>
     </svg>
   );
@@ -329,16 +329,20 @@ export function CodeBlock({ code, label }: { code: string; label: string }) {
 }
 
 // ---------- setup checklist ----------
-export function SetupChecklist({ items }: { items: { label: string; done: boolean | null; href: string }[] }) {
-  const firstTodo = items.findIndex((i) => i.done === false);
+/** A form screen drawn inside the setup walkthrough: on success it reports back instead of navigating away. */
+export interface Embedded { onDone: (notice: string, nextHref?: string) => void }
+export interface ChecklistItem { label: string; done: boolean | null; href: string; chip?: { text: string; tone: string; icon: string }; primary?: boolean }
+export function SetupChecklist({ items, readOnly }: { items: ChecklistItem[]; readOnly?: boolean }) {
+  const firstTodo = items.some((i) => i.primary !== undefined) ? items.findIndex((i) => i.primary) : items.findIndex((i) => i.done === false);
   return (
     <ol className="steps">
       {items.map((it, i) => (
-        <li key={it.label} className={cx(it.done && 'done', i === firstTodo && 'next')}>
+        <li key={it.label} className={cx(it.done && 'done', !readOnly && i === firstTodo && 'next')}>
           <span className="n" aria-hidden="true">{it.done ? <Icon name="i-check" /> : i + 1}</span>
           <span className="t">{it.label}</span>
-          {it.done === null ? <Chip tone="ev-na" icon="i-warn">{NA}</Chip> : <Chip tone={it.done ? 'st-success' : 'st-neutral'} icon={it.done ? 'i-ok' : 'i-dash'}>{it.done ? 'Done' : 'To do'}</Chip>}
-          {i === firstTodo && <LinkBtn href={it.href} variant="primary" size="sm">{it.label}</LinkBtn>}
+          {it.chip ? <Chip tone={it.chip.tone} icon={it.chip.icon}>{it.chip.text}</Chip>
+            : it.done === null ? <Chip tone="ev-na" icon="i-warn">{NA}</Chip> : <Chip tone={it.done ? 'st-success' : 'st-neutral'} icon={it.done ? 'i-ok' : 'i-dash'}>{it.done ? 'Done' : 'To do'}</Chip>}
+          {!readOnly && i === firstTodo && <LinkBtn href={it.href} variant="primary" size="sm">{it.label}</LinkBtn>}
         </li>
       ))}
     </ol>

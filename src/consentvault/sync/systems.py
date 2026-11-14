@@ -15,7 +15,9 @@ from typing import Protocol
 
 import psycopg
 
+from ..safelog import caller_detail, describe
 from .errors import CredentialError, SystemNotFoundError
+from ..lengths import is_bytes_of_len
 
 
 class Custody(Protocol):
@@ -25,7 +27,7 @@ class Custody(Protocol):
 
 
 def seal_credentials(custody: Custody, org_id, secret: bytes) -> bytes:
-    if not isinstance(secret, bytes) or len(secret) != 32:
+    if not is_bytes_of_len(secret, 32):
         raise CredentialError("a signing credential is 32 raw bytes (an HMAC secret or an Ed25519 seed)")
     return custody.wrap(str(org_id), secret)
 
@@ -37,8 +39,9 @@ def open_credentials(custody: Custody, org_id, system_id, blob) -> bytes:
     try:
         secret = custody.unwrap(str(org_id), bytes(blob))
     except Exception as exc:  # the custody provider's own error types differ; every one is named here and carried
-        raise CredentialError(f"the credential of system {system_id} cannot be opened: {type(exc).__name__}: {exc}") from exc
-    if not isinstance(secret, bytes) or len(secret) != 32:
+        raise CredentialError(f"the credential of system {system_id} cannot be opened: {describe(exc)}",
+                              code="credential_unopenable") from exc
+    if not is_bytes_of_len(secret, 32):
         raise CredentialError(f"the credential of system {system_id} is not 32 bytes after opening")
     return secret
 
@@ -50,7 +53,7 @@ def bind_signal_credential(conn: psycopg.Connection, system_id, credential_id) -
         conn.execute("SELECT consentvault.sync_system_bind_credential(%s, %s)",
                      (uuid.UUID(str(system_id)), uuid.UUID(str(credential_id))))
     except psycopg.errors.NoDataFound as exc:
-        raise SystemNotFoundError(str(exc)) from exc
+        raise SystemNotFoundError(caller_detail(exc)) from exc
     except psycopg.errors.UniqueViolation as exc:
         raise SystemNotFoundError("that credential already carries another system's signals") from exc
 
@@ -62,4 +65,4 @@ def unbind_signal_credential(conn: psycopg.Connection, system_id) -> uuid.UUID |
         return conn.execute("SELECT consentvault.sync_system_unbind_credential(%s) AS was",
                             (uuid.UUID(str(system_id)),)).fetchone()["was"]
     except psycopg.errors.NoDataFound as exc:
-        raise SystemNotFoundError(str(exc)) from exc
+        raise SystemNotFoundError(caller_detail(exc)) from exc

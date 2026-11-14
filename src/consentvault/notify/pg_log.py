@@ -38,9 +38,14 @@ class PostgresSendLog:
     def append(self, record: SendRecord) -> None:
         try:
             with self._connect() as conn, conn.transaction():
+                # A bounce already recorded for this provider message (an event delivered again after its alarm could not
+                # be published) is not written twice (migration 0063); every other row is written as it comes.
+                # No conflict target: naming one needs SELECT on its columns, which this append-only login has not; the
+                # only other unique key is the generated send_id, which an insert never supplies.
+                conflict = " ON CONFLICT DO NOTHING" if record.outcome == "bounced" else ""
                 conn.execute(
                     "INSERT INTO consentvault.notify_send_log (type, recipient_domain, outcome, provider,"
-                    " provider_message_id, detail, at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    " provider_message_id, detail, at) VALUES (%s, %s, %s, %s, %s, %s, %s)" + conflict,
                     (record.type, record.recipient_domain.lower(), record.outcome, record.provider,
                      record.provider_message_id, scrub_detail(record.detail), record.at))
         except psycopg.Error as exc:

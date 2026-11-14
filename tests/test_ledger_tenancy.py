@@ -69,7 +69,7 @@ def test_one_organisations_writer_never_waits_on_anothers_lock(tenancy):
             with org_transaction(app, tenancy.token(tenancy.b)):  # B is not blocked by A's lock
                 record_tenant_event(app, tenancy.crypto, contact=PHONE, event_type="revoke", channels=["sms"],
                                     purposes=["marketing"], method="keyword", origin="consumer")
-            with pytest.raises(LedgerError, match="lock"):
+            with pytest.raises(LedgerError, match=r"LockNotAvailable \(sqlstate 55P03\)"):
                 with org_transaction(app, tenancy.token(tenancy.a)):  # A is
                     record_tenant_event(app, tenancy.crypto, contact=PHONE, event_type="revoke", channels=["sms"],
                                         purposes=["marketing"], method="keyword", origin="consumer")
@@ -148,14 +148,19 @@ def test_a_ciphertext_swapped_between_rows_is_caught_with_the_key(tenancy):
     assert [(b.event_id, b.reason) for b in breaks] == [(tenancy.a.event_ids[0], "ciphertext_invalid")]
 
 
-def test_shredding_a_contact_key_leaves_every_link_verifiable(tenancy):
+def test_a_contact_key_deleted_by_hand_keeps_every_link_verifiable_and_reads_as_a_break_not_an_erasure(tenancy):
     fp = tenancy.crypto.contact_fingerprint(tenancy.a.org_id, "phone", PHONE)
     with tenancy.superuser() as owner:
         held = owner.execute("SELECT * FROM consentvault.contact_key WHERE org_id = %s AND contact_fp = %s",
                              (tenancy.a.org_id, fp)).fetchone()
         owner.execute("DELETE FROM consentvault.contact_key WHERE org_id = %s AND contact_fp = %s",
                       (tenancy.a.org_id, fp))
-        assert verify_chain(owner, crypto=tenancy.crypto) == []
+        assert verify_chain(owner) == []  # links and stored digests are intact
+        seqs = [r["seq"] for r in owner.execute("SELECT seq FROM consentvault.event WHERE org_id = %s AND contact_fp = %s"
+                                                " ORDER BY seq", (tenancy.a.org_id, fp)).fetchall()]
+        # no completed erasure covers these rows, so a missing key is a break, never an erasure
+        assert [(b.seq, b.reason) for b in verify_chain(owner, crypto=tenancy.crypto)] == [
+            (s, "contact_key_missing") for s in seqs]
         row = owner.execute("SELECT * FROM consentvault.event WHERE event_id = %s", (tenancy.a.event_ids[0],)).fetchone()
         assert row["contact_fp"] == fp  # a returning number still matches its old stop
     with pytest.raises(FieldDecryptError):

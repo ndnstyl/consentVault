@@ -6,6 +6,10 @@ matches a returning contact to its old stop.
 
 Order of an erasure, each step guarding the next:
 1. inside the organisation, take the lifecycle lock and check for a covering legal hold (refused or queued, named);
+1b. write the person's stop (``record_erasure_stop``, entered in the ledger as ``erasure_stop`` first): one suppress event over every channel of the organisation and every
+   purpose, by fingerprint, method ``written``, source ``erasure``, ``recorded_by = erasure:<id>``. The gate reads events
+   by fingerprint, so it answers stopped for this person from now on, whether or not the key still exists, and a later
+   capture of the same person meets the stop until a verified grant lifts it under the release rule. Written at the first unheld confirm and again at completion if a grant or release came after it, before the key goes (its ciphertexts need the key);
 2. wait while any push of the person's state to a connected system is queued, failed or in flight: the request is held
    with ``wait_reason = pending_suppression_delivery`` (a visible state) and ``resume_waiting`` runs it once every push
    is delivered or dead. Erasing first would leave the stop undeliverable (its payload dies with the key);
@@ -26,14 +30,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator, Optional
 
 import psycopg
+import psycopg.sql
 
+from .. import dbclock
+from ..safelog import constraint_name, db_refusal_id, describe
 from .admin_base import ROLE_ADMIN, ApiError, Ctx, body_dict, iso, need_text, to_uuid
 from .errors import TenancyError
 from .tokens import TokenKey, mint_org_token, org_transaction
@@ -42,7 +48,6 @@ LEDGER_PREFIX = "lifecycle-ledger/"
 LEDGER_RETAIN_DAYS = 3650
 MAX_LEDGER_ENTRIES = 1_000_000
 _MAX_PROBE = 10000
-_HOLD = re.compile(r"legal_hold_active:([0-9a-f-]{36})")
 
 
 class LifecycleError(TenancyError):
@@ -62,10 +67,6 @@ class CachePurgeError(LifecycleError):
 
 
 # ---- shared plumbing -----------------------------------------------------------------------------------------------------
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 OPERATOR_CREDENTIAL_PREFIX = "operator:"
 
 
@@ -97,7 +98,7 @@ def audit_org(conn, *, actor_kind: str, actor_id: Optional[str], action: str, ta
                      target_id=None if target_id is None else str(target_id),
                      reason=None if reason is None else reason[:500], request_id=request_id)
     except audit.AuditError as exc:
-        raise LifecycleError(f"could not append audit row {action!r}: {exc}") from exc
+        raise LifecycleError(f"could not append audit row {action!r}: {describe(exc)}") from exc
 
 
 def audit_platform(conn, *, operator_id: str, action: str, target_kind: str, target_id, reason: Optional[str],
@@ -109,13 +110,12 @@ def audit_platform(conn, *, operator_id: str, action: str, target_kind: str, tar
                               target_id=None if target_id is None else str(target_id),
                               reason=None if reason is None else reason[:500], request_id=request_id)
     except audit.AuditError as exc:
-        raise LifecycleError(f"could not append platform audit row {action!r}: {exc}") from exc
+        raise LifecycleError(f"could not append platform audit row {action!r}: {describe(exc)}") from exc
 
 
 def hold_in(exc: BaseException) -> Optional[str]:
     """The hold id a database refusal names (``legal_hold_active:<id>``), or None."""
-    m = _HOLD.search(str(getattr(getattr(exc, "diag", None), "message_primary", "") or exc))
-    return m.group(1) if m else None
+    return db_refusal_id(exc, "legal_hold_active")
 
 
 def hold_refusal(hold_id: str, detail: str) -> ApiError:
@@ -175,8 +175,14 @@ class LifecycleLedger:
     probes forward from a hint, so a restored database whose memory is behind the ledger never overwrites an entry.
     """
 
-    def __init__(self, store, *, retain_days: int = LEDGER_RETAIN_DAYS, clock: Callable[[], datetime] = now_utc):
-        self._store, self._retain, self._clock = store, retain_days, clock
+    def __init__(self, store, *, clock: Optional[Callable[[], datetime]] = None, retain_days: int = LEDGER_RETAIN_DAYS):
+        """``clock`` is the database's clock (``dbclock.datetime_clock``): an entry's time and its retention end are the
+        database's, never this host's. There is no default, so a ledger cannot be built on the host clock."""
+        self._store, self._retain, self._clock = store, retain_days, clock or self._no_clock
+
+    @staticmethod
+    def _no_clock() -> datetime:
+        raise LedgerUnavailableError("this ledger has no clock: build it with the database's (dbclock.datetime_clock)")
 
     @staticmethod
     def _key(seq: int) -> str:
@@ -207,11 +213,12 @@ class LifecycleLedger:
             prev = self._get(org, seq - 1) if seq > 1 else None
             if seq > 1 and prev is None:
                 raise LedgerIntegrityError(f"the lifecycle ledger of {org} has a gap before entry {seq}")
-            body = dict(entry, v=1, seq=seq, org_id=org, at=self._clock().isoformat(),
+            written_at = self._clock()
+            body = dict(entry, v=1, seq=seq, org_id=org, at=written_at.isoformat(),
                         prev_sha256=hashlib.sha256(prev).hexdigest() if prev is not None else None)
             data = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
             try:
-                self._store.put(org, self._key(seq), data, retain_until=self._clock() + timedelta(days=self._retain))
+                self._store.put(org, self._key(seq), data, retain_until=written_at + timedelta(days=self._retain))
             except EvidenceExistsError:  # loud-failure-exempt: the slot is taken (the database was behind); probe the next
                 seq += 1
                 continue
@@ -273,6 +280,88 @@ ERASURE_COLUMNS = ("org_id, erasure_id, contact_fp, reason, requested_by, reques
                    " held_since, decline_reason, completed_at, ledger_seq, ledger_sha256, wait_reason, wait_since")
 
 
+# ---- the stop an erasure leaves behind --------------------------------------------------------------------------------
+ERASURE_SOURCE = "erasure"
+
+
+def erasure_stop_marker(erasure_id, stop_seq: int = 0, *, unconfirmed: bool = False) -> str:
+    """The stop event's identity: the erasure and the sequence number of the ledger entry that records it
+    (``erasure:<id>:<seq>``; a restore's unconfirmed replay reads ``erasure-unconfirmed:<id>:<seq>``)."""
+    return f"{'erasure-unconfirmed' if unconfirmed else 'erasure'}:{erasure_id}:{int(stop_seq)}"
+
+
+def erasure_stop_present(conn, fp: str, erasure_id, stop_seq: int) -> Optional[str]:
+    """The id of the stop event the database already holds for this ledger entry (confirmed or replayed as unconfirmed),
+    or None. Exact identity: erasure and entry sequence number."""
+    row = conn.execute("SELECT event_id FROM consentvault.event WHERE org_id = (SELECT consentvault.current_org())"
+                       " AND contact_fp = %s AND source = %s AND recorded_by = ANY(%s) ORDER BY seq DESC LIMIT 1",
+                       (fp, ERASURE_SOURCE, [erasure_stop_marker(erasure_id, stop_seq),
+                                             erasure_stop_marker(erasure_id, stop_seq, unconfirmed=True)])).fetchone()
+    return None if row is None else str(row["event_id"])
+
+
+def record_erasure_stop(conn, crypto, *, fp: str, erasure_id, ledger: Optional[LifecycleLedger] = None,
+                        channels: Optional[list] = None, unconfirmed: bool = False,
+                        stop_seq: Optional[int] = None) -> Optional[str]:
+    """Write the stop for one erasure (once), over every channel of the entered organisation, by fingerprint.
+
+    Runs inside ``operator_org`` and before the contact key is deleted: the event's ciphertexts and commitments need the
+    key. Returns the event id, the id of the stop already written for this request, or None when the organisation has no
+    channel or holds no event for this fingerprint (nothing was ever consented to, so a later capture is a first
+    consent). Raises ``LifecycleError`` when events exist but the key is already gone.
+
+    With ``ledger`` the stop is entered in the lifecycle ledger first (``{kind: erasure_stop, contact_fp, erasure_id,
+    channels, stopped_at}``, no personal data), so a restore replays it; a restore passes ``channels`` from that entry
+    and no ledger. ``unconfirmed`` marks a stop a restore replays from an entry with no commit (``recorded_by`` reads
+    ``erasure-unconfirmed:<id>:<seq>``). A restore passes ``stop_seq`` (the entry's sequence number): the stop is written
+    only when the database holds none for that exact entry. If the ledger refuses, no stop is written and nothing is erased.
+    """
+    from ..ledger import record_tenant_event
+    from . import crypto as tc
+    from .keys_protocol import WrappedKey
+    from .pipeline import org_channels
+
+    from ..ledger import _LOCK_SQL
+
+    conn.execute(_LOCK_SQL)  # first: the read of the earlier stop and the write of a new one see the same chain head
+    if stop_seq is not None:  # a replay: this exact entry is either recorded already or it is written once
+        present = erasure_stop_present(conn, fp, erasure_id, stop_seq)
+        if present is not None:
+            return present
+    else:
+        prior = conn.execute("SELECT event_id, seq FROM consentvault.event WHERE org_id ="
+                             " (SELECT consentvault.current_org()) AND contact_fp = %s AND source = %s"
+                             " AND recorded_by LIKE %s ORDER BY seq DESC LIMIT 1",
+                             (fp, ERASURE_SOURCE, f"erasure:{erasure_id}:%")).fetchone()
+        if prior is not None and conn.execute(
+                "SELECT 1 FROM consentvault.event WHERE org_id = (SELECT consentvault.current_org())"
+                " AND contact_fp = %s AND seq > %s AND event_type IN ('grant', 'release') LIMIT 1",
+                (fp, prior["seq"])).fetchone() is None:
+            return str(prior["event_id"])  # nothing has lifted or contradicted it since: one stop per request
+    channels = sorted(channels if channels is not None else org_channels(conn))
+    last = conn.execute("SELECT event_id, contact_kind, contact_ct FROM consentvault.event"
+                        " WHERE org_id = (SELECT consentvault.current_org()) AND contact_fp = %s"
+                        " ORDER BY seq DESC LIMIT 1", (fp,)).fetchone()
+    if not channels or last is None:
+        return None
+    held = conn.execute("SELECT * FROM consentvault.contact_key_of(%s)", (fp,)).fetchone()
+    if held is None:
+        raise LifecycleError(f"erasure {erasure_id}: this contact has events but no key, so its stop cannot be written; "
+                             "nothing was erased")
+    org = conn.execute("SELECT consentvault.current_org() AS o").fetchone()["o"]
+    if ledger is not None:
+        stop_seq, _ = ledger.append(org, {"kind": "erasure_stop", "contact_fp": fp, "erasure_id": str(erasure_id),
+                                          "channels": channels, "stopped_at": dbclock.now(conn).isoformat()},
+                                    hint=ledger_hint(conn))
+    marker = erasure_stop_marker(erasure_id, stop_seq or 0, unconfirmed=unconfirmed)
+    data_key = crypto.open_contact_key(org, WrappedKey(bytes(held["wrapped_key"]), held["key_version"]))
+    norm = tc.decrypt_text(data_key, org, str(last["event_id"]), "contact_norm", bytes(last["contact_ct"]))
+    ev = record_tenant_event(conn, crypto, contact=norm, contact_kind=last["contact_kind"], event_type="suppress",
+                             channels=channels, purposes=["*"], method="written", origin="consumer",
+                             source=ERASURE_SOURCE, recorded_by=marker)
+    return str(ev.event_id)
+
+
 def _erasure_obj(r: dict, conn) -> dict:
     """The request as the client reads it. A hold the client placed is named; any other hold reads as a neutral held
     state, with no reason and no hold id."""
@@ -312,12 +401,28 @@ def request_erasure(ctx: Ctx, body: Any, *, crypto, region: Optional[str] = None
     own = own_covering_hold(ctx.conn, fp)
     if own is not None:
         raise hold_refusal(own, "a legal hold covers this contact; nothing was queued")
+    if ctx.conn.execute("SELECT 1 FROM consentvault.contact_key WHERE org_id = (SELECT consentvault.current_org())"
+                        " AND contact_fp = %s", (fp,)).fetchone() is None:
+        if ctx.conn.execute("SELECT 1 FROM consentvault.erasure_request WHERE org_id = (SELECT consentvault.current_org())"
+                            " AND contact_fp = %s AND status = 'completed' LIMIT 1", (fp,)).fetchone() is not None:
+            raise ApiError("contact_already_erased", "this contact was already erased; nothing was queued")
+        raise ApiError("contact_not_held", "this organization holds no record of this contact; nothing was queued")
+    open_ = ctx.conn.execute("SELECT erasure_id FROM consentvault.erasure_request WHERE org_id ="
+                             " (SELECT consentvault.current_org()) AND contact_fp = %s AND status ="
+                             " 'pending_operator_confirmation'", (fp,)).fetchone()
+    if open_ is not None:
+        raise ApiError("erasure_already_requested", "an erasure request for this contact is already open",
+                       {"erasure_id": str(open_["erasure_id"])})
     eid = uuid.uuid4()
     try:
         with ctx.conn.transaction():
             ctx.conn.execute("INSERT INTO consentvault.erasure_request (org_id, erasure_id, contact_fp, reason,"
                              " requested_by) VALUES ((SELECT consentvault.current_org()), %s, %s, %s, %s)",
                              (eid, fp, reason, ctx.actor.member_uuid))
+    except psycopg.errors.UniqueViolation as exc:
+        if constraint_name(exc) != "erasure_request_one_open_idx":
+            raise
+        raise ApiError("erasure_already_requested", "an erasure request for this contact is already open") from exc
     except psycopg.IntegrityError as exc:
         hid = hold_in(exc)
         if hid is None:
@@ -335,11 +440,15 @@ def request_erasure(ctx: Ctx, body: Any, *, crypto, region: Optional[str] = None
     return {"erasure_id": str(eid), "status": "pending_operator_confirmation"}
 
 
+_LOAD = psycopg.sql.SQL("SELECT {cols} FROM consentvault.erasure_request WHERE org_id ="
+                        " (SELECT consentvault.current_org()) AND erasure_id = %s").format(
+    cols=psycopg.sql.SQL(ERASURE_COLUMNS))  # the column list is the constant above, composed, never concatenated
+_LOAD_LOCKED = psycopg.sql.SQL("{q} FOR UPDATE").format(q=_LOAD)
+
+
 def _load(conn, erasure_id, *, lock: bool = False) -> dict:
     eid = to_uuid(erasure_id, "erasure")
-    row = conn.execute("SELECT " + ERASURE_COLUMNS + " FROM consentvault.erasure_request WHERE org_id ="
-                       " (SELECT consentvault.current_org()) AND erasure_id = %s" + (" FOR UPDATE" if lock else ""),
-                       (eid,)).fetchone()
+    row = conn.execute(_LOAD_LOCKED if lock else _LOAD, (eid,)).fetchone()
     if row is None:
         raise ApiError("not_found", "no such erasure request in this organization")
     return row
@@ -355,7 +464,8 @@ def get_erasure(ctx: Ctx, erasure_id) -> dict:
 def pending_pushes(conn, contact_fp: str) -> int:
     """Pushes of this person's state to a connected system not yet delivered or dead (queued, failed or in flight)."""
     return conn.execute("SELECT count(*) AS n FROM consentvault.outbox WHERE org_id = (SELECT consentvault.current_org())"
-                        " AND contact_fp = %s AND status IN ('pending', 'failed', 'sent')", (contact_fp,)).fetchone()["n"]
+                        " AND contact_fp = %s AND status IN ('pending', 'failed', 'sent') AND push_kind <> 'clear'",
+                        (contact_fp,)).fetchone()["n"]
 
 
 def _wait(conn, req: dict, reason: str, *, actor_kind: str, actor_id: str, request_id: str, detail: str) -> bool:
@@ -370,7 +480,7 @@ def _wait(conn, req: dict, reason: str, *, actor_kind: str, actor_id: str, reque
     return new
 
 
-def erase_in_org(conn, *, ledger: LifecycleLedger, erasure_id, actor_kind: str, actor_id: str, request_id: str) -> dict:
+def erase_in_org(conn, *, ledger: LifecycleLedger, crypto, erasure_id, actor_kind: str, actor_id: str, request_id: str) -> dict:
     """Erase the contact of one open request of the entered organisation. Runs inside ``operator_org``.
 
     Raises ``ApiError('legal_hold_active')`` (nothing changed) or ``LedgerUnavailableError`` (nothing deleted). While a
@@ -386,6 +496,23 @@ def erase_in_org(conn, *, ledger: LifecycleLedger, erasure_id, actor_kind: str, 
     held = covering_hold(conn, fp)
     if held is not None:
         raise hold_refusal(held, "a legal hold covers this contact; the erasure is queued until it is released")
+    if req["held_since"] is not None:  # the hold that queued this request is gone (covering_hold found none): clear the mark
+        conn.execute("UPDATE consentvault.erasure_request SET held_by = NULL, held_since = NULL WHERE org_id ="
+                     " (SELECT consentvault.current_org()) AND erasure_id = %s", (req["erasure_id"],))
+    stop_id = record_erasure_stop(conn, crypto, fp=fp, erasure_id=req["erasure_id"], ledger=ledger)
+    from ..sync.connectors import twenty as twenty_connector  # the Twenty clear (twenty.md 5.1): queued before the delivery wait
+
+    twenty_connector.enqueue_clears(conn, crypto, org, req["erasure_id"], fp)
+    clear_reason, clear_systems = twenty_connector.clear_wait(conn, req["erasure_id"])
+    if clear_reason is not None:
+        conn.execute("UPDATE consentvault.erasure_request SET confirmed_by = coalesce(confirmed_by, %s), confirmed_at ="
+                     " coalesce(confirmed_at, clock_timestamp()) WHERE org_id = (SELECT consentvault.current_org())"
+                     " AND erasure_id = %s", (actor_id, req["erasure_id"]))
+        _wait(conn, req, clear_reason, actor_kind=actor_kind, actor_id=actor_id, request_id=request_id,
+              detail=f"the clear of connected system(s) {', '.join(clear_systems)} is "
+                     + ("dead: an operator redrives it" if clear_reason == "system_clear_dead" else "not yet delivered"))
+        return {"erasure_id": str(req["erasure_id"]), "status": "held", "held_reason": clear_reason,
+                "systems": clear_systems, "contact_fp_hint": fp[:8], "key_deleted": False, "export_objects": []}
     waiting = pending_pushes(conn, fp)
     if waiting:
         conn.execute("UPDATE consentvault.erasure_request SET confirmed_by = coalesce(confirmed_by, %s), confirmed_at ="
@@ -395,7 +522,7 @@ def erase_in_org(conn, *, ledger: LifecycleLedger, erasure_id, actor_kind: str, 
               detail=f"{waiting} push(es) of this person's state are not yet delivered or dead")
         return {"erasure_id": str(req["erasure_id"]), "status": "held", "held_reason": WAIT_DELIVERY,
                 "pending_pushes": waiting, "contact_fp_hint": fp[:8], "key_deleted": False, "export_objects": []}
-    erased_at = now_utc()
+    erased_at = dbclock.now(conn)
     seq, digest = ledger.append(org, {"kind": "erasure_intent", "contact_fp": fp, "erasure_id": str(req["erasure_id"]),
                                       "erased_at": erased_at.isoformat()}, hint=ledger_hint(conn))
     try:
@@ -417,10 +544,11 @@ def erase_in_org(conn, *, ledger: LifecycleLedger, erasure_id, actor_kind: str, 
                  " WHERE org_id = (SELECT consentvault.current_org()) AND erasure_id = %s",
                  (erased_at, actor_id, erased_at, seq, digest, req["erasure_id"]))
     audit_org(conn, actor_kind=actor_kind, actor_id=actor_id, action="erasure.completed", target_kind="erasure",
-              target_id=req["erasure_id"], reason=f"contact key deleted: {bool(deleted)}; intent entry {seq}",
+              target_id=req["erasure_id"], reason=f"contact key deleted: {bool(deleted)}; intent entry {seq}; "
+                     + (f"stop event {stop_id}" if stop_id else "no stop written (no events on record)"),
               request_id=request_id)
     return {"erasure_id": str(req["erasure_id"]), "status": "completed", "completed_at": iso(erased_at),
-            "key_deleted": bool(deleted), "ledger_seq": seq, "contact_fp_hint": fp[:8],
+            "key_deleted": bool(deleted), "stop_event_id": stop_id, "ledger_seq": seq, "contact_fp_hint": fp[:8],
             "export_objects": [j["package_object_key"] for j in jobs if j["package_object_key"]]}
 
 
@@ -443,10 +571,86 @@ def commit_erasures(conn, *, ledger: LifecycleLedger, request_id: str) -> list[s
                      " VALUES ((SELECT consentvault.current_org()), %s, %s, %s) ON CONFLICT DO NOTHING",
                      (r["erasure_id"], r["ledger_seq"], seq))
         done.append(str(r["erasure_id"]))
+    commit_stops(conn, ledger=ledger)
+    return done
+
+
+def commit_stops(conn, *, ledger: LifecycleLedger) -> list[int]:
+    """Inside the entered organisation: append ``{kind: erasure_stop_commit, stop_seq, erasure_id, contact_fp}`` for every
+    ``erasure_stop`` entry whose stop event the database now holds and the ledger holds no commit for. Run after the
+    stop's transaction committed (the event read here proves it). A stop entry whose transaction rolled back has no event,
+    so it never gets a commit and a restore never replays it (the same two-step rule as an erasure's intent and commit).
+    The stop event names its entry's sequence number, so the match is exact."""
+    org = conn.execute("SELECT consentvault.current_org() AS o").fetchone()["o"]
+    entries = ledger.entries(org)
+    committed = {e.get("stop_seq") for e in entries if e.get("kind") == "erasure_stop_commit"}
+    done = []
+    for e in entries:
+        if e.get("kind") != "erasure_stop" or e["seq"] in committed:
+            continue
+        if erasure_stop_present(conn, e["contact_fp"], e["erasure_id"], e["seq"]) is not None:
+            ledger.append(org, {"kind": "erasure_stop_commit", "stop_seq": e["seq"], "erasure_id": e["erasure_id"],
+                                "contact_fp": e["contact_fp"]}, hint=ledger_hint(conn))
+            done.append(e["seq"])
     return done
 
 
 ALARM_COMMIT_PENDING = "lifecycle.ledger_commit_pending"
+ALARM_COMMIT_OVERDUE = "lifecycle.ledger_commit_overdue"
+COMMIT_OVERDUE = timedelta(hours=1)
+
+
+def overdue_intents(conn, *, ledger: LifecycleLedger, now: Optional[datetime] = None) -> list[dict]:
+    """Inside the entered organisation: every ledger intent older than an hour that has no commit although a commit is
+    due. A stop entry is due when the database holds its stop event (a rolled-back confirm has none: nothing to commit);
+    an erasure intent is due unless its request was declined."""
+    org = conn.execute("SELECT consentvault.current_org() AS o").fetchone()["o"]
+    now = now or dbclock.now(conn)
+    entries = ledger.entries(org)
+    stop_done = {e.get("stop_seq") for e in entries if e.get("kind") == "erasure_stop_commit"}
+    settled = {e.get("erasure_id") for e in entries if e.get("kind") == "erasure_commit"}
+    out = []
+    for e in entries:
+        kind = e.get("kind")
+        if kind == "erasure_stop":
+            if e["seq"] in stop_done:
+                continue
+            at = e["at"]
+            due = erasure_stop_present(conn, e["contact_fp"], e["erasure_id"], e["seq"]) is not None
+        elif kind == "erasure_intent":
+            if e["erasure_id"] in settled:  # any commit settles the erasure: a retry that succeeded ends the alarm
+                continue
+            at = e["at"]
+            st = conn.execute("SELECT status FROM consentvault.erasure_request WHERE org_id ="
+                              " (SELECT consentvault.current_org()) AND erasure_id = %s", (e["erasure_id"],)).fetchone()
+            due = st is not None and st["status"] != "declined"
+        else:
+            continue
+        if due and now - datetime.fromisoformat(at) > COMMIT_OVERDUE:
+            out.append({"kind": kind, "seq": e["seq"], "erasure_id": e["erasure_id"], "at": at})
+    return out
+
+
+def commit_sweep(conn: psycopg.Connection, *, token_key: TokenKey, ledger: LifecycleLedger, request_id: str,
+                 org_id=None) -> dict:
+    """The hourly job: write every commit entry that is due (every organisation, or one), then raise an operator alarm for
+    each organisation that still holds an intent older than an hour without its commit. Answers what was written and
+    what is overdue; the caller exits non-zero when anything is overdue."""
+    from ..alarms import raise_operator_alarm
+
+    orgs = [to_uuid(org_id, "organization")] if org_id is not None else \
+        [r["o"] for r in conn.execute("SELECT o FROM consentvault.restore_org_ids() AS o")]
+    report: dict = {"orgs": {}, "overdue": 0}
+    for org in orgs:
+        commit = commit_after(conn, token_key=token_key, ledger=ledger, org_id=org, request_id=request_id)
+        with operator_org(conn, token_key, org):
+            late = overdue_intents(conn, ledger=ledger)
+            if late:
+                raise_operator_alarm(conn, name=ALARM_COMMIT_OVERDUE, error_class="LedgerCommitOverdue", ref_kind="org",
+                                     ref_id=org, request_id=request_id)
+        report["orgs"][str(org)] = {"commit": commit, "overdue": late}
+        report["overdue"] += len(late)
+    return report
 
 
 def commit_after(conn, *, token_key: TokenKey, ledger: LifecycleLedger, org_id, request_id: str) -> dict:
@@ -459,14 +663,14 @@ def commit_after(conn, *, token_key: TokenKey, ledger: LifecycleLedger, org_id, 
         with operator_org(conn, token_key, org_id):
             return {"status": "written", "erasures": commit_erasures(conn, ledger=ledger, request_id=request_id)}
     except LedgerUnavailableError as exc:
-        cause = str(exc)
+        cause = describe(exc)
     try:
         with operator_org(conn, token_key, org_id):
             raise_operator_alarm(conn, name=ALARM_COMMIT_PENDING, error_class="LedgerUnavailableError",
                                  ref_kind="org", ref_id=org_id, request_id=request_id)
     except AlarmWriteError as exc:
         raise LedgerUnavailableError(f"the erasure is complete but its ledger commit could not be written ({cause}) "
-                                     f"and the alarm row failed too ({exc}); run the commit sweep by hand") from exc
+                                     f"and the alarm row failed too ({describe(exc)}); run the commit sweep by hand") from exc
     return {"status": "pending", "cause": cause}
 
 
@@ -484,7 +688,7 @@ def purge_export_cache(org_id, keys: list[str], cache) -> dict:
     return {"expired_jobs": len(keys), "deleted": len(keys), "unreadable_only": 0}
 
 
-def confirm_erasure(conn: psycopg.Connection, *, token_key: TokenKey, ledger: LifecycleLedger, operator_id: str,
+def confirm_erasure(conn: psycopg.Connection, *, token_key: TokenKey, ledger: LifecycleLedger, crypto, operator_id: str,
                     request_id: str, org_id, erasure_id, export_cache=None) -> dict:
     """POST /v1/erasures/{id}:confirm (operator). Erases now, or queues the request behind a covering hold and answers
     ``legal_hold_active`` naming it (the queued state is committed before the refusal is raised)."""
@@ -494,6 +698,8 @@ def confirm_erasure(conn: psycopg.Connection, *, token_key: TokenKey, ledger: Li
         req = _load(conn, erasure_id, lock=True)
         held = covering_hold(conn, req["contact_fp"]) if req["status"] == "pending_operator_confirmation" else None
         if held is not None:
+            # a person who asked to be erased is not contacted while a hold keeps their data: only the key waits
+            record_erasure_stop(conn, crypto, fp=req["contact_fp"], erasure_id=req["erasure_id"], ledger=ledger)
             conn.execute("UPDATE consentvault.erasure_request SET held_by = %s, held_since = coalesce(held_since,"
                          " clock_timestamp()), confirmed_by = %s, confirmed_at = clock_timestamp()"
                          " WHERE org_id = (SELECT consentvault.current_org()) AND erasure_id = %s",
@@ -502,21 +708,23 @@ def confirm_erasure(conn: psycopg.Connection, *, token_key: TokenKey, ledger: Li
                       target_id=req["erasure_id"], reason=held_note(conn, held), request_id=request_id)
             queued = held
         else:
-            out = erase_in_org(conn, ledger=ledger, erasure_id=erasure_id, actor_kind="operator", actor_id=operator_id,
+            out = erase_in_org(conn, ledger=ledger, crypto=crypto, erasure_id=erasure_id, actor_kind="operator", actor_id=operator_id,
                                request_id=request_id)
             audit_platform(conn, operator_id=operator_id, action="erasure.confirmed", target_kind="erasure",
                            target_id=out["erasure_id"], reason=out.get("held_reason"), request_id=request_id)
     if queued is not None:
+        commit_after(conn, token_key=token_key, ledger=ledger, org_id=org, request_id=request_id)  # the stop's commit
         raise hold_refusal(queued, "a legal hold covers this contact; the confirmed erasure is queued until release")
     if out["status"] != "completed":
         out.pop("export_objects")
+        out["ledger_commit"] = commit_after(conn, token_key=token_key, ledger=ledger, org_id=org, request_id=request_id)
         return out
     out["ledger_commit"] = commit_after(conn, token_key=token_key, ledger=ledger, org_id=org, request_id=request_id)
     out["export_cache"] = purge_export_cache(org, out.pop("export_objects"), export_cache)
     return out
 
 
-def resume_waiting(conn: psycopg.Connection, *, token_key: TokenKey, ledger: LifecycleLedger, request_id: str,
+def resume_waiting(conn: psycopg.Connection, *, token_key: TokenKey, ledger: LifecycleLedger, crypto, request_id: str,
                    org_id=None, export_cache=None) -> dict:
     """The job that runs confirmed erasures held for ``pending_suppression_delivery`` once every push of the person is
     delivered or dead (every organisation, or one). A request a hold now covers is queued behind it, as a confirmation
@@ -528,7 +736,8 @@ def resume_waiting(conn: psycopg.Connection, *, token_key: TokenKey, ledger: Lif
         with operator_org(conn, token_key, org):
             ids = [r["erasure_id"] for r in conn.execute(
                 "SELECT erasure_id FROM consentvault.erasure_request WHERE org_id = (SELECT consentvault.current_org())"
-                " AND status = 'pending_operator_confirmation' AND wait_reason = %s AND held_by IS NULL"
+                " AND status = 'pending_operator_confirmation' AND held_by IS NULL AND confirmed_at IS NOT NULL"
+                " AND (wait_reason IS NULL OR wait_reason IN (%s, 'waiting_for_system_clear', 'system_clear_dead'))"
                 " ORDER BY requested_at", (WAIT_DELIVERY,))]
         for eid in ids:
             with operator_org(conn, token_key, org):
@@ -542,7 +751,7 @@ def resume_waiting(conn: psycopg.Connection, *, token_key: TokenKey, ledger: Lif
                               target_kind="erasure", target_id=eid, reason=held_note(conn, hold), request_id=request_id)
                     done["held"].append(str(eid))
                     continue
-                out = erase_in_org(conn, ledger=ledger, erasure_id=eid, actor_kind="system", actor_id="erasure-resume",
+                out = erase_in_org(conn, ledger=ledger, crypto=crypto, erasure_id=eid, actor_kind="system", actor_id="erasure-resume",
                                    request_id=request_id)
             if out["status"] != "completed":
                 done["still_waiting"].append(str(eid))
@@ -557,7 +766,7 @@ def resume_waiting(conn: psycopg.Connection, *, token_key: TokenKey, ledger: Lif
 
 
 def decline_erasure(conn: psycopg.Connection, *, token_key: TokenKey, operator_id: str, request_id: str, org_id,
-                    erasure_id, reason: str) -> dict:
+                    erasure_id, reason: str, crypto=None) -> dict:
     """The operator declines a request (visible state, reason kept)."""
     reason = need_text({"reason": reason}, "reason", max_len=500)
     with operator_org(conn, token_key, org_id):
@@ -567,6 +776,10 @@ def decline_erasure(conn: psycopg.Connection, *, token_key: TokenKey, operator_i
         conn.execute("UPDATE consentvault.erasure_request SET status = 'declined', decline_reason = %s, held_by = NULL,"
                      " held_since = NULL, wait_reason = NULL, wait_since = NULL WHERE org_id = (SELECT consentvault.current_org()) AND erasure_id = %s",
                      (reason, req["erasure_id"]))
+        if crypto is not None:  # the Twenty clear is superseded and current state written back (twenty.md 5.1)
+            from ..sync.connectors import twenty as twenty_connector
+
+            twenty_connector.on_decline(conn, crypto, org_id, req["erasure_id"], req["contact_fp"])
         audit_org(conn, actor_kind="operator", actor_id=operator_id, action="erasure.declined", target_kind="erasure",
                   target_id=req["erasure_id"], reason=reason, request_id=request_id)
         return _erasure_obj(_load(conn, erasure_id), conn)

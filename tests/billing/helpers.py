@@ -53,10 +53,11 @@ def account(tenancy, org) -> dict | None:
         return su.execute("SELECT * FROM consentvault.billing_account WHERE org_id = %s", (org.org_id,)).fetchone()
 
 
-def subscribed(stripe: FakeStripe, org, *, status: str = "active", price_id: str = "price_starter") -> tuple[str, str]:
+def subscribed(stripe: FakeStripe, org, *, status: str = "active", price_id: str = "price_starter",
+               contract: dict | None = None) -> tuple[str, str]:
     """A customer and subscription in Stripe for an organisation; returns (customer id, subscription id)."""
     cus = stripe.add_customer(str(org.org_id))
-    return cus, stripe.add_subscription(cus, status, str(org.org_id), price_id)
+    return cus, stripe.add_subscription(cus, status, str(org.org_id), price_id, contract)
 
 
 def link(tenancy, org, customer: str, subscription: str | None = None, status: str | None = None) -> None:
@@ -68,3 +69,11 @@ def link(tenancy, org, customer: str, subscription: str | None = None, status: s
 
 __all__ = ["routes_for", "send", "set_status", "status_of", "history", "outcomes", "account", "subscribed", "link",
            "event", "uuid"]
+
+
+def retries_age(tenancy, hours: float) -> None:
+    """Time passes for the retry queue: the database decides which failed sends are due on its own clock (migration 0065), so
+    each send's due time moves back by ``hours`` (seconds, so no zone moves it)."""
+    with tenancy.superuser() as su:
+        su.execute("UPDATE consentvault.usage_day SET retry_at = retry_at - make_interval(secs => %s) WHERE retry_at IS NOT NULL",
+                   (hours * 3600,))

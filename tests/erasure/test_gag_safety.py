@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 import psycopg
 import pytest
 
+from consentvault import dbclock
 from consentvault.tenancy import admin, audit, erasure, holds, legal_process, offboard
 from consentvault.tenancy.admin_base import ApiError
 from consentvault.tenancy.tokens import org_transaction
@@ -59,7 +60,7 @@ def _get(env, org, eid):
 
 def _confirm(env, org, eid):
     with env.operator() as c:
-        return erasure.confirm_erasure(c, token_key=env.t.key, ledger=env.ledger, operator_id=OPERATOR,
+        return erasure.confirm_erasure(c, token_key=env.t.key, crypto=env.t.crypto, ledger=env.ledger, operator_id=OPERATOR,
                                        request_id="req-e", org_id=org.org_id, erasure_id=eid)
 
 
@@ -366,7 +367,8 @@ def test_a_restore_that_queues_an_erasure_behind_a_gagged_hold_writes_a_neutral_
     r = _copy(t, pg_server["port"])          # the copy has the request open
     with db.connect(r.operator_dsn) as o:       # a gagged process hold only the restored copy holds
         p = legal_process.log_legal_process(
-            o, token_key=t.key, ledger=LifecycleLedger(LocalAppendOnlyEvidenceStore(tmp_path / "other")), custody=None,
+            o, token_key=t.key, ledger=LifecycleLedger(LocalAppendOnlyEvidenceStore(tmp_path / "other"),
+                                   clock=dbclock.datetime_clock(lambda: db.connect(t.app_dsn))), custody=None,
             crypto=t.crypto, operator_id=OPERATOR, request_id="req-lp", org_id=t.a.org_id, type="search_warrant",
             received_at=datetime.now(timezone.utc), received_via="email", requester=REQUESTER, scope_summary=SCOPE)
         legal_process.record_customer_notice(o, token_key=t.key, notifier=env.notifier, operator_id=OPERATOR,

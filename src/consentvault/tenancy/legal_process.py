@@ -22,13 +22,15 @@ Nothing here states a legal conclusion; a records-custodian declaration describe
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import psycopg
 
+from .. import dbclock
+from ..safelog import describe
 from .admin_base import ROLE_ADMIN, ApiError, Ctx, body_dict, iso, need_text, to_uuid, want_enum
-from .erasure import LifecycleError, LifecycleLedger, audit_org, audit_platform, ledger_hint, now_utc, operator_org
+from .erasure import LifecycleError, LifecycleLedger, audit_org, audit_platform, ledger_hint, operator_org
 from .holds import AUDIT_NOTE, MAX_CONTACTS, _hold_obj, enforce_on_keys, seal_reason
 from .offboard import OffboardNoticeError, notify_admins
 from .tokens import TokenKey
@@ -66,7 +68,7 @@ def _place_process_hold(conn, *, ledger: LifecycleLedger, operator_id: str, requ
         raise ApiError("validation_failed", f"a contact hold names 1 to {MAX_CONTACTS} contacts", {"contacts": "1 to 1000"})
     fps = [] if scope == "org" else sorted(set(contact_fps))
     org = conn.execute("SELECT consentvault.lifecycle_lock() AS o").fetchone()["o"]
-    hold_id, set_at = uuid.uuid4(), now_utc()
+    hold_id, set_at = uuid.uuid4(), dbclock.now(conn)
     sealed = seal_reason(crypto, org, hold_id, "legal_hold.reason", reason)
     seq, _ = ledger.append(org, {"kind": "hold_set", "hold_id": str(hold_id), "scope": scope, "contact_fps": fps,
                                  "set_by_kind": "operator", "set_by": operator_id, "set_at": set_at.isoformat(),
@@ -143,7 +145,7 @@ def record_customer_notice(conn: psycopg.Connection, *, token_key: TokenKey, not
                 notify_admins(conn, notifier, event=f"A {p['type'].replace('_', ' ')} naming your organization's "
                               "records was received; we will contact you about it", review_url=review_url)
             except OffboardNoticeError as exc:
-                raise LifecycleError(f"the customer notice could not be sent ({exc}); nothing is recorded as notified"
+                raise LifecycleError(f"the customer notice could not be sent ({describe(exc)}); nothing is recorded as notified"
                                      ) from exc
             conn.execute("UPDATE consentvault.legal_process SET client_notified_at = clock_timestamp() WHERE org_id ="
                          " (SELECT consentvault.current_org()) AND process_id = %s", (p["process_id"],))
@@ -178,7 +180,7 @@ def close_legal_process(conn: psycopg.Connection, *, token_key: TokenKey, operat
 
 def custodian_declaration(org_name: str, *, generated_at: Optional[datetime] = None) -> str:
     """The records-custodian declaration text: how records are kept and exported, no statement about consent."""
-    when = (generated_at or now_utc()).strftime("%Y-%m-%d")
+    when = (generated_at or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
     return (f"Records custodian declaration for {org_name}, {when}.\n"
             "ConsentVault keeps each record as received in an append-only ledger with a hash chain, seals each record "
             "with an outside timestamp, anchors chain heads outside the database, and stores write-once evidence "
@@ -276,8 +278,8 @@ def open_operator_access(conn: psycopg.Connection, *, token_key: TokenKey, notif
             try:
                 notify_admins(conn, notifier, event=f"Emergency operator access opened: {reason}", review_url=review_url)
             except OffboardNoticeError as exc:
-                raise AccessNoticeError(f"the emergency notice could not be sent ({exc}); no access was opened") from exc
-            notified = now_utc()
+                raise AccessNoticeError(f"the emergency notice could not be sent ({describe(exc)}); no access was opened") from exc
+            notified = dbclock.now(conn)
         row = conn.execute(
             "INSERT INTO consentvault.operator_access (org_id, access_id, operator_id, reason, approved_by_client,"
             " emergency, client_notified_at, legal_process_id, approval_id, opened_at, expires_at) VALUES"

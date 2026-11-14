@@ -61,6 +61,8 @@ export interface ConfirmProps {
   failNext: React.ReactNode;
   extra?: React.ReactNode;
   confirmDisabled?: boolean;
+  /** Keep the confirm button disabled until a reason is typed (the reason box must be shown). */
+  disableUntilReason?: boolean;
   extraValid?: boolean;
 }
 
@@ -90,7 +92,7 @@ export function ConfirmDialog(p: ConfirmProps) {
         )}
         <div className="actions">
           <Btn data-safe="" onClick={p.onClose}>Cancel</Btn>
-          <Btn type="submit" variant={p.destructive ? 'danger' : 'primary'} busy={busy} busyLabel={p.busyLabel} disabled={p.confirmDisabled}>{p.confirmLabel}</Btn>
+          <Btn type="submit" variant={p.destructive ? 'danger' : 'primary'} busy={busy} busyLabel={p.busyLabel} disabled={p.confirmDisabled || (p.disableUntilReason && reason.trim() === '')}>{p.confirmLabel}</Btn>
         </div>
       </form>
     </Dialog>

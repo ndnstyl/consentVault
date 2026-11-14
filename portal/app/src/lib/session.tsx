@@ -1,3 +1,6 @@
+import { safeReturn } from './safe-return.ts';
+import { postLogout } from './logout.ts';
+import { BOOT_DEADLINE_MS } from './boot-watch.ts';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, createClient } from './api/client.ts';
 import type { Api } from './api/client.ts';
@@ -30,22 +33,27 @@ export interface SessionCtx {
   refreshOrg: () => Promise<void>;
   selectOrg: (orgId: string) => Promise<ApiError | null>;
   signOut: () => void;
+  signOutError: string | null;
+  dismissSignOutError: () => void;
   signInAgain: () => void;
   dismissEnding: () => void;
   dismissElsewhere: () => void;
 }
 const Ctx = createContext<SessionCtx | null>(null);
 
-export function safeReturn(r: string | null | undefined): string {
-  if (!r || !r.startsWith('/') || r.startsWith('//') || r.startsWith('/\\')) return '/';
-  return r;
-}
+export { safeReturn };
+
+export { postLogout } from './logout.ts';
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const routerRef = useRef(router); routerRef.current = router;
+  const orgRef = useRef<string | null>(null);
+  const [elsewhere, setElsewhere] = useState<{ orgName: string } | null>(null);
   const api = useMemo(() => createClient({
     baseUrl: process.env.NEXT_PUBLIC_API_BASE ?? '',
+    orgId: () => orgRef.current,
+    onOrgMismatch: () => setElsewhere((e) => e ?? { orgName: 'another organization' }),
     onUnauthenticated: () => {
       const r = routerRef.current;
       const id = r.matched?.route.id;
@@ -61,9 +69,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [org, setOrg] = useState<Org | null>(null);
   const [nonce, setNonce] = useState(0);
-  const [elsewhere, setElsewhere] = useState<{ orgName: string } | null>(null);
   const [sessionEnding, setSessionEnding] = useState(false);
-  const orgRef = useRef<string | null>(null);
   const memRef = useRef<Membership[]>([]);
 
   const preOrg = router.matched?.route.preOrg ?? false;
@@ -113,6 +119,17 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preOrg, nonce, boot]);
 
+  // Every initial load has a deadline: a service that never answers becomes a styled error with Try again, never a skeleton
+  // that waits for ever.
+  useEffect(() => {
+    if (preOrg || (phase !== 'idle' && phase !== 'loading')) return;
+    const t = window.setTimeout(() => {
+      setError(new ApiError(0, 'timeout', 'The service did not answer in time.', null));
+      setPhase('error');
+    }, BOOT_DEADLINE_MS);
+    return () => window.clearTimeout(t);
+  }, [phase, preOrg, nonce]);
+
   const refreshOrg = useCallback(async () => { try { setOrg(await api.session.org()); } catch { /* the page that asked shows its own error */ } }, [api]);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
@@ -151,10 +168,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     return () => { window.clearTimeout(a); window.clearTimeout(b); };
   }, [phase]);
 
+  const [signOutError, setSignOutError] = useState<string | null>(null);
   const signOut = useCallback(() => {
+    setSignOutError(null);
     try { sessionStorage.removeItem(STARTED_KEY); localStorage.removeItem(ORG_KEY); } catch { /* nothing to clear */ }
-    window.location.assign('/auth/logout');
+    void postLogout().then((e) => setSignOutError(e));
   }, []);
+  const dismissSignOutError = useCallback(() => setSignOutError(null), []);
   const signInAgain = useCallback(() => {
     const r = routerRef.current;
     const back = r.path + (r.search.toString() ? `?${r.search.toString()}` : '');
@@ -170,7 +190,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   const value: SessionCtx = {
     api, phase, error, user, memberships, org, orgId: org?.org_id ?? null, orgName: org?.name ?? '', role, status: org?.status ?? null,
-    elsewhere, sessionEnding, reload, refreshOrg, selectOrg, signOut, signInAgain,
+    elsewhere, sessionEnding, reload, refreshOrg, selectOrg, signOut, signOutError, dismissSignOutError, signInAgain,
     dismissEnding: () => setSessionEnding(false), dismissElsewhere: () => setElsewhere(null),
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

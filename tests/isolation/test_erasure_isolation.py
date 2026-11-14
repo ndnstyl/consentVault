@@ -64,7 +64,7 @@ def test_another_orgs_hold_neither_blocks_nor_shows_and_cannot_be_released_from_
         assert e.value.name == "not_found"
     eid = _request(env, t.a)  # B's org-scope hold does not reach A
     with t.operator() as c:
-        assert erasure.confirm_erasure(c, token_key=t.key, ledger=env.ledger, operator_id=OPERATOR, request_id="r",
+        assert erasure.confirm_erasure(c, token_key=t.key, crypto=t.crypto, ledger=env.ledger, operator_id=OPERATOR, request_id="r",
                                        org_id=t.a.org_id, erasure_id=eid)["status"] == "completed"
     assert env.key_present(t.b)
     assert [e["kind"] for e in env.ledger.entries(t.b.org_id)] == ["hold_set"]
@@ -79,7 +79,7 @@ def test_one_orgs_erasure_request_is_invisible_and_unconfirmable_from_the_other(
             erasure.get_erasure(ctx, eid_b)
         assert e.value.name == "not_found"
     with t.operator() as c, pytest.raises(ApiError) as e:
-        erasure.confirm_erasure(c, token_key=t.key, ledger=env.ledger, operator_id=OPERATOR, request_id="r",
+        erasure.confirm_erasure(c, token_key=t.key, crypto=t.crypto, ledger=env.ledger, operator_id=OPERATOR, request_id="r",
                                 org_id=t.a.org_id, erasure_id=eid_b)
     assert e.value.name == "not_found" and env.key_present(t.b)
 

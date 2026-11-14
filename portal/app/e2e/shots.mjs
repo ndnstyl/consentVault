@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createMock } from '../mock/server.ts';
 
 const require = createRequire(import.meta.url);
-const { chromium } = require('/Users/oxfloors/.npm/_npx/e41f203b7505f1fb/node_modules/playwright');
+const { chromium } = require('playwright');
 const here = path.dirname(fileURLToPath(import.meta.url));
 const mock = createMock();
 const server = mock.server(path.resolve(here, '..', 'out'), null);

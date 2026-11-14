@@ -7,6 +7,7 @@ from datetime import datetime
 
 import psycopg
 
+from ..safelog import describe
 from .errors import ReplayError, TenancyError
 
 
@@ -18,9 +19,9 @@ def claim_nonce(conn: psycopg.Connection, org_id: uuid.UUID | str, nonce: str, e
         row = conn.execute("SELECT consentvault.claim_replay_nonce(%s, %s, %s) AS fresh",
                            (str(uuid.UUID(str(org_id))), nonce, expires_at)).fetchone()
     except ValueError as exc:
-        raise TenancyError(f"org_id is not a UUID: {exc}") from exc
+        raise TenancyError(f"org_id is not a UUID: {describe(exc)}") from exc
     except psycopg.Error as exc:
-        raise TenancyError(f"replay guard refused the claim: {type(exc).__name__}: {exc.diag.message_primary}") from exc
+        raise TenancyError(f"replay guard refused the claim: {describe(exc)}") from exc
     if not row["fresh"]:
         raise ReplayError("nonce already presented for this organisation")
 
@@ -30,4 +31,4 @@ def sweep(conn: psycopg.Connection) -> int:
     try:
         return conn.execute("SELECT consentvault.sweep_replay_guard() AS gone").fetchone()["gone"]
     except psycopg.Error as exc:
-        raise TenancyError(f"replay guard sweep failed: {type(exc).__name__}: {exc.diag.message_primary}") from exc
+        raise TenancyError(f"replay guard sweep failed: {describe(exc)}") from exc

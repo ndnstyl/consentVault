@@ -28,7 +28,10 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 MAP = Path(__file__).with_name("requirements_map.json")
-SPEC = Path("/Users/oxfloors/brain/specs/268-consentvault-cloud/spec.md")
+# The cloud specification is a private planning document outside this repository. Point CONSENTVAULT_SPEC at it to check
+# the map against it; unset, that one check is skipped with the reason printed.
+SPEC_ENV = "CONSENTVAULT_SPEC"
+SPEC = Path(os.environ[SPEC_ENV]) if os.environ.get(SPEC_ENV) else None
 ID_RE = re.compile(r"^- \*\*((?:FR|SC)-\d{3})\*\*:", re.M)
 SELFHOST_RECEIPT = "tests/selfhost/receipts/selfhost-suites.json"
 RECEIPT_FORMAT = "consentvault-selfhost-receipt/2"
@@ -231,7 +234,9 @@ def out_of_run(requirements: dict, *, root: Path = REPO, run: dict | None = None
 
 
 def test_the_map_covers_exactly_the_requirements_in_the_spec():
-    assert SPEC.is_file(), f"spec not readable at {SPEC}; the map cannot be checked against it"
+    if SPEC is None:
+        pytest.skip(f"{SPEC_ENV} is not set: the map is not checked against the cloud specification in this run")
+    assert SPEC.is_file(), f"spec not readable at {SPEC} ({SPEC_ENV}); the map cannot be checked against it"
     in_map = set(load_map()["requirements"])
     in_spec = set(spec_ids())
     assert in_map == in_spec, f"in spec not in map: {sorted(in_spec - in_map)}; in map not in spec: {sorted(in_map - in_spec)}"

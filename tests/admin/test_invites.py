@@ -174,3 +174,18 @@ def test_with_no_mailer_the_operator_gets_the_link_token_once(vault):
     assert len(out["invite_token"]) >= 40 and "invite_token" not in str(vault.mailer.sent)
     person = vault.join(out["org_id"], "m@manual.example", "admin", invite_token=out["invite_token"])
     assert person.ok("GET", "/v1/org")["name"] == "Manual"
+
+
+def test_accept_itself_refuses_an_identity_with_no_second_factor(vault, org):
+    """The check inside invite.accept, called directly: it must hold even if a caller forgets to demand a second factor."""
+    from datetime import datetime, timedelta, timezone
+    from consentvault.providers.identity import Identity
+    from consentvault.tenancy import invite
+    from consentvault.tenancy.admin_base import ApiError
+    token = vault.mailer.token_for("boss@acme.example")
+    weak = Identity("https://idp.example.com", "weak-sub", ("pwd",), False, datetime.now(timezone.utc) + timedelta(hours=1),
+                    {"email": "boss@acme.example", "email_verified": True})
+    with vault.appconn() as c:
+        with pytest.raises(ApiError) as exc:
+            invite.accept(c, vault.key, token=token, identity=weak, request_id="r-weak")
+    assert exc.value.name == "second_factor_required"

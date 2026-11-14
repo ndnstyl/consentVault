@@ -1,6 +1,7 @@
 """OIDCIdentityProvider against the stack's Keycloak (production mode, imported realm, own Postgres database)."""
 
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 
@@ -45,7 +46,8 @@ def _id_token(kc):
 def _provider(kc, *, issuer=None, audience=TEST_CLIENT):
     return OIDCIdentityProvider(
         issuer=issuer or f"http://localhost:{kc['port']}/realms/{REALM}", audience=audience,
-        jwks_fetcher=HttpJwksFetcher(f"{kc['base']}/realms/{REALM}/protocol/openid-connect/certs"))
+        jwks_fetcher=HttpJwksFetcher(f"{kc['base']}/realms/{REALM}/protocol/openid-connect/certs"),
+        clock=lambda: datetime.now(timezone.utc))
 
 
 def test_a_real_keycloak_token_verifies(kc):

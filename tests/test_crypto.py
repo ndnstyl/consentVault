@@ -129,8 +129,9 @@ def test_a_failing_or_misbehaving_provider_raises_by_name(provider):
             return b"short"
 
     c = TenantCrypto(Broken())
-    with pytest.raises(KeyProviderError, match="kms unreachable"):
+    with pytest.raises(KeyProviderError, match=r"fingerprint_secret failed: RuntimeError") as named_error:
         c.contact_fingerprint(A, "phone", "+15555550100")
+    assert "kms unreachable" not in str(named_error.value)  # the provider's own text never travels; its class does
     with pytest.raises(KeyProviderError, match="WrappedKey"):
         c.new_contact_key(A)
     with pytest.raises(KeyProviderError, match="32 bytes"):
@@ -143,7 +144,7 @@ def test_a_failing_or_misbehaving_provider_raises_by_name(provider):
 def test_field_encryption_runs_end_to_end_on_the_local_file_key_provider(dsn, pg_server, tmp_path):
     from datetime import datetime, timedelta, timezone
 
-    from consentvault.ledger import record_tenant_event, verify_chain
+    from consentvault.ledger import _plaintext_breaks, record_tenant_event, verify_chain
     from consentvault.providers.keys import LocalFileKeyProvider
     from consentvault.tenancy.keys_adapter import CustodyKeyAdapter
     from consentvault.tenancy.tokens import org_transaction
@@ -153,10 +154,12 @@ def test_field_encryption_runs_end_to_end_on_the_local_file_key_provider(dsn, pg
     now = [datetime.now(timezone.utc)]
     custody = LocalFileKeyProvider(tmp_path / "keys", "a long test passphrase", clock=lambda: now[0])
     stored: dict = {}
-    adapter = CustodyKeyAdapter(custody, lambda org: stored[org])
+    stored_display: dict = {}
+    adapter = CustodyKeyAdapter(custody, lambda org: stored[org], lambda org: stored_display[org])
     for org in (t.a, t.b):
         custody.create_org_key(str(org.org_id))
         stored[org.org_id] = adapter.new_fingerprint_secret(org.org_id)
+        stored_display[org.org_id] = adapter.new_display_key(org.org_id)
     assert isinstance(adapter, KeyProvider) and adapter.provable_destruction is False
     crypto = TenantCrypto(adapter)
 
@@ -169,21 +172,27 @@ def test_field_encryption_runs_end_to_end_on_the_local_file_key_provider(dsn, pg
     assert crypto.contact_fingerprint(t.a.org_id, "phone", "+15555550188") != \
         crypto.contact_fingerprint(t.b.org_id, "phone", "+15555550188")
     with t.superuser() as owner:
-        # the harness rows were written under another provider: check only rows this provider can open
-        owner.execute("DELETE FROM consentvault.contact_key WHERE contact_fp <> ALL(%s)",
-                      ([crypto.contact_fingerprint(o.org_id, "phone", "+15555550188") for o in (t.a, t.b)],))
-        assert verify_chain(owner, crypto=crypto) == []
+        # every link verifies; the plaintext of the rows this provider wrote verifies under it. The harness rows were
+        # sealed under another provider and keep their keys: deleting a key by hand is a break, never an erasure
+        assert verify_chain(owner) == []
+        mine = owner.execute("SELECT * FROM consentvault.event WHERE seq = 3 ORDER BY org_id").fetchall()
+        assert len(mine) == 2 and [b for r in mine for b in _plaintext_breaks(owner, crypto, r)] == []
+        owner.execute("DELETE FROM consentvault.contact_key WHERE contact_fp = %s",
+                      (crypto.contact_fingerprint(t.b.org_id, "phone", "+15555550188"),))
+        b_row = next(r for r in mine if r["org_id"] == t.b.org_id)
+        assert [x.reason for x in _plaintext_breaks(owner, crypto, b_row)] == ["contact_key_missing"]
 
     custody.schedule_destruction(str(t.a.org_id))
     now[0] += timedelta(days=31)
     assert custody.process_destructions() == [str(t.a.org_id)]
     crypto.forget()
-    with pytest.raises(KeyProviderError, match="destroyed"):
+    with pytest.raises(KeyProviderError, match="KeyDestroyedError"):
         crypto.contact_fingerprint(t.a.org_id, "phone", "+15555550188")
     with t.superuser() as owner:
-        held = owner.execute("SELECT wrapped_key, key_version FROM consentvault.contact_key WHERE org_id = %s",
-                             (t.a.org_id,)).fetchone()
-    with pytest.raises(KeyProviderError, match="destroyed"):
+        held = owner.execute("SELECT wrapped_key, key_version FROM consentvault.contact_key WHERE org_id = %s"
+                             " AND contact_fp = %s", (t.a.org_id, mine[0]["contact_fp"] if mine[0]["org_id"] == t.a.org_id
+                                                      else mine[1]["contact_fp"])).fetchone()
+    with pytest.raises(KeyProviderError, match="KeyDestroyedError"):
         crypto.open_contact_key(t.a.org_id, WrappedKey(bytes(held["wrapped_key"]), held["key_version"]))
     assert crypto.contact_fingerprint(t.b.org_id, "phone", "+15555550188")  # the other organisation is untouched
     with pytest.raises(KeyProviderError, match="version"):

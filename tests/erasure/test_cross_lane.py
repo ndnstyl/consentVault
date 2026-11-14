@@ -116,7 +116,7 @@ def test_every_lifecycle_action_is_in_the_audit_list_and_an_unlisted_one_is_refu
                    "restore.stop_reingested"):
         assert action in audit.ACTIONS, action
     with env.operator() as c, org_transaction(c, env.t.admin_token(env.t.a.org_id)):
-        with pytest.raises(LifecycleError, match="audit.ACTIONS"):
+        with pytest.raises(LifecycleError, match=r"AuditError \(code audit_action_unlisted\)"):
             audit_org(c, actor_kind="operator", actor_id="op", action="erasure.invented", target_kind="erasure",
                       target_id=None, reason=None, request_id="req-x")
 
@@ -177,7 +177,7 @@ def test_an_erasure_a_hold_covers_reads_as_held_naming_only_the_clients_own_hold
     """Gag safety: the client's own hold is named; an operator's hold reads as a neutral held state (no id, no reason)."""
     t = env.t
     with env.admin(t.a) as ctx:
-        req = erasure.request_erasure(ctx, {"contact": "+15555550177", "reason": "asked"}, crypto=t.crypto)
+        req = erasure.request_erasure(ctx, {"contact": "+15555550142", "reason": "asked"}, crypto=t.crypto)
     with env.operator() as c:
         hold = holds.place_hold_operator(c, token_key=t.key, ledger=env.ledger, custody=env.custody, crypto=t.crypto,
                                          operator_id=OPERATOR, request_id="req-h", org_id=t.a.org_id, scope="org",

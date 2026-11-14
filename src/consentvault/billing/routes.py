@@ -20,13 +20,15 @@ from typing import Any, Callable, Mapping
 
 import psycopg
 
+from ..safelog import caller_detail
+from ..alarms import AlarmWriteError, raise_operator_alarm
 from ..tenancy.errors import TenantTokenError
 from ..tenancy.tokens import org_transaction
 from . import store, webhook
 from .errors import (AlreadySubscribedError, NotSubscribedError, OrgNotActiveError, PlanCatalogError,
                      PlanNotFoundError, RoleNotAllowedError, StripeRejectedError, StripeUnavailableError,
                      WebhookPayloadError, WebhookSignatureError)
-from .plans import catalog, find_plan
+from .plans import ALARM_ENTERPRISE_INCOMPLETE, ALARM_SECOND_SUBSCRIPTION, ENTERPRISE, ENTERPRISE_INCOMPLETE, INTERVALS, catalog, find_plan
 from .stripe_client import StripeClient
 
 SUCCESS_URL = "https://app.consentvault.ai/billing/return?result=success"
@@ -34,6 +36,10 @@ CANCEL_URL = "https://app.consentvault.ai/billing/return?result=cancel"
 PORTAL_RETURN_URL = "https://app.consentvault.ai/billing"
 SUBSCRIPTION_IN_FORCE = {"active", "trialing", "past_due", "unpaid", "paused"}
 BILLING_SCOPES = ("billing",)
+# The checkout lock is held across the Stripe calls so two pages for one customer are made one after the other. Each
+# Stripe call carries its own timeout (stripe_client.TIMEOUT_SECONDS), so the hold is bounded by a few of those; a
+# second request waits at most this long, then answers 503 so the caller retries instead of queueing without end.
+CHECKOUT_LOCK_TIMEOUT_MS = 15000
 
 ROUTES = {("GET", "/v1/billing/plans"), ("GET", "/v1/billing"), ("POST", "/v1/billing/checkout"),
           ("POST", "/v1/billing/portal"), ("POST", "/v1/billing/webhook")}
@@ -44,6 +50,7 @@ class Caller:
     org_id: uuid.UUID
     role: str
     request_id: str = ""
+    member_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -61,8 +68,12 @@ def error(status: int, name: str, detail: str, request_id: str = "", fields: dic
 
 class BillingRoutes:
     def __init__(self, *, connect: Callable[[], psycopg.Connection], mint_token: Callable[[uuid.UUID, list[str]], str],
-                 client: StripeClient, webhook_secret: str, clock: Callable[[], float] = time.time):
+                 client: StripeClient, webhook_secret: str, clock: Callable[[], float] = time.time,
+                 alarm: Callable[[str, str], None] | None = None):
+        from .usage import stderr_alarm
+
         self._connect = connect
+        self._alarm = alarm or stderr_alarm
         self._mint = mint_token
         self._client = client
         self._secret = webhook_secret
@@ -94,33 +105,67 @@ class BillingRoutes:
             return self._portal(caller, rid)
         except RoleNotAllowedError as exc:
             return error(403, "role_not_allowed", "only an organization admin may use billing", rid,
-                         {"role": str(exc)})
+                         {"role": caller_detail(exc)})
         except OrgNotActiveError as exc:
-            return error(403, "org_not_active", str(exc), rid)
+            return error(403, "org_not_active", caller_detail(exc), rid)
         except AlreadySubscribedError as exc:
-            return error(409, "already_subscribed", str(exc), rid)
+            return error(409, "already_subscribed", caller_detail(exc), rid)
         except PlanNotFoundError as exc:
-            return error(404, "not_found", str(exc), rid)
+            return error(404, "not_found", caller_detail(exc), rid)
         except NotSubscribedError as exc:
-            return error(404, "not_found", str(exc), rid)
+            return error(404, "not_found", caller_detail(exc), rid)
         except (StripeUnavailableError, StripeRejectedError, PlanCatalogError) as exc:
-            return error(502, "stripe_unavailable", f"{type(exc).__name__}: {exc}", rid)
+            return error(502, "stripe_unavailable", f"{type(exc).__name__}: {caller_detail(exc)}", rid)
         except TenantTokenError as exc:
-            return error(401, "unauthenticated", f"the tenant token was refused: {exc}", rid)
+            return error(401, "unauthenticated", f"the tenant token was refused: {caller_detail(exc)}", rid)
+        except psycopg.errors.LockNotAvailable:
+            return error(503, "service_unavailable",
+                         "another checkout for this organization is in progress; try again in a moment", rid)
 
     # webhook -------------------------------------------------------------------------------------------------------
     def _webhook(self, body: bytes, signature: str | None, rid: str) -> Response:
         try:
             with self._connect() as conn:
                 result = webhook.receive(conn, self._client, payload=body, signature_header=signature,
-                                         secret=self._secret, now=self._clock())
+                                         secret=self._secret, now=self._clock(), after=self._alarms_in_event)
         except (WebhookSignatureError, WebhookPayloadError) as exc:
-            return error(400, "invalid_request", f"{type(exc).__name__}: {exc}", rid)
+            return error(400, "invalid_request", f"{type(exc).__name__}: {caller_detail(exc)}", rid)
+        except (AlarmWriteError, TenantTokenError) as exc:
+            # the event rolled back with the alarm: nothing was recorded, so Stripe redelivers and the alarm is retried
+            return error(503, "service_unavailable", f"{type(exc).__name__}: {caller_detail(exc)}; the event was not recorded", rid)
         return Response(200, {"received": True, "outcome": result.outcome, "replayed": result.replayed})
+
+    def _alarms_in_event(self, conn: psycopg.Connection, org_id: uuid.UUID, found: tuple[str, ...]) -> None:
+        """Inside the webhook's transaction: an Enterprise contract with no limits, or a free tier that disagrees with
+        it, is an operator alarm (billing never refuses evidence). The alarm commits with the event or neither does."""
+        token = self._mint(org_id, list(BILLING_SCOPES))
+        prev = conn.execute("SELECT current_setting('consentvault.org_token', true) AS t").fetchone()["t"]
+        try:
+            try:
+                conn.execute("SELECT consentvault.enter_org(%s)", (token,))
+            except psycopg.Error as exc:
+                raise TenantTokenError(f"could not enter the tenant to write its alarm: {type(exc).__name__}") from exc
+            acct = store.read_account(conn)
+            names = list(found)
+            if acct is not None and acct["plan_id"] == ENTERPRISE_INCOMPLETE:
+                names.insert(0, ALARM_ENTERPRISE_INCOMPLETE)
+            for name in dict.fromkeys(names):
+                if name == ALARM_SECOND_SUBSCRIPTION and conn.execute(
+                        "SELECT consentvault.billing_alarm_open(%s, %s) AS open", (org_id, name)).fetchone()["open"]:
+                    continue  # one open alarm is enough; an operator acknowledges it
+                raise_operator_alarm(conn, name=name, error_class="EnterpriseContract" if "enterprise" in name else "BillingSubscription",
+                                     ref_kind="org", ref_id=org_id)
+        except BaseException:
+            try:
+                conn.execute("SELECT set_config('consentvault.org_token', %s, true)", (prev or "",))
+            except psycopg.Error:  # loud-failure-exempt: the transaction is aborted and rolls back; the first error is the one named
+                pass
+            raise
+        conn.execute("SELECT set_config('consentvault.org_token', %s, true)", (prev or "",))
 
     # portal --------------------------------------------------------------------------------------------------------
     def _plans(self, rid: str) -> Response:
-        plans = catalog(self._client.list_prices())
+        plans = catalog(self._client.list_prices(), on_invalid=self._alarm)
         return Response(200, {"items": [p.public() for p in plans], "next_cursor": None})
 
     def _summary(self, caller: Caller, rid: str) -> Response:
@@ -144,7 +189,7 @@ class BillingRoutes:
         return Response(200, {
             "status": status,
             "past_due_since": _iso(failed["from_at"]) if failed else None,
-            "plan": {"plan_id": acct["plan_id"], "name": acct["plan_name"]} if has_plan else None,
+            "plan": _public_plan(acct) if has_plan else None,
             "period": ({"start": _iso(acct["period_start"]), "end": _iso(acct["period_end"])}
                        if acct is not None and acct["period_start"] and acct["period_end"] else None),
             "included": ({"events": acct["included_events"], "gate_checks": acct["included_gate_checks"]}
@@ -155,11 +200,16 @@ class BillingRoutes:
 
     def _checkout(self, caller: Caller, body: bytes, rid: str) -> Response:
         try:
-            plan_id = json.loads(body.decode("utf-8") or "null")["plan_id"]
+            parsed = json.loads(body.decode("utf-8") or "null")
+            plan_id = parsed["plan_id"]
             if not isinstance(plan_id, str) or not plan_id:
                 raise ValueError("plan_id must be a non-empty string")
+            interval = parsed.get("interval", "month")
+            if interval not in INTERVALS:
+                raise ValueError("interval must be month or year")
         except (ValueError, KeyError, TypeError, UnicodeDecodeError):
-            return error(422, "validation_failed", "a plan_id is required", rid, {"plan_id": "required"})
+            return error(422, "validation_failed", "a plan_id is required and interval, if given, is month or year", rid,
+                         {"plan_id": "required"})
         with self._connect() as conn:
             with org_transaction(conn, self._mint(caller.org_id, list(BILLING_SCOPES))):
                 org_status = store.read_org_status(conn)
@@ -168,15 +218,29 @@ class BillingRoutes:
                 raise OrgNotActiveError(f"the organization is {org_status}; it cannot start a subscription")
             if acct is not None and acct["stripe_subscription_id"] and acct["status"] in SUBSCRIPTION_IN_FORCE:
                 raise AlreadySubscribedError("the organization already has a subscription in force")
-            plan = find_plan(catalog(self._client.list_prices()), plan_id)
+            plan = find_plan(catalog(self._client.list_prices(), on_invalid=self._alarm), plan_id, interval)
             customer = acct["stripe_customer_id"] if acct is not None else None
             if customer is None:
                 customer = self._client.create_customer(org_id=str(caller.org_id),
                                                         idempotency_key=f"customer:{caller.org_id}")["id"]
-                store.link_account(conn, caller.org_id, customer)
-            session = self._client.create_checkout_session(
-                customer=customer, line_items=plan.line_items(), org_id=str(caller.org_id), success_url=SUCCESS_URL,
-                cancel_url=CANCEL_URL, idempotency_key=f"checkout:{caller.org_id}:{plan.plan_id}:{uuid.uuid4()}")
+                try:
+                    store.link_account(conn, caller.org_id, customer)
+                except psycopg.errors.UniqueViolation:  # a concurrent checkout linked the same customer first
+                    pass
+            with org_transaction(conn, self._mint(caller.org_id, list(BILLING_SCOPES))):
+                conn.execute(f"SET LOCAL lock_timeout = {int(CHECKOUT_LOCK_TIMEOUT_MS)}")
+                store.lock_account(conn, caller.org_id)  # held to the end: one checkout page is made at a time
+                acct = store.read_account(conn)
+                if acct is not None and acct["stripe_subscription_id"] and acct["status"] in SUBSCRIPTION_IN_FORCE:
+                    raise AlreadySubscribedError("the organization already has a subscription in force")
+                if any(s.get("status") in SUBSCRIPTION_IN_FORCE for s in self._client.list_subscriptions(customer)):
+                    raise AlreadySubscribedError("Stripe already lists a subscription in force for this organization")
+                for open_page in self._client.list_open_checkout_sessions(customer):
+                    self._client.expire_checkout_session(open_page["id"])
+                session = self._client.create_checkout_session(
+                    customer=customer, line_items=plan.line_items(), org_id=str(caller.org_id),
+                    success_url=SUCCESS_URL, cancel_url=CANCEL_URL,
+                    idempotency_key=f"checkout:{caller.org_id}:{plan.plan_id}:{uuid.uuid4()}")
         return Response(201, {"checkout_url": session["url"]})
 
     def _portal(self, caller: Caller, rid: str) -> Response:
@@ -187,6 +251,12 @@ class BillingRoutes:
         session = self._client.create_portal_session(customer=acct["stripe_customer_id"],
                                                      return_url=PORTAL_RETURN_URL)
         return Response(201, {"portal_url": session["url"]})
+
+
+def _public_plan(acct: Mapping[str, Any]) -> dict[str, Any]:
+    """The plan as the portal shows it: an Enterprise contract still missing its limits is Enterprise, pending."""
+    pending = acct["plan_id"] == ENTERPRISE_INCOMPLETE
+    return {"plan_id": ENTERPRISE if pending else acct["plan_id"], "name": acct["plan_name"], "contract_pending": pending}
 
 
 def _iso(value: datetime | None) -> str | None:

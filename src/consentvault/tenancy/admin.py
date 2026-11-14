@@ -22,7 +22,9 @@ from urllib.parse import urlsplit
 
 import psycopg
 
+from ..safelog import caller_detail, describe, text_has
 from ..providers.errors import KeyProviderError as CustodyError
+from ..providers.keys import wrapped_version
 from . import audit, invite as invite_mod, site_keys
 from .admin_base import (CLIENT_ROLES, PLATFORM_MINIMUM_RETENTION_YEARS, ROLE_ADMIN, ROLE_DEVELOPER, ROLE_OPERATOR,
                          ROLE_VIEWER, Actor, ApiError, Ctx, body_dict, clean_email, invalid, iso, need_list, need_text,
@@ -53,7 +55,7 @@ def _custody_error(exc: Exception) -> ApiError:
 # ======================================================================================================================
 def create_org(conn: psycopg.Connection, *, token_key: TokenKey, custody, operator_id: str, request_id: str, name: str,
                admin_email: str, region: Optional[str] = None, status: str = "trial", channels=None, purposes=None,
-               mailer=None) -> dict:
+               mailer=None, default_region: Optional[str] = None) -> dict:
     """POST /v1/orgs: the one creation route.
 
     Creates the organisation key through the key provider, the organisation, its key record, its wrapped fingerprint
@@ -67,21 +69,25 @@ def create_org(conn: psycopg.Connection, *, token_key: TokenKey, custody, operat
         raise invalid(region="1 to 64 characters")
     want_enum(status, "status", ("trial", "active"))
     email = clean_email(admin_email, "admin_email")
+    phone_region = _phone_region(default_region) if default_region is not None else "US"
     chans = list(channels) if channels is not None else [list(c) for c in DEFAULT_CHANNELS]
     purps = list(purposes) if purposes is not None else [list(p) for p in DEFAULT_PURPOSES]
     org_id = uuid.uuid4()
     try:
         key_ref = custody.create_org_key(str(org_id))
         wrapped_fp = custody.wrap(str(org_id), os.urandom(32))
+        wrapped_display = custody.wrap(str(org_id), os.urandom(32))  # the display key seals names and masks (records.md section 8)
     except CustodyError as exc:
         raise _custody_error(exc) from exc
     token = mint_org_token(token_key, org_id, ["admin"], credential_id=None, ttl_seconds=120)
     try:
         with org_transaction(conn, token):
-            conn.execute("INSERT INTO consentvault.organization (org_id, name, region, status) VALUES (%s, %s, %s, %s)",
-                         (org_id, name.strip(), region, status))
+            conn.execute("INSERT INTO consentvault.organization (org_id, name, region, status, default_region)"
+                         " VALUES (%s, %s, %s, %s, %s)", (org_id, name.strip(), region, status, phone_region))
             conn.execute("INSERT INTO consentvault.org_key (org_id, version, kms_key_ref) VALUES (%s, 1, %s)", (org_id, key_ref))
             conn.execute("INSERT INTO consentvault.org_fingerprint_secret (org_id, wrapped) VALUES (%s, %s)", (org_id, wrapped_fp))
+            conn.execute("INSERT INTO consentvault.org_display_key (org_id, wrapped, key_version) VALUES (%s, %s, %s)",
+                         (org_id, wrapped_display, wrapped_version(wrapped_display)))
             for c in chans:
                 conn.execute("INSERT INTO consentvault.channel (org_id, channel, label) VALUES (%s, %s, %s)", (org_id, c[0], c[1]))
             for p in purps:
@@ -97,16 +103,46 @@ def create_org(conn: psycopg.Connection, *, token_key: TokenKey, custody, operat
                                   target_id=str(org_id), request_id=request_id)
     except psycopg.Error as exc:
         raise TenancyError(f"organization creation failed after its key {key_ref!r} was created; the key is unused "
-                           f"and should be scheduled for destruction ({type(exc).__name__}: {exc})") from exc
+                           f"and should be scheduled for destruction ({describe(exc)})") from exc
     except ApiError as exc:
         # nothing was written (the transaction rolled back); the key provider has an unused key for this id
-        exc.detail += f" (an unused organization key {key_ref!r} was created and should be scheduled for destruction)"
-        raise
+        raise ApiError(exc.name, caller_detail(exc) + f" (an unused organization key {key_ref!r} was created and should be "
+                       "scheduled for destruction)", exc.fields) from exc
     out = {"org_id": str(org_id), "name": name.strip(), "status": status, "region": region,
            "evidence_prefix": f"orgs/{org_id}/", "invite_id": inv["invite_id"], "invite_expires_at": inv["expires_at"]}
     if "token" in inv:
         out["invite_token"] = inv["token"]
     return out
+
+
+def _phone_region(value: Any) -> str:
+    """An ISO 3166-1 alpha-2 code in upper case (records.md, phone region). This is not the hosting ``region`` field."""
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Z]{2}", value):
+        raise invalid(default_region="two upper-case letters, an ISO 3166-1 alpha-2 country code such as US or GB")
+    return value
+
+
+def set_default_region(conn: psycopg.Connection, *, token_key: TokenKey, operator_id: str, request_id: str, org_id: Any,
+                       default_region: Any, reason: Any) -> dict:
+    """PATCH /v1/orgs/{id}/default-region: the operator changes the phone region with a reason; audited with the old and new."""
+    new = _phone_region(default_region)
+    if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 500:
+        raise invalid(reason="required, 1 to 500 characters")
+    oid = to_uuid(org_id, "organization")
+    token = mint_org_token(token_key, oid, ["admin"], credential_id=None, ttl_seconds=120)
+    with org_transaction(conn, token):
+        row = conn.execute("SELECT default_region FROM consentvault.organization WHERE org_id = (SELECT consentvault.current_org())"
+                           " FOR UPDATE").fetchone()
+        if row is None:
+            raise ApiError("not_found", "no such organization")
+        conn.execute("UPDATE consentvault.organization SET default_region = %s WHERE org_id = (SELECT consentvault.current_org())",
+                     (new,))
+        ctx = _operator_ctx(conn, operator_id, request_id)
+        ctx.audit("org.default_region_changed", "org", str(oid), reason.strip()[:500],
+                  {"from": row["default_region"], "to": new})
+        audit.append_platform(conn, operator_id=operator_id, action="org.default_region_changed", target_kind="org",
+                              target_id=str(oid), reason=reason.strip(), request_id=request_id)
+    return {"org_id": str(oid), "default_region": new, "previous_default_region": row["default_region"]}
 
 
 def set_org_status(conn: psycopg.Connection, *, token_key: TokenKey, operator_id: str, request_id: str, org_id: Any,
@@ -543,6 +579,134 @@ def put_retention(ctx: Ctx, body: Any) -> dict:
     return {"version": row["version"], "evidence_years": row["evidence_years"], "applies_from": iso(row["applies_from"])}
 
 
+# WorkOS ids are a prefix and a 26-character ULID (Crockford base32, upper case); anything else can never match a sign-in
+_CONNECTION_ID = re.compile(r"conn_[0-9A-HJKMNP-TV-Z]{26}")
+_WORKOS_ORG_ID = re.compile(r"org_[0-9A-HJKMNP-TV-Z]{26}")
+
+
+def _sso_lock(conn: psycopg.Connection) -> None:
+    conn.execute("SELECT pg_advisory_xact_lock(hashtext('consentvault.sso:' || (SELECT consentvault.current_org())::text))")
+
+
+def _require_entered_org(conn: psycopg.Connection) -> None:
+    if conn.execute("SELECT 1 FROM consentvault.organization WHERE org_id = (SELECT consentvault.current_org())").fetchone() is None:
+        raise ApiError("not_found", "no such organization")
+
+
+def _open_lifted_alarm(conn: psycopg.Connection) -> None:
+    conn.execute("INSERT INTO consentvault.org_alarm (org_id, kind, detail) VALUES ((SELECT consentvault.current_org()),"
+                 " 'sso.required_lifted', '{}'::jsonb)")
+
+
+def put_sso(ctx: Ctx, body: Any) -> dict:
+    """Turn the company sign-in requirement on or off. Admin only. The admin never names a connection: the operator bound it.
+    Turning it on needs a binding an admin has proved by signing in through it, and the admin must be signed in through it too
+    (otherwise turning it on would lock the admin out of their own organization)."""
+    from .session import current_sso, write_sso
+    from .tokens import token_sso
+    ctx.actor.require(ROLE_ADMIN)
+    b = body_dict(body)
+    unknown = sorted(set(b) - {"require_sso"})
+    if unknown:
+        raise invalid(**{u: "not accepted: the connection is bound by your operator" for u in unknown})
+    required = b.get("require_sso")
+    if not isinstance(required, bool):
+        raise invalid(require_sso="true or false")
+    _sso_lock(ctx.conn)
+    now = current_sso(ctx.conn)
+    if required:
+        entered = ctx.conn.execute("SELECT nullif(pg_catalog.current_setting('consentvault.org_token', true), '') AS t").fetchone()["t"]
+        if not now["verified"] or token_sso(entered) not in now["bound_connections"]:
+            raise invalid(require_sso="sign in through your company account as an admin first; that proves the connection is yours, "
+                                      "and keeps you from locking yourself out")
+    row = write_sso(ctx.conn, require_sso=required, set_by=ctx.actor.member_uuid)
+    ctx.audit("sso.updated", "org_sso", str(row["version"]), "required for every member" if required else "not required")
+    if required:  # an operator's break-glass notice is answered
+        ctx.conn.execute("SELECT consentvault.org_alarm_clear('sso.required_lifted')")
+    return {"version": row["version"], "required": row["require_sso"], "verified": row["verified"],
+            "connection_id": row["connection_id"], "applies_from": iso(row["applies_from"])}
+
+
+def bind_sso(conn: psycopg.Connection, *, token_key: TokenKey, operator_id: str, request_id: str, org_id: Any, body: Any) -> dict:
+    """PUT /v1/orgs/{id}/sso-binding (operator): bind the sign-in service's organization and its connections to this
+    organization. A new binding is unproved and not required, and ends every session that came through the old one."""
+    from .session import current_sso, write_sso
+    b = body_dict(body)
+    unknown = sorted(set(b) - {"workos_organization_id", "connection_ids"})
+    if unknown:
+        raise invalid(**{u: "unknown field" for u in unknown})
+    wos, conns = b.get("workos_organization_id"), b.get("connection_ids")
+    if not isinstance(wos, str) or not _WORKOS_ORG_ID.fullmatch(wos):
+        raise invalid(workos_organization_id="the sign-in service's organization id, like org_01E4ZCR3C56J083X43JQXF3JK5")
+    if not isinstance(conns, list) or not conns or not all(isinstance(c, str) and _CONNECTION_ID.fullmatch(c) for c in conns):
+        raise invalid(connection_ids="one or more connection ids, like conn_01E4ZCR3C56J083X43JQXF3JK5")
+    oid = to_uuid(org_id, "organization")
+    token = mint_org_token(token_key, oid, ["admin"], credential_id=None, ttl_seconds=120)
+    with org_transaction(conn, token):
+        _require_entered_org(conn)
+        _sso_lock(conn)
+        try:
+            conn.execute("SELECT consentvault.sso_binding_check(%s)", (wos,))
+        except psycopg.errors.UniqueViolation:
+            raise ApiError("sso_binding_taken", "that sign-in-service organization is already bound to another organization") from None
+        lifted = current_sso(conn)["required"]
+        row = write_sso(conn, workos_org_id=wos, bound_connections=sorted(set(conns)), connection_id=None, verified=False,
+                        require_sso=False, set_by_operator=operator_id)
+        if lifted:
+            _open_lifted_alarm(conn)
+        ctx = _operator_ctx(conn, operator_id, request_id)
+        ctx.audit("sso.bound", "org_sso", str(row["version"]), f"{wos}: {len(set(conns))} connection(s)")
+        audit.append_platform(conn, operator_id=operator_id, action="sso.bound", target_kind="org", target_id=str(oid),
+                              reason=f"{wos}", request_id=request_id)
+    return {"version": row["version"], "workos_organization_id": wos, "connection_ids": row["bound_connections"],
+            "verified": False, "required": False}
+
+
+def unbind_sso(conn: psycopg.Connection, *, token_key: TokenKey, operator_id: str, request_id: str, org_id: Any) -> dict:
+    """DELETE /v1/orgs/{id}/sso-binding (operator): no company sign-in; the requirement is lifted with it."""
+    from .session import current_sso, write_sso
+    oid = to_uuid(org_id, "organization")
+    token = mint_org_token(token_key, oid, ["admin"], credential_id=None, ttl_seconds=120)
+    with org_transaction(conn, token):
+        _require_entered_org(conn)
+        _sso_lock(conn)
+        lifted = current_sso(conn)["required"]
+        conn.execute("SELECT consentvault.org_alarm_clear('sso.required_lifted')")  # an earlier break-glass notice is answered
+        row = write_sso(conn, workos_org_id=None, bound_connections=[], connection_id=None, verified=False, require_sso=False,
+                        set_by_operator=operator_id)
+        if lifted:
+            _open_lifted_alarm(conn)
+        ctx = _operator_ctx(conn, operator_id, request_id)
+        ctx.audit("sso.unbound", "org_sso", str(row["version"]), "company sign-in removed")
+        audit.append_platform(conn, operator_id=operator_id, action="sso.unbound", target_kind="org", target_id=str(oid),
+                              reason="company sign-in removed", request_id=request_id)
+    return {"version": row["version"], "verified": False, "required": False}
+
+
+def sso_break_glass(conn: psycopg.Connection, *, token_key: TokenKey, operator_id: str, request_id: str, org_id: Any, body: Any) -> dict:
+    """POST /v1/orgs/{id}/sso:break-glass (operator): the identity provider is down and members cannot sign in, so turn the
+    requirement off. The binding and its proof stay. The organization's admins are told through the overview alarm list."""
+    from .session import current_sso, write_sso
+    b = body_dict(body)
+    reason = b.get("reason")
+    if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 500:
+        raise invalid(reason="required, 1 to 500 characters")
+    oid = to_uuid(org_id, "organization")
+    token = mint_org_token(token_key, oid, ["admin"], credential_id=None, ttl_seconds=120)
+    with org_transaction(conn, token):
+        _require_entered_org(conn)
+        _sso_lock(conn)
+        if not current_sso(conn)["required"]:
+            raise invalid(org_id="this organization does not require company sign-in; there is nothing to lift")
+        row = write_sso(conn, require_sso=False, set_by_operator=operator_id)
+        _open_lifted_alarm(conn)
+        ctx = _operator_ctx(conn, operator_id, request_id)
+        ctx.audit("sso.break_glass", "org_sso", str(row["version"]), reason.strip())
+        audit.append_platform(conn, operator_id=operator_id, action="sso.break_glass", target_kind="org", target_id=str(oid),
+                              reason=reason.strip(), request_id=request_id)
+    return {"version": row["version"], "required": False, "verified": row["verified"]}
+
+
 # ======================================================================================================================
 # Members and invitations
 # ======================================================================================================================
@@ -593,7 +757,7 @@ def invite_member(ctx: Ctx, body: Any, *, mailer=None) -> dict:
 
 
 def _last_admin(exc: psycopg.Error) -> bool:
-    return isinstance(exc, psycopg.errors.IntegrityConstraintViolation) and "last_admin" in str(exc)
+    return isinstance(exc, psycopg.errors.IntegrityConstraintViolation) and text_has(exc, "last_admin")
 
 
 def change_role(ctx: Ctx, member_id, body: Any) -> dict:
@@ -660,7 +824,7 @@ def list_audit(ctx: Ctx, *, action=None, actor=None, target_kind=None, from_=Non
         params.append(t_to)
     if t_from and t_to and t_from > t_to:
         raise invalid(**{"from": "later than to"})
-    sql = ("SELECT a.audit_id, a.at, a.action, a.actor_kind, a.actor_id, a.target_kind, a.target_id, a.reason, a.request_id,"
+    sql = ("SELECT a.audit_id, a.at, a.action, a.actor_kind, a.actor_id, a.target_kind, a.target_id, a.reason, a.request_id, a.detail,"
            " (SELECT m.display_name FROM consentvault.member m WHERE m.org_id = a.org_id AND a.actor_kind = 'member'"
            "  AND m.member_id::text = a.actor_id) AS actor_name, a.at AS _k1, a.audit_id::text AS _k2"
            " FROM consentvault.audit_event a WHERE " + " AND ".join(where))
@@ -669,7 +833,8 @@ def list_audit(ctx: Ctx, *, action=None, actor=None, target_kind=None, from_=Non
                     shape=lambda r: {"audit_id": str(r["audit_id"]), "at": iso(r["at"]), "action": r["action"],
                                      "actor": {"kind": r["actor_kind"], "id": r["actor_id"], "display_name": r["actor_name"]},
                                      "target": {"kind": r["target_kind"], "id": r["target_id"]},
-                                     "reason": r["reason"], "request_id": r["request_id"]})
+                                     "reason": r["reason"], "request_id": r["request_id"],
+                                     **({"detail": r["detail"]} if r["detail"] is not None else {})})
 
 
 def need_time_param(value: str, name: str):
@@ -781,7 +946,7 @@ def create_system(ctx: Ctx, body: Any, *, custody=None) -> dict:
     name = need_text(b, "name")
     kind = want_enum(b.get("kind"), "kind", SYSTEM_KINDS)
     endpoint = _check_endpoint(b.get("endpoint"))
-    signature = want_enum(b.get("signature"), "signature", ("ed25519", "hmac"))
+    scheme = want_enum(b.get("signature"), "signature", ("ed25519", "hmac"))
     contact_form = want_enum(b.get("contact_form"), "contact_form", ("plaintext", "fingerprint"))
     hours = b.get("retry_window_hours", 24)
     if isinstance(hours, bool) or not isinstance(hours, int) or not 1 <= hours <= 168:
@@ -796,7 +961,7 @@ def create_system(ctx: Ctx, body: Any, *, custody=None) -> dict:
     public_pem = None
     shown = None
     try:
-        if signature == "ed25519":
+        if scheme == "ed25519":
             from cryptography.hazmat.primitives import serialization
             from cryptography.hazmat.primitives.asymmetric import ed25519
             priv = ed25519.Ed25519PrivateKey.generate()
@@ -817,7 +982,7 @@ def create_system(ctx: Ctx, body: Any, *, custody=None) -> dict:
             " retry_window_hours, public_key, credentials_ct, created_by) VALUES (%s, %s, %s, 'generic_webhook', %s, %s,"
             " %s, %s, %s, %s, %s) RETURNING system_id, name, kind, connector, endpoint, signature, contact_form,"
             " retry_window_hours, status, public_key, created_at, last_delivery_at, last_test",
-            (org, name, kind, endpoint, signature, contact_form, hours, public_pem, credentials_ct, ctx.actor.member_uuid)
+            (org, name, kind, endpoint, scheme, contact_form, hours, public_pem, credentials_ct, ctx.actor.member_uuid)
         ).fetchone()
     except psycopg.errors.UniqueViolation:
         raise ApiError("system_exists", "a connected system with that name already exists") from None
@@ -869,26 +1034,74 @@ def update_system(ctx: Ctx, system_id, body: Any) -> dict:
 # ======================================================================================================================
 def get_org(ctx: Ctx) -> dict:
     ctx.actor.require(ROLE_ADMIN, ROLE_DEVELOPER, ROLE_VIEWER)
-    o = ctx.conn.execute("SELECT org_id, name, status, region, created_at FROM consentvault.organization"
+    o = ctx.conn.execute("SELECT org_id, name, status, region, default_region, created_at FROM consentvault.organization"
                          " WHERE org_id = (SELECT consentvault.current_org())").fetchone()
     if o is None:
         raise ApiError("not_found", "no such organization")
     if ctx.actor.role != ROLE_ADMIN:
         return {"org_id": str(o["org_id"]), "name": o["name"], "status": o["status"], "region": o["region"],
-                "role": ctx.actor.role}
+                "default_region": o["default_region"], "role": ctx.actor.role}
+    from .session import current_sso
+    sso = current_sso(ctx.conn)
     k = ctx.conn.execute("SELECT status, version, destroy_after FROM consentvault.org_key"
                          " WHERE org_id = (SELECT consentvault.current_org()) ORDER BY version DESC LIMIT 1").fetchone()
     return {"org_id": str(o["org_id"]), "name": o["name"], "status": o["status"], "region": o["region"],
-            "created_at": iso(o["created_at"]), "plan": None,
+            "default_region": o["default_region"], "created_at": iso(o["created_at"]), "plan": None,
             "key": {"status": k["status"], "version": k["version"], "destroy_after": iso(k["destroy_after"])} if k else None,
             "offboarding": None, "trial": {"started_at": iso(o["created_at"])} if o["status"] == "trial" else None,
+            "sso": {"connected": bool(sso["bound_connections"]), "connection_id": sso["connection_id"], "required": sso["required"],
+                    "verified": sso["verified"]},
             "partial": ["plan", "offboarding"] + ([] if k else ["key"])}
+
+
+# What a customer reads for each alarm (admin.md, "which alarms a customer sees"). Names are as the code writes them. An alarm
+# with no entry here is not shown to customers: usage_* alarms stay with the operator.
+NEXT_ACTION = {
+    "restore.stops_unconfirmed": "After a restore, some stops were put back without their confirmation. Review them on the evidence "
+                                 "lookup page. A stop stays in force; it is lifted only through the normal release rules.",
+    "billing.second_live_subscription": "Your organization has two live subscriptions. Cancel the extra one in the billing portal "
+                                        "(Manage billing on Stripe).",
+    "sso.required_lifted": "An operator turned off the company sign-in requirement because your identity provider could not be reached. "
+                           "Passkeys work again. When your provider is back, turn the requirement on again in Company sign-in.",
+    "reveal_volume": "Open the audit log, find who revealed them, and check that this was work they meant to do.",
+    "sending_account_failing": "Open the confirmation settings, run the account check, and fix the account with your provider. "
+                               "Sending resumes when the check passes.",
+    "inbound_signature_failures": "Check the webhook secret on your sending account matches the one saved here.",
+    "replies_unread_24h": "Open the replies list and read them. A reply may be a request to stop.",
+    "delivery_reports_stale": "Check the status-callback address saved with your provider, and send a test message.",
+    "link_host_failing": "Check the wording link address in the confirmation settings, and fix the address or your DNS.",
+    "optout_reply_dead": "Open the sends list, find the failed stop reply, and check the sending account. The opt-out itself was recorded.",
+    "provider_refusal_stop": "Nothing is lost: the stop is on record. Make sure your other systems also honor it.",
+    "send_cap_reached": "Wait for the next hour, or raise the limit in the confirmation settings if this is normal volume.",
+}
+
+
+def customer_alarms(ctx: Ctx, out: dict):
+    """Open alarms for this role, newest first: [{name, since, count|null, next_action}]. A developer gets none. If a read fails
+    the answer is None and ``partial`` names it, never an empty list."""
+    if ctx.actor.role not in (ROLE_ADMIN, ROLE_VIEWER):
+        return []
+    try:
+        with ctx.conn.transaction():
+            rows = [(r["name"], r["since"], r["count"]) for r in ctx.conn.execute(
+                "SELECT name, since, count FROM consentvault.customer_alarm_rows(%s)", (ctx.actor.role == ROLE_ADMIN,)).fetchall()]
+            rows += [(r["kind"], r["opened_at"], (r["detail"] or {}).get("count") if isinstance(r["detail"], dict) else None)
+                     for r in ctx.conn.execute("SELECT kind, opened_at, detail FROM consentvault.org_alarm"
+                                               " WHERE org_id = (SELECT consentvault.current_org()) AND cleared_at IS NULL").fetchall()]
+    except psycopg.Error:  # loud-failure-exempt: the answer carries alarms: null and names it in partial; never an empty list
+        out.setdefault("partial", []).append("alarms")
+        return None
+    rows = [r for r in rows if r[0] in NEXT_ACTION and not r[0].startswith("usage_")]
+    rows.sort(key=lambda r: r[1], reverse=True)
+    return [{"name": n, "since": iso(t), "count": c if isinstance(c, int) else None, "next_action": NEXT_ACTION[n]} for n, t, c in rows]
 
 
 def health(ctx: Ctx) -> dict:
     ctx.actor.require(ROLE_ADMIN, ROLE_DEVELOPER, ROLE_VIEWER)
     h = ctx.conn.execute("SELECT unsealed_over_1h, first_event_at, first_event_sealed, clock_timestamp() AS now"
                          " FROM consentvault.health_counts()").fetchone()
-    return {"evaluated_at": iso(h["now"]), "unsealed_events_over_1h": h["unsealed_over_1h"], "dead_deliveries": None,
-            "last_chain_verification": None,
-            "first_event": {"at": iso(h["first_event_at"]), "sealed": h["first_event_sealed"]} if h["first_event_at"] else None}
+    out = {"evaluated_at": iso(h["now"]), "unsealed_events_over_1h": h["unsealed_over_1h"], "dead_deliveries": None,
+           "last_chain_verification": None,
+           "first_event": {"at": iso(h["first_event_at"]), "sealed": h["first_event_sealed"]} if h["first_event_at"] else None}
+    out["alarms"] = customer_alarms(ctx, out)
+    return out

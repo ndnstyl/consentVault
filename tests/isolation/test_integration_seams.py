@@ -210,6 +210,9 @@ def test_the_postgres_send_log_appends_domain_only_rows_the_operator_reads(tenan
 # adds it to this list on purpose. organization: no name (the session lane reads each name inside its own tenant).
 OPERATOR_COLUMNS = {
     "audit_event": "*", "notify_send_log": "*", "operator_alarm": "*",
+    # the cloud key provider's destruction record (0028): org references, key ids and dates, no personal data; the
+    # operator role owns its two access functions, and no login reads the table directly
+    "kms_key_ledger": "*",
     "billing_account": {"org_id", "stripe_customer_id"},
     # brand_ids and status: the site-key lookup answers a retired source by name (0015)
     "capture_source": {"org_id", "source_id", "allowed_origins", "brand_ids", "status"},
@@ -218,7 +221,19 @@ OPERATOR_COLUMNS = {
                    "site_key_hash"},
     # the checklist writer checks the version is approved; check_id is what the insert returns (0015)
     "doc_checklist": {"org_id", "version", "status"},
+    # the Twenty receiver resolves its id before any tenant is entered (0060): the hash of the receiver id, its system, and
+    # whether that system is a live Twenty one; never a secret, never a contact
+    "connector_receiver": {"org_id", "receiver_hash", "system_id", "retired_at"},
+    "connected_system": {"org_id", "system_id", "status", "connector"},
+    # the Twenty workflow credential's check resolves its secret's hash before any tenant is entered (0061); never a secret
+    "workflow_credential": {"org_id", "credential_id", "system_id", "secret_hash", "expires_at", "overlap_until",
+                            "revoked_at", "tokens", "refilled_at"},
     "doc_check_result": {"org_id", "check_id"},
+    # the confirmation lookups (0049) read across organizations: which account an inbound key belongs to, which organization
+    # owns a verified link host, which organizations have a message waiting; ids and status only, never a secret or a message
+    "sending_account": {"org_id", "account_id", "inbound_key"},
+    "confirmation_link_host": {"org_id", "host", "status"},
+    "confirmation_send_intent": {"org_id", "status"},
     "event": {"org_id", "event_id", "received_at", "seq", "source_id"},
     # an offboarding org leaves the evidence jobs once its final export is taken (0014)
     "offboarding_request": {"org_id", "state", "final_export_at"},
@@ -226,6 +241,7 @@ OPERATOR_COLUMNS = {
     "invite": {"org_id", "invite_id", "email_norm", "role", "token_digest", "invited_by", "invited_by_operator",
                "expires_at", "accepted_at", "withdrawn_at"},
     "member": {"org_id", "member_id", "idp_issuer", "idp_subject", "role"},
+    "org_sso": {"org_id", "version", "workos_org_id"},  # one sign-in-service organization binds to one organization (0042)
     "org_status_history": {"org_id", "seq"},
     "organization": {"org_id", "status", "created_at"},
     "seal": {"org_id", "event_id"},

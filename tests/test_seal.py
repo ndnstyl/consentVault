@@ -368,3 +368,26 @@ def test_a_runtime_role_seals_and_verifies_through_the_function_only(app_conn, c
     assert conn.execute("SELECT verified_at FROM consentvault.seal").fetchone()["verified_at"] is not None
     with pytest.raises(psycopg.Error):
         app_conn.execute("UPDATE consentvault.seal SET verified_at = now()")
+
+
+def test_verify_seals_reports_a_failure_by_class_and_code_never_its_text(dsn, conn, disclosure, tsa, monkeypatch, capsys):
+    """An error raised while checking a seal reaches stdout and stderr as its class and stable code; its text (which can quote a
+    value) never does, and the failed event is still reported."""
+    from consentvault import cli
+    from consentvault import seal as seal_mod
+    from error_names import named
+
+    _grant(conn, disclosure)
+    monkeypatch.setenv("CONSENTVAULT_DSN", dsn)
+    monkeypatch.setenv("CONSENTVAULT_TSA_URL", tsa.url)
+    assert cli.main(["seal"]) == 0
+    capsys.readouterr()
+
+    def leak(*a, **k):
+        raise seal_mod.SealError("call +18135550199 or dana.whitfield@example.com, ask for Dana Whitfield")
+    monkeypatch.setattr(seal_mod, "_digest_columns", leak)
+    assert cli.main(["verify-seals"]) == cli.EXIT_BROKEN
+    got = capsys.readouterr()
+    both = got.out + got.err
+    assert "seal failed for event" in got.err and named("SealError", both)
+    assert not any(s in both for s in ("8135550199", "dana.whitfield", "Dana", "Whitfield"))

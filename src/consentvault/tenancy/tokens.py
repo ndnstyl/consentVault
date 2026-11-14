@@ -2,8 +2,8 @@
 
 A token is ``v1.<key id>.<payload hex>.<hmac hex>``; the HMAC-SHA256 covers ``v1.<key id>.<payload hex>`` under a key
 the database keeps in an owner-only table and the API holds in its secret store. ``consentvault.current_org()``
-verifies the signature and expiry on every statement, so a token that is forged, expired or signed with a retired key
-selects no rows. Tokens live at most 15 minutes; request tokens default to 5.
+verifies the signature and expiry on every statement (expiry as of the start of the transaction, so a transaction
+never loses its tenant part way through), so a token that is forged, expired or signed with a retired key selects no rows. Tokens live at most 15 minutes; request tokens default to 5.
 
 For the API lane:
 - call ``SELECT consentvault.require_multi_tenant()`` once at startup and refuse to serve if it raises: in single
@@ -28,8 +28,12 @@ from typing import Iterable, Iterator
 
 import psycopg
 
+from ..safelog import describe
 from .errors import TenantTokenError
 
+# The header POST /v1/session/org answers with: the minted tenant token, for the portal edge Worker only. The Worker
+# strips it before the browser sees the answer; it is never part of the JSON body.
+TENANT_TOKEN_HEADER = "X-ConsentVault-Tenant-Token"
 MAX_TTL_SECONDS = 900
 DEFAULT_TTL_SECONDS = 300
 _KID = re.compile(r"^[a-z0-9_-]{1,32}$")
@@ -59,12 +63,13 @@ def mint_org_token(
     credential_id: str | None,
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
     now: float | None = None,
+    sso_connection: str | None = None,
 ) -> str:
     """Sign a tenant token for one organisation. Called only after the caller's credential has been verified."""
     try:
         org = uuid.UUID(str(org_id))
     except ValueError as exc:
-        raise TenantTokenError(f"org_id is not a UUID: {exc}") from exc
+        raise TenantTokenError(f"org_id is not a UUID: {describe(exc)}") from exc
     scope_list = sorted(set(scopes))
     if not scope_list or any(not _SCOPE.match(s) for s in scope_list):
         raise TenantTokenError("a tenant token needs at least one well-formed scope")
@@ -73,10 +78,23 @@ def mint_org_token(
     issued = int(time.time() if now is None else now)
     payload = {"org": str(org), "scp": scope_list, "cid": credential_id, "iat": issued, "exp": issued + ttl_seconds,
                "jti": str(uuid.uuid4())}
+    if sso_connection:  # the company connection this sign-in came through; re-checked against the organization on every request
+        payload["sso"] = sso_connection
     body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8").hex()
     signed = f"v1.{key.key_id}.{body}"
     sig = hmac.new(key.secret, signed.encode("utf-8"), hashlib.sha256).hexdigest()
     return f"{signed}.{sig}"
+
+
+def token_sso(token: str | None) -> str | None:
+    """The company connection a tenant token the database already accepted was minted for, or None. Read from the payload,
+    not verified here: call it only for a token ``org_transaction`` entered."""
+    try:
+        payload = json.loads(bytes.fromhex(str(token).split(".")[2]))
+    except (ValueError, IndexError, AttributeError):
+        return None
+    value = payload.get("sso") if isinstance(payload, dict) else None
+    return value if isinstance(value, str) and value else None
 
 
 def token_expires_at(token: str):

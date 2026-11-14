@@ -18,7 +18,7 @@ test('developer never sees personal-data, members, audit, billing or retention s
 
 test('compliance viewer sees evidence, packages, audit, retention and read pages only', () => {
   const v = ids('compliance_viewer');
-  assert.deepEqual(v, ['overview', 'evidence', 'exports', 'wording', 'policies', 'checklists', 'systems', 'retention', 'audit', 'settings', 'references']);
+  assert.deepEqual(v, ['overview', 'records', 'evidence', 'exports', 'wording', 'policies', 'checklists', 'systems', 'confirmations', 'retention', 'audit', 'settings', 'references']);
 });
 
 test('write actions follow the role matrix', () => {
@@ -63,4 +63,38 @@ test('route matching prefers static segments over params', () => {
 test('static paths exclude dynamic routes', () => {
   assert.ok(staticPaths().includes('/'));
   assert.ok(!staticPaths().some((p) => p.includes(':')));
+});
+
+test('records, setup and confirmation messages follow the role matrix (roles.md additions 2026-10-30)', () => {
+  assert.equal(canView('developer', 'records'), true);
+  assert.equal(canDo('developer', 'records.search'), false);
+  assert.equal(canDo('developer', 'records.reveal'), false);
+  assert.equal(canDo('developer', 'records.export'), false);
+  assert.equal(canDo('developer', 'records.person'), false);
+  for (const a of ['records.search', 'records.reveal', 'records.export', 'records.person'] as const) {
+    assert.equal(canDo('admin', a), true, a);
+    assert.equal(canDo('compliance_viewer', a), true, a);
+  }
+  assert.equal(canView('compliance_viewer', 'setup'), false);
+  assert.equal(canView('developer', 'setup'), true);
+  assert.equal(canDo('developer', 'setup.skip'), true);
+  assert.equal(canView('compliance_viewer', 'confirmation-edit'), false);
+  assert.equal(canView('developer', 'confirmation-edit'), true);
+  assert.equal(canDo('developer', 'confirmations.account'), true);
+  assert.equal(canDo('developer', 'confirmations.manage'), false);
+  assert.equal(canDo('developer', 'confirmations.replies'), false);
+  assert.equal(canDo('compliance_viewer', 'confirmations.replies'), true);
+  assert.equal(canDo('compliance_viewer', 'confirmations.manage'), false);
+});
+
+test('the new routes match, and the dynamic edit route reads source and channel', () => {
+  assert.equal(matchRoute('/records')?.route.id, 'records');
+  assert.equal(matchRoute('/setup')?.route.id, 'setup');
+  assert.equal(matchRoute('/setup/first-event')?.route.id, 'first-event');
+  assert.equal(matchRoute('/confirmations')?.route.id, 'confirmations');
+  const m = matchRoute('/confirmations/src_web/sms');
+  assert.equal(m?.route.id, 'confirmation-edit');
+  assert.deepEqual(m?.params, { source_id: 'src_web', channel: 'sms' });
+  assert.equal(staticPaths().includes('/records') && staticPaths().includes('/setup') && staticPaths().includes('/confirmations'), true);
+  assert.equal(staticPaths().some((p) => p.includes(':')), false);
 });

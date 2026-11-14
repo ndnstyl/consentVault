@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
+from .safelog import describe
 from . import config as config_mod
 from .errors import ConsentVaultError, InvalidEventError, ReleaseFailedError
 
@@ -123,12 +124,30 @@ def _run_capture(args, cfg) -> int:
 
 
 def _run_verify_chain(args, cfg) -> int:
+    from . import integrity, metrics
     from .ledger import verify_chain
 
-    webhook = bool(cfg.anchor_sink) and urlparse(cfg.anchor_sink).scheme.startswith("http")
+    webhook = bool(cfg.anchor_sink) and urlparse(cfg.anchor_sink).scheme in ("http", "https", "s3")  # not a local file
     sink = cfg.anchor_sink if cfg.anchor_sink and not webhook else None
     with _connect(cfg) as conn:
+        try:
+            per_org = integrity.per_org_mode(conn)
+        except integrity.MultiTenantRefused as exc:
+            print(f"consentvault: {describe(exc)}", file=sys.stderr)
+            return EXIT_BROKEN
+        if per_org:  # multi-tenant: every organisation, each under its own token
+            try:
+                checked = integrity.verify_chain_every_org(conn, sink_file=sink)
+            except integrity.IntegrityRunError as exc:
+                metrics.emit("VerifyChainFailures", len(exc.failures))
+                print(f"consentvault: {describe(exc)}", file=sys.stderr)
+                print(json.dumps({"ok": False, "failed_orgs": [o for o, _ in exc.failures], "orgs": exc.results}))
+                return EXIT_BROKEN
+            metrics.emit("VerifyChainFailures", 0)
+            print(json.dumps({"ok": True, "orgs": checked}))
+            return EXIT_OK
         breaks = verify_chain(conn, sink_file=sink)
+    metrics.emit("VerifyChainFailures", 1 if breaks else 0)
     out = {"ok": not breaks, "breaks": [b.__dict__ for b in breaks]}
     if webhook:
         out["sink_not_checked"] = True
@@ -163,12 +182,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    from . import safelog as _safelog
+    _safelog.setup_process()  # the scrub filter on every handler, warnings, and the exception hooks
     args = build_parser().parse_args(argv)
     try:
         cfg = config_mod.load_config(args.config)
         return REGISTRY[args.command].run(args, cfg)
     except ConsentVaultError as exc:
-        print(f"consentvault: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"consentvault: {describe(exc)}", file=sys.stderr)
         return EXIT_ERROR
 
 

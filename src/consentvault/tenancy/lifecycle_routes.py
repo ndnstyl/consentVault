@@ -14,6 +14,7 @@ from typing import Any, Callable, Optional
 
 import psycopg
 
+from ..safelog import caller_detail
 from . import erasure, holds, key_rotation, legal_process, offboard
 from .admin_base import ROLE_ADMIN, ApiError, Ctx, body_dict, to_uuid
 from .erasure import LedgerUnavailableError, LifecycleError, LifecycleLedger
@@ -122,7 +123,7 @@ class LifecycleRoutes:
                     try:
                         record_operator_refusal(self._app.owner_connect, decision, method, route.handler, rid)
                     except OperatorRefusalNotRecorded as exc:
-                        return Reply(503, {"error": "audit_unavailable", "detail": str(exc), "request_id": rid})
+                        return Reply(503, {"error": "audit_unavailable", "detail": caller_detail(exc), "request_id": rid})
             if operator_id is not None:
                 result = getattr(self, "op_" + route.handler)(operator_id, params, body_dict(parsed or {}), rid)
             elif route.tenant and bearer and bearer.startswith(TENANT_TOKEN_PREFIX):
@@ -133,7 +134,7 @@ class LifecycleRoutes:
             return Reply(exc.status, exc.body(rid))
         except tuple(f[0] for f in _FAILURES) as exc:  # loud-failure-exempt: answered by name with its status
             status, name = next((s, n) for cls, s, n in _FAILURES if isinstance(exc, cls))
-            return Reply(status, {"error": name, "detail": str(exc), "request_id": rid})
+            return Reply(status, {"error": name, "detail": caller_detail(exc), "request_id": rid})
         return Reply(route.success, result)
 
     def _admin_session(self, bearer: Optional[str]):
@@ -180,10 +181,10 @@ class LifecycleRoutes:
             return Reply(exc.status, exc.body(rid))
         except ExportError as exc:  # loud-failure-exempt: answered by name with its status
             name = getattr(exc, "error_name", "export_failed")
-            return Reply(STATUS.get(name, 500), {"error": name, "detail": str(exc), "request_id": rid})
+            return Reply(STATUS.get(name, 500), {"error": name, "detail": caller_detail(exc), "request_id": rid})
         except tuple(f[0] for f in _FAILURES) as exc:  # loud-failure-exempt: answered by name with its status
             status, name = next((s, n) for cls, s, n in _FAILURES if isinstance(exc, cls))
-            return Reply(status, {"error": name, "detail": str(exc), "request_id": rid})
+            return Reply(status, {"error": name, "detail": caller_detail(exc), "request_id": rid})
         return Reply(200, None, {"Content-Type": "application/zip", "Cache-Control": "no-store", "X-Package-Sha256": sha,
                                  "Content-Disposition": 'attachment; filename="final-export.zip"'}, package)
 
@@ -221,8 +222,8 @@ class LifecycleRoutes:
                 out["destruction_cancelled"] = holds.enforce_on_keys(owner, token_key=a.key, custody=a.custody,
                                                                      org_id=org, actor_id=actor.id, request_id=rid)
             else:
-                out["resumed"] = holds.resume(owner, token_key=a.key, ledger=a.ledger, custody=a.custody, org_id=org,
-                                              request_id=rid, export_cache=a.export_cache)
+                out["resumed"] = holds.resume(owner, token_key=a.key, ledger=a.ledger, custody=a.custody, crypto=a.crypto,
+                                              org_id=org, request_id=rid, export_cache=a.export_cache)
         return out
 
     # ---- operator ----------------------------------------------------------------------------------------------------
@@ -237,7 +238,7 @@ class LifecycleRoutes:
     def op_erase_confirm(self, op, p, b, rid):
         a = self._app
         return self._owner(lambda c: erasure.confirm_erasure(
-            c, token_key=a.key, ledger=a.ledger, operator_id=op, request_id=rid, org_id=self._org(p),
+            c, token_key=a.key, ledger=a.ledger, crypto=a.crypto, operator_id=op, request_id=rid, org_id=self._org(p),
             erasure_id=p["erasure_id"], export_cache=a.export_cache))
 
     def op_offboard(self, op, p, b, rid):

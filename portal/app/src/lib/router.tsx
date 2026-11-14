@@ -1,3 +1,4 @@
+import { sameOriginTarget } from './safe-return.ts';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { matchRoute } from './routes.ts';
 import type { Matched } from './routes.ts';
@@ -24,8 +25,9 @@ export function RouterProvider({ children, initial }: { children: React.ReactNod
     return () => window.removeEventListener('popstate', pop);
   }, []);
   const navigate = useCallback((to: string, o?: { replace?: boolean }) => {
-    const u = new URL(to, window.location.origin);
-    if (u.origin !== window.location.origin) { window.location.assign(to); return; }
+    const target = sameOriginTarget(to, window.location.origin);
+    if (target === null) { console.error('navigation refused: not a path on this site'); return; }
+    const u = new URL(target, window.location.origin);
     if (o?.replace) window.history.replaceState(null, '', u.pathname + u.search + u.hash);
     else window.history.pushState(null, '', u.pathname + u.search + u.hash);
     navs.current += 1;

@@ -37,8 +37,9 @@ from typing import Callable, Iterable, Optional
 
 import psycopg
 
+from ..safelog import describe
 from .admin_base import ApiError
-from .erasure import (WAIT_INTENT, LifecycleError, LifecycleLedger, audit_org, audit_platform, covering_hold, held_note,
+from .erasure import (WAIT_INTENT, LifecycleError, LifecycleLedger, audit_org, audit_platform, covering_hold, held_note, record_erasure_stop, erasure_stop_present, ERASURE_SOURCE,
                       hold_in, operator_org)
 from .tokens import TokenKey
 
@@ -46,6 +47,7 @@ STOP_TYPES = ("revoke", "suppress")
 KEY_BATCH = 5000  # contact keys read per page when an object names no fingerprint; every page is tried
 RESTORE_SCOPES = ("admin", "worker:restore")
 # "erasure" is the one-phase entry written before the two-phase ledger: like an intent, it runs only with a commit
+ALARM_STOPS_UNCONFIRMED = "restore.stops_unconfirmed"
 INTENT_KINDS = ("erasure_intent", "erasure")
 
 
@@ -110,7 +112,56 @@ def _commits(entries: list[dict], failed: list[dict]) -> dict[int, dict]:
     return out
 
 
-def _replay_erasure(conn, e: dict, commit: dict, n: dict, *, request_id: str) -> None:
+def _replay_stop(conn, crypto, e: dict, n: dict, settled: set, *, unconfirmed: bool = False,
+                 request_id: str = "") -> None:
+    """Write again the stop a ledger entry records, only when the database holds none for that exact entry (erasure and
+    sequence number). A stop the copy already records is counted as present and never written twice, so a backup taken
+    after the erasure (and after the person returned) is left alone. An unconfirmed entry is superseded (not replayed)
+    only when another committed stop entry, or a stop event the copy holds, covers the same erasure; the erasure's own
+    commit never settles its stop. A stop that cannot be written under a missing key is a failed
+    check, not a skip."""
+    fp, eid = e["contact_fp"], e["erasure_id"]
+    if erasure_stop_present(conn, fp, eid, e["seq"]) is not None:
+        n["stops_present"] += 1
+        return
+    if unconfirmed and (eid in settled or conn.execute(
+            "SELECT 1 FROM consentvault.event WHERE org_id = (SELECT consentvault.current_org()) AND contact_fp = %s"
+            " AND source = %s AND (recorded_by LIKE %s OR recorded_by LIKE %s) LIMIT 1",
+            (fp, ERASURE_SOURCE, f"erasure:{eid}:%", f"erasure-unconfirmed:{eid}:%")).fetchone() is not None):
+        n["stops_superseded"].append({"erasure_id": eid, "seq": e["seq"]})
+        return
+    try:
+        with conn.transaction():
+            record_erasure_stop(conn, crypto, fp=fp, erasure_id=eid, channels=e["channels"], unconfirmed=unconfirmed,
+                                stop_seq=e["seq"])
+    except LifecycleError as exc:
+        n["failed_checks"].append({"key": f"ledger:{e['seq']}", "cause": f"erasure_stop_not_replayable: {describe(exc)}"})
+        return
+    n["stops_replayed"] += 1
+    if unconfirmed:
+        from ..alarms import raise_operator_alarm
+
+        n["stops_unconfirmed"].append({"erasure_id": eid, "seq": e["seq"]})
+        audit_org(conn, actor_kind="system", actor_id="restore", action="restore.stop_unconfirmed",
+                  target_kind="erasure", target_id=eid,
+                  reason=f"ledger entry {e['seq']} has no commit: replayed as an unconfirmed stop; lift it only "
+                         "through the normal release rules", request_id=request_id)
+        raise_operator_alarm(conn, name=ALARM_STOPS_UNCONFIRMED, error_class="UnconfirmedErasureStop",
+                             ref_kind="erasure", ref_id=eid, request_id=request_id)
+
+
+RESTORE_REQUESTER = "00000000-0000-0000-0000-000000000000"  # a request the restore records from the ledger
+
+
+def _replay_erasure(conn, crypto, e: dict, commit: dict, n: dict, *, request_id: str) -> None:
+    if conn.execute("SELECT 1 FROM consentvault.erasure_request WHERE org_id = (SELECT consentvault.current_org())"
+                    " AND erasure_id = %s AND status = 'completed'", (e["erasure_id"],)).fetchone() is not None:
+        # the copy records this erasure already: a key it holds now is a returning person's, never deleted again
+        conn.execute("INSERT INTO consentvault.erasure_ledger_commit (org_id, erasure_id, intent_seq, commit_seq)"
+                     " VALUES ((SELECT consentvault.current_org()), %s, %s, %s) ON CONFLICT DO NOTHING",
+                     (e["erasure_id"], e["seq"], commit["seq"]))
+        n["erasures_present"] += 1
+        return
     hold = covering_hold(conn, e["contact_fp"])
     if hold is None:
         try:
@@ -131,16 +182,29 @@ def _replay_erasure(conn, e: dict, commit: dict, n: dict, *, request_id: str) ->
                   + (f"; {note}" if note else ""), request_id=request_id)
         n["erasures_held"].append({"erasure_id": e["erasure_id"], "seq": e["seq"], "hold_id": str(hold)})
         return
-    conn.execute("UPDATE consentvault.erasure_request SET status = 'completed', completed_at = %s,"
+    # the copy may predate the request: record it, so the completion below stamps the sequence the erasure covers
+    conn.execute("INSERT INTO consentvault.erasure_request (org_id, erasure_id, contact_fp, reason, requested_by)"
+                 " VALUES ((SELECT consentvault.current_org()), %s, %s, %s, %s) ON CONFLICT (org_id, erasure_id) DO NOTHING",
+                 (e["erasure_id"], e["contact_fp"], f"restore: replayed from lifecycle ledger entry {e['seq']}",
+                  RESTORE_REQUESTER))
+    done = conn.execute("UPDATE consentvault.erasure_request SET status = 'completed', completed_at = %s,"
                  " confirmed_by = coalesce(confirmed_by, 'restore-replay'), held_by = NULL, held_since = NULL,"
                  " wait_reason = NULL, wait_since = NULL, ledger_seq = %s"
                  " WHERE org_id = (SELECT consentvault.current_org()) AND erasure_id = %s"
-                 " AND status = 'pending_operator_confirmation'", (e["erased_at"], e["seq"], e["erasure_id"]))
+                 " AND status = 'pending_operator_confirmation' RETURNING erasure_id",
+                 (e["erased_at"], e["seq"], e["erasure_id"])).fetchone()
+    if done is None:
+        raise LifecycleError(f"ledger entry {e['seq']} (a committed erasure) could not be recorded as completed: its"
+                             " request is neither open nor completed in the restored copy")
     conn.execute("INSERT INTO consentvault.erasure_ledger_commit (org_id, erasure_id, intent_seq, commit_seq)"
                  " VALUES ((SELECT consentvault.current_org()), %s, %s, %s) ON CONFLICT DO NOTHING",
                  (e["erasure_id"], e["seq"], commit["seq"]))
     n["erasures_replayed"] += 1
     n["keys_deleted"] += bool(deleted)
+    # the contact is gone: an open Twenty clear of this request has nothing left to send (twenty.md 5.1); the fields in
+    # Twenty are the nightly scan's (it recomputes every Person from its remaining contacts)
+    conn.execute("SELECT consentvault.connector_clear_supersede(%s, 'erased', ARRAY['pending', 'failed', 'sent', 'dead'])",
+                 (e["erasure_id"],))
     if deleted:
         audit_org(conn, actor_kind="system", actor_id="restore", action="restore.erasure_replayed",
                   target_kind="erasure", target_id=e["erasure_id"], reason=f"ledger entries {e['seq']} and "
@@ -154,16 +218,24 @@ def _hold_uncommitted(conn, e: dict, *, request_id: str) -> bool:
                        " AND status = 'pending_operator_confirmation' AND wait_reason IS DISTINCT FROM %s"
                        " RETURNING erasure_id", (WAIT_INTENT, e["erasure_id"], WAIT_INTENT)).fetchone()
     if row is not None:
+        # its Twenty clear waits too, revived only by the operator's re-confirm of this request (twenty.md 5.1)
+        conn.execute("SELECT consentvault.connector_clear_supersede(%s, 'held',"
+                     " ARRAY['pending', 'failed', 'sent', 'dead', 'acknowledged'])", (e["erasure_id"],))
         audit_org(conn, actor_kind="system", actor_id="restore", action="erasure.held", target_kind="erasure",
                   target_id=e["erasure_id"], reason=f"{WAIT_INTENT}: ledger entry {e['seq']} has no commit; the key "
                   "was not deleted and the request waits for an operator to confirm it again", request_id=request_id)
     return row is not None
 
 
-def _replay(conn, entries: list[dict], *, request_id: str) -> dict:
-    n = {"holds_restored": 0, "releases_restored": 0, "erasures_replayed": 0, "keys_deleted": 0,
+def _replay(conn, crypto, entries: list[dict], *, request_id: str) -> dict:
+    n = {"holds_restored": 0, "releases_restored": 0, "erasures_replayed": 0, "stops_replayed": 0, "stops_present": 0, "stops_superseded": [], "stops_unconfirmed": [],
+         "erasures_present": 0, "keys_deleted": 0,
          "erasures_held": [], "uncommitted_intents": [], "failed_checks": []}
     commits = _commits(entries, n["failed_checks"])
+    stop_commits = {e.get("stop_seq") for e in entries if e.get("kind") == "erasure_stop_commit"}
+    # a stop is settled only by a committed stop entry of the same erasure (or a stop event of it the copy holds); the
+    # erasure's own commit never settles its stop, so an unsettled stop of a committed erasure is replayed
+    settled = {e.get("erasure_id") for e in entries if e.get("kind") == "erasure_stop" and e["seq"] in stop_commits}
     committed_ids = {c["erasure_id"] for c in commits.values()}
     orphans = []
     for e in entries:
@@ -187,10 +259,15 @@ def _replay(conn, entries: list[dict], *, request_id: str) -> dict:
         elif kind in INTENT_KINDS:
             commit = commits.get(e["seq"])
             if commit is not None:
-                _replay_erasure(conn, e, commit, n, request_id=request_id)
+                _replay_erasure(conn, crypto, e, commit, n, request_id=request_id)
             elif e.get("erasure_id") not in committed_ids:
                 orphans.append(e)
-        elif kind == "erasure_commit":
+        elif kind == "erasure_stop":
+            # committed: replayed as it was. No commit: its transaction may have rolled back, or the ledger was down when
+            # the commit was due. An over-stop is safe and an under-stop is not, so it is replayed marked unconfirmed
+            # and alarmed, one alarm and one audit row for that stop; the operator lifts it only through the release rules
+            _replay_stop(conn, crypto, e, n, settled, unconfirmed=e["seq"] not in stop_commits, request_id=request_id)
+        elif kind in ("erasure_commit", "erasure_stop_commit"):
             continue  # acted on at its intent's place in the order
         else:
             raise LifecycleError(f"ledger entry {e.get('seq')} has an unknown kind {kind!r}")
@@ -359,7 +436,7 @@ def reconcile(conn: psycopg.Connection, *, token_key: TokenKey, crypto, store, l
     for org in [r["o"] for r in conn.execute("SELECT o FROM consentvault.restore_org_ids() AS o")]:
         entries = ledger.entries(org)
         with operator_org(conn, token_key, org, scopes=RESTORE_SCOPES):
-            replayed = _replay(conn, entries, request_id=request_id)
+            replayed = _replay(conn, crypto, entries, request_id=request_id)
             objs = _objects(conn, crypto=crypto, store=store, inventory=inventory, org=org,
                             restore_point=run["restore_point"], region=region, request_id=request_id)
         with operator_org(conn, token_key, org, scopes=RESTORE_SCOPES):  # after every write the reconcile made

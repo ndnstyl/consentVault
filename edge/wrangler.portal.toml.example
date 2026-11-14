@@ -1,0 +1,44 @@
+# The portal Worker: sign-in routes, the cookie-to-vault gateway, and the dashboard's static export. Copy to
+# wrangler.portal.toml and edit; it is published the same way as the capture Worker.
+# Secrets are never written here; set each as a Worker secret with the Cloudflare CLI:
+#   ACCESS_CLIENT_SECRET   the Access service token's secret toward the vault origin
+#   AUTH_CLIENT_SECRET     the identity provider's server key (used only for the code exchange and refresh)
+#   ASSERTION_KEY_JWK      the edge's private P-256 key (JWK with a kid); required: without it every sign-in route answers 500.
+#                          The vault is configured with the public half (CONSENTVAULT_EDGE_ASSERTION_KEYS, key id to PEM).
+#                          Rotation order: 1) add the new key id and public key to the vault's setting, 2) deploy the edge
+#                          with the new private key, 3) wait about two and a half minutes, then remove the old key id from the vault's setting.
+name = "consentvault-portal"
+main = "src/portal.ts"
+compatibility_date = "2026-01-01"
+
+[assets]
+directory = "../portal/app/out"
+binding = "ASSETS"
+# The Worker runs first for these paths; every other path is served straight from the static export.
+run_worker_first = ["/auth/*", "/v1/*"]
+
+# Session store: one record per sign-in, keyed by a hash of the opaque cookie value. Make a key-value namespace for it
+# and paste its id.
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "replace-with-the-namespace-id"
+
+# One object per session owns the session record and is its only writer: two requests can never write an older copy over
+# a newer one, and the provider's single-use refresh token is spent once.
+[[durable_objects.bindings]]
+name = "SESSION_GATE"
+class_name = "SessionGate"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SessionGate"]
+
+[vars]
+ORIGIN_URL = "https://vault.example.com"
+ACCESS_CLIENT_ID = "replace-with-the-access-service-token-id"
+# The identity provider's user-management base (WorkOS: https://api.workos.com/user_management).
+AUTH_BASE_URL = "https://api.workos.com/user_management"
+AUTH_CLIENT_ID = "replace-with-the-provider-client-id"
+# The portal's own origin. The redirect address registered with the provider is <PUBLIC_URL>/auth/callback and the
+# sign-out redirect is <PUBLIC_URL>/sign-in.
+PUBLIC_URL = "https://app.example.com"

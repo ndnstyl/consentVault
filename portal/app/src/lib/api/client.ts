@@ -27,6 +27,8 @@ export interface ClientOptions {
   fetch?: typeof fetch;
   timeoutMs?: number;
   onUnauthenticated?: () => void;
+  orgId?: () => string | null;       // the organization this tab shows; sent on every request so a write can never land in another
+  onOrgMismatch?: () => void;        // the session's organization is no longer the one this tab shows
   requestId?: () => string;
 }
 
@@ -54,10 +56,12 @@ export function createClient(opts: ClientOptions = {}) {
       res = await doFetch(`${base}${path}${qs(o.query)}`, {
         method,
         credentials: 'include',
+        cache: 'no-store',
         signal: ctl.signal,
         headers: {
           accept: 'application/json',
           'x-request-id': rid(),
+          ...(opts.orgId?.() ? { 'x-cv-org': opts.orgId()! } : {}),
           ...(o.body !== undefined ? { 'content-type': 'application/json' } : {}),
         },
         body: o.body !== undefined ? JSON.stringify(o.body) : undefined,
@@ -86,6 +90,7 @@ export function createClient(opts: ClientOptions = {}) {
       retry ? Number(retry) || null : null,
     );
     if (res.status === 401 && opts.onUnauthenticated) opts.onUnauthenticated();
+    if (res.status === 409 && b.error === 'org_mismatch' && opts.onOrgMismatch) opts.onOrgMismatch();
     throw err;
   }
 
@@ -125,7 +130,9 @@ export function createClient(opts: ClientOptions = {}) {
       list: (q?: Paged & { action?: string; actor?: string; target_kind?: string; from?: string; to?: string }) => get<T.Page<T.AuditRow>>('/v1/audit', q),
       actions: (q?: Paged) => get<T.Page<{ action: string; label: string }>>('/v1/audit/actions', q),
     },
-    // admin.md
+    // admin.md (names only: the one brand and source read a compliance viewer has)
+    brandNames: (q?: Paged) => get<T.Page<T.BrandName>>('/v1/brand-names', q),
+    sourceNames: (q?: Paged) => get<T.Page<T.SourceName>>('/v1/source-names', q),
     brands: {
       list: (q?: Paged) => get<T.Page<T.Brand>>('/v1/brands', q),
       create: (display_name: string) => post<{ brand_id: string; display_name: string; created_at: string }>('/v1/brands', { display_name }),
@@ -140,6 +147,9 @@ export function createClient(opts: ClientOptions = {}) {
       list: (q?: Paged & { source_id?: string; kind?: string; scope?: string; status?: string }) => get<T.Page<T.Credential>>('/v1/credentials', q),
       issue: (b: { name: string; kind: T.CredentialKind; scope: T.CredentialScope; source_id?: string; public_key?: string; algorithm?: string }) => post<T.CredentialIssued>('/v1/credentials', b),
       revoke: (id: string, reason: string) => post<{ credential_id: string; revoked_at: string }>(`/v1/credentials/${enc(id)}:revoke`, { reason }),
+    },
+    sso: {
+      set: (require_sso: boolean) => put<T.SsoSaved>('/v1/org/sso', { require_sso }),
     },
     retention: {
       get: (q?: Paged) => get<T.Retention>('/v1/retention', q),
@@ -198,6 +208,47 @@ export function createClient(opts: ClientOptions = {}) {
       get: (id: string) => get<T.ExportDetail>(`/v1/exports/${enc(id)}`),
       link: (id: string) => post<{ download_url: string; expires_at: string }>(`/v1/exports/${enc(id)}:link`),
       resume: (id: string) => post<{ export_id: string; status: 'building' }>(`/v1/exports/${enc(id)}:resume`),
+    },
+    // records.md (a contact point is only ever in a POST body)
+    records: {
+      list: (q?: T.RecordFilters & Paged) => get<T.RecordsPage>('/v1/records', q as Query),
+      summary: (q?: T.RecordFilters & { tz?: string }) => get<T.RecordsSummary>('/v1/records/summary', q as Query),
+      search: (contact: string) => post<{ items: T.ContactRecord[] }>('/v1/records:search', { contact }),
+      reveal: (record_ids: string[], reason?: string) => post<T.RevealAnswer>('/v1/records:reveal', reason ? { record_ids, reason } : { record_ids }),
+      exportCreate: (b: { filters: T.RecordFilters; contact_form: 'masked' | 'full' | 'fingerprint'; include_person: boolean; reason?: string }) => post<{ export_id: string; status: 'building'; row_estimate: number | null }>('/v1/records/exports', b),
+      exportList: (q?: Paged) => get<T.Page<T.RecordsExportItem>>('/v1/records/exports', q),
+      exportGet: (id: string) => get<T.RecordsExportDetail>(`/v1/records/exports/${enc(id)}`),
+      exportLink: (id: string) => post<{ download_url: string; expires_at: string }>(`/v1/records/exports/${enc(id)}:link`),
+    },
+    // setup.md
+    setup: {
+      get: () => get<T.SetupAnswer>('/v1/setup'),
+      skip: (step: T.SetupStepName, reason?: string) => post<T.SetupStep>(`/v1/setup/steps/${enc(step)}:skip`, reason ? { reason } : {}),
+      unskip: (step: T.SetupStepName) => post<T.SetupStep>(`/v1/setup/steps/${enc(step)}:unskip`),
+    },
+    // confirmations.md
+    confirmations: {
+      settings: () => get<T.ConfirmationSettings>('/v1/confirmations/settings'),
+      saveSender: (b: { organization_name: string; postal_address: string; help_contact: { email: string; phone?: string } }) => put<T.ConfirmationSettings>('/v1/confirmations/settings', b),
+      connectAccount: (b: Record<string, unknown>) => post<T.SendingAccount>('/v1/confirmations/sending-accounts', b),
+      checkAccount: (id: string) => post<T.SendingAccount>(`/v1/confirmations/sending-accounts/${enc(id)}:check`),
+      setProviderReplies: (id: string, provider_replies_itself: boolean) => patch<T.SendingAccount>(`/v1/confirmations/sending-accounts/${enc(id)}`, { provider_replies_itself }),
+      disconnectAccount: (id: string, reason: string) => request<unknown>('DELETE', `/v1/confirmations/sending-accounts/${enc(id)}`, { body: { reason } }),
+      setLinkHost: (host: string) => post<T.LinkHost>('/v1/confirmations/link-host', { host }),
+      verifyLinkHost: () => post<T.LinkHost>('/v1/confirmations/link-host:verify'),
+      markRegistration: (kind: string, reference?: string) => post<T.ConfirmationSettings['texting_registration']>('/v1/confirmations/texting-registration', { kind, ...(reference ? { reference } : {}), accepted: true, samples_included: true }),
+      withdrawRegistration: (reason: string) => post<T.ConfirmationSettings['texting_registration']>('/v1/confirmations/texting-registration:withdraw', { reason }),
+      rules: (q?: Paged) => get<T.Page<T.ConfirmationRule>>('/v1/confirmations/rules', q),
+      saveRule: (source_id: string, channel: 'email' | 'sms', b: { enabled: boolean; sending_brand_id: string; template_id?: string; send_for_test_events?: boolean; dedupe_hours?: number; max_delay_minutes?: number }) =>
+        put<T.ConfirmationRule>(`/v1/confirmations/rules/${enc(source_id)}/${enc(channel)}`, b),
+      templates: (q?: Paged) => get<T.Page<T.ConfirmationTemplate>>('/v1/confirmations/templates', q),
+      template: (id: string) => get<T.ConfirmationTemplateDetail>(`/v1/confirmations/templates/${enc(id)}`),
+      createTemplate: (b: { subject: string; opening_line?: string }) => post<{ template_id: string; version: number }>('/v1/confirmations/templates', b),
+      preview: (b: { source_id: string; channel: 'email' | 'sms'; template_id?: string; template?: { subject: string; opening_line?: string } }) => post<T.ConfirmationPreview>('/v1/confirmations:preview', b),
+      test: (b: { source_id: string; channel: 'email' | 'sms'; contact: string }) => post<{ send_id: string; status: string }>('/v1/confirmations:test', b),
+      sends: (q?: Paged & { status?: string; channel?: string; source_id?: string; from?: string; to?: string }) => get<T.Page<T.ConfirmationSend>>('/v1/confirmations/sends', q),
+      replies: (q?: Paged & { state?: string }) => get<T.Page<T.ConfirmationReply>>('/v1/confirmations/replies', q),
+      markReply: (reply_id: string, decision: 'stop' | 'not_stop', reason: string) => post<T.ConfirmationReply>(`/v1/confirmations/replies/${enc(reply_id)}:mark`, { decision, reason }),
     },
     // billing.md
     billing: {

@@ -9,6 +9,8 @@ export const BANNED: RegExp[] = [
   /allowed to (contact|call|text|email|dial)/i, /safe to/i, /cleared to/i, /OK to contact/i, /guarantee/i,
   /hold(s)? up in court/i, /court-ready/i, /qualifies/i, /satisfied/i, /meets (the )?TCPA/i, /something went wrong/i,
   /—/, /–/,
+  // copy-rules.md section 8 (2026-10-30)
+  /consent confirmed/i, /confirmed consent/i, /verified consent/i, /\bopted in\b/i, /\b(has|with|without) consent\b/i,
 ];
 
 function esc(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }

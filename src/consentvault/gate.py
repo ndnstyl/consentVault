@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 
 import psycopg
 
+from . import dbclock
+from .safelog import describe
 from .errors import ConsentVaultError, NormalizationError
 from .ledger import CHANNELS
 from .normalize import normalize_contact
@@ -49,7 +51,7 @@ def may_contact(
     try:
         kind, norm = normalize_contact(contact, None, region)
     except NormalizationError as exc:
-        return _deny(f"{REASON_BAD_CONTACT}:{exc}")
+        return _deny(f"{REASON_BAD_CONTACT}:{describe(exc)}")
     purpose = purpose.strip().lower()
     try:
         row = conn.execute(
@@ -114,8 +116,49 @@ def record_contact(
             (kind, norm, channel, purpose, when, outcome, ref, recorded_by),
         ).fetchone()
     except psycopg.Error as exc:
-        raise ConsentVaultError(f"contact log write refused by the database: {exc}") from exc
+        raise ConsentVaultError(f"contact log write refused by the database: {describe(exc)}") from exc
     return row["contact_log_id"]
+
+
+def record_tenant_contact(
+    conn: psycopg.Connection,
+    *,
+    org,
+    data_key: bytes,
+    contact_fp: str,
+    contact_kind: str,
+    contact_norm: str,
+    channel: str,
+    outcome: str,
+    contacted_at: datetime,
+    recorded_by: str,
+    ref: str | None = None,
+    purpose: str | None = None,
+) -> str:
+    """Log an outbound message in the entered organisation (confirmations.md section 10, core change C4): the contact point is kept
+    only as a ciphertext under the contact's data key, bound to the organisation, this row and the column ``contact_ct`` (the clear
+    column stays null, which the tenancy migration already allows). ``contacted_at`` is the time the caller's clock stamped;
+    ``recorded_at`` keeps the database default, because the release rule compares it with the ledger's own receipt times. The
+    insert returns nothing, so a capture-scope token needs no read of the table. Returns the row's uuid."""
+    import uuid as _uuid
+
+    from .tenancy import crypto as tc
+
+    if channel not in CHANNELS:
+        raise NormalizationError(f"unknown channel {channel!r}; allowed: {list(CHANNELS)}")
+    if contacted_at.tzinfo is None:
+        raise NormalizationError("contacted_at must be timezone-aware")
+    row_id = _uuid.uuid4()
+    try:
+        conn.execute(
+            "INSERT INTO consentvault.contact_log (org_id, contact_log_uuid, contact_kind, contact_norm, channel, purpose, contacted_at,"
+            " outcome, ref, recorded_by, contact_fp, contact_ct) VALUES ((SELECT consentvault.current_org()), %s, %s, NULL, %s, %s, %s,"
+            " %s, %s, %s, %s, %s)",
+            (row_id, contact_kind, channel, purpose, contacted_at, outcome, ref, recorded_by, contact_fp,
+             tc.encrypt_field(data_key, org, str(row_id), "contact_ct", contact_norm)))
+    except psycopg.Error as exc:
+        raise ConsentVaultError(f"contact log write refused by the database: {describe(exc)}") from exc
+    return str(row_id)
 
 
 # Multi-tenant gate: evidence status and the client's approved policy ---------------------------------------------------
@@ -211,7 +254,7 @@ class TenantGate:
 
         self.conn, self.crypto, self.org = conn, crypto, org
         self.requested_by, self.region = requested_by, region
-        self.now = now or datetime.now(timezone.utc)
+        self._pinned_now = now   # tests only; a gate with none reads the database's clock at each check
         self.channels = org_channels(conn)
         self.purposes = org_purposes(conn)
         self.policy_error: str | None = None
@@ -240,7 +283,8 @@ class TenantGate:
         from .tenancy.errors import KeyProviderError
 
         kind, norm, channel, purpose = self.validate(item)
-        evaluated_at = _iso(datetime.now(timezone.utc))
+        now = self._pinned_now or dbclock.now(self.conn)
+        evaluated_at = _iso(now)
         try:
             fp = self.crypto.contact_fingerprint(self.org, kind, norm)
         except KeyProviderError:
@@ -256,7 +300,7 @@ class TenantGate:
                     if version is not None and ev.kind == engine.FOUND and ev.grant is not None:
                         ev = engine.incomplete(ev, missing_elements(self.conn, ev.grant.event_id, version))
                     out = engine.decide(ev, self.policy, channel=channel, purpose=purpose, contact_fp=fp,
-                                        now=self.now)
+                                        now=now)
             except PolicyStoreError:
                 cause = "doc_check_results"
             except engine.PolicyRuleError:
@@ -284,6 +328,9 @@ class TenantGate:
                     (decision_id, fp, channel, purpose, out.evidence_status, out.policy_action, out.policy_version,
                      out.approved_by, out.approved_at, list(out.basis_event_ids), list(out.reasons),
                      self.requested_by, batch_id))
+                # the usage tally rides the same savepoint: a decision is counted if and only if it is recorded
+                self.conn.execute("INSERT INTO consentvault.gate_check_tally (org_id, day)"
+                                  " VALUES (consentvault.current_org(), (clock_timestamp() AT TIME ZONE 'UTC')::date)")
         except psycopg.Error as exc:
             raise GateRecordError(f"the gate decision could not be recorded: {type(exc).__name__}") from exc
         return decision_id

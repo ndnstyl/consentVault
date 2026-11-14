@@ -420,3 +420,49 @@ export function References() {
 }
 
 void ORG_STATUS_LABEL; void SuccessBanner; void useEffect; void useRef;
+
+// ---- Company sign-in (admin) ----
+export function CompanySignIn() {
+  const { api, orgName } = useSession();
+  const res = useResource(() => api.session.org(), [api]);
+  const [saved, setSaved] = useState<string | null>(null);
+  const save = useAction((req: boolean) => api.sso.set(req));
+  if (res.status === 'loading') return <><PageHead title="Company sign-in" /><Skeleton what="company sign-in" /></>;
+  if (res.status === 'error') return <><PageHead title="Company sign-in" /><ErrorBlock title="Company sign-in did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
+  const sso = 'sso' in res.data ? res.data.sso : undefined;
+  const run = async (req: boolean, done: string) => { const r = await save.run(req); if (r.ok) { setSaved(done); res.refresh(); } };
+  return (
+    <>
+      <PageHead title="Company sign-in" lede={`Let ${orgName} sign in with its company account (Okta, Microsoft Entra or Google Workspace), and choose whether it is required.`} />
+      {saved && <SuccessBanner>{saved}</SuccessBanner>}
+      <div className="card">
+        {save.error && <ErrorBlock title="That was not saved" err={save.error} next="Nothing was changed." headingLevel={3} />}
+        {!sso?.connected && (
+          <StateBlock kind="empty" title="No company account is connected">
+            ConsentVault connects your company account for you. Ask your ConsentVault contact to connect it. Until then, everyone signs in with a passkey.
+          </StateBlock>
+        )}
+        {sso?.connected && !sso.verified && (
+          <>
+            <p><b>Connected, waiting for an admin to confirm it.</b> Your ConsentVault contact connected your company account. To confirm it is yours, an admin signs in once with the company account.</p>
+            <LinkBtn href="/sign-in" variant="primary">Sign in with your company</LinkBtn>
+          </>
+        )}
+        {sso?.verified && !sso.required && (
+          <>
+            <p><b>Connected and confirmed.</b> Members may use a passkey or the company account.</p>
+            <p>Requiring it signs out everyone who did not come through it, on their next click. You must be signed in through the company account yourself.</p>
+            <Btn variant="danger" busy={save.busy} busyLabel="Saving" onClick={() => run(true, 'Company sign-in is now required for everyone.')}>Require company sign-in</Btn>
+          </>
+        )}
+        {sso?.required && (
+          <>
+            <p><b>Required.</b> Every member must sign in with the company account.</p>
+            <Btn variant="secondary" busy={save.busy} busyLabel="Saving" onClick={() => run(false, 'Company sign-in is no longer required. Passkeys work again.')}>Stop requiring it</Btn>
+          </>
+        )}
+        <p className="hint mt4">Personal Google or Microsoft accounts are never accepted. If your company account is down and nobody can sign in, ask your ConsentVault contact: they can lift the requirement and your admins are told here.</p>
+      </div>
+    </>
+  );
+}

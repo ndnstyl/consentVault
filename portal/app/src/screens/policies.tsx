@@ -6,6 +6,7 @@ import { useAction, useResource } from '../lib/hooks.ts';
 import { Link, useRouter } from '../lib/router.tsx';
 import { canDo } from '../lib/roles.ts';
 import { useSession } from '../lib/session.tsx';
+import type { Embedded } from '../components/ui.tsx';
 import { Banner, Btn, Check, Chip, DataTable, ErrorBlock, Icon, KV, LinkBtn, NotAvailable, PageHead, PolicyChip, Skeleton, StateBlock, SuccessBanner, Tabs, TextField, Time } from '../components/ui.tsx';
 
 const STATUSES: { key: EvidenceStatusKey; label: string }[] = [
@@ -122,7 +123,7 @@ export function Policies() {
 }
 
 // ---------- 11 Policy: new draft, edit draft, read ----------
-export function PolicyNew() {
+export function PolicyNew({ embedded }: { embedded?: Embedded } = {}) {
   const { api, role } = useSession();
   const { navigate } = useRouter();
   const refs = useRefs();
@@ -152,11 +153,14 @@ export function PolicyNew() {
   const submit = async (approveNext: boolean) => {
     if (!rules) return;
     const r = await save.run(rules, ['blank', 'inforce'].includes(start) ? undefined : start, start === 'inforce' ? load.status === 'ok' ? load.data.inForce?.version : undefined : undefined);
-    if (r.ok) navigate(approveNext ? `/policies/${r.value.version}/approve` : `/policies/${r.value.version}?saved=1`);
+    if (r.ok) {
+      if (embedded && !approveNext) embedded.onDone(`Draft saved as version ${r.value.version}. The step is done once a policy is approved.`, `/policies/${r.value.version}/approve`);
+      else navigate(approveNext ? `/policies/${r.value.version}/approve` : `/policies/${r.value.version}?saved=1`);
+    }
   };
   return (
     <>
-      <PageHead title="Draft a policy" lede="Your policy tells your systems what to do with each evidence status. ConsentVault applies it exactly as written. It does not decide whether a message is allowed by law." />
+      {!embedded && <PageHead title="Draft a policy" lede="Your policy tells your systems what to do with each evidence status. ConsentVault applies it exactly as written. It does not decide whether a message is allowed by law." />}
       {(refs.status === 'loading' || load.status === 'loading') && <Skeleton what="the policy editor" variant="table" />}
       {err && <ErrorBlock title="The policy editor did not load" err={err} next="Try again." actions={<Btn onClick={() => { refs.reload(); load.reload(); }}>Try again</Btn>} />}
       {ready && rules && (
@@ -170,7 +174,7 @@ export function PolicyNew() {
             </select></div>
           <PolicyMatrix rules={rules} channels={refs.data.channels} purposes={refs.data.purposes} editable onChange={setRules} checklistLabel={(v) => (v ? `checklist v${v}` : 'no checklist')} />
           <ChecklistPick rules={rules} setRules={setRules} checklists={refs.data.checklists} />
-          <div className="actions"><LinkBtn href="/policies" variant="secondary">Cancel</LinkBtn><Btn onClick={() => submit(false)} busy={save.busy} busyLabel="Saving">Save draft</Btn><Btn variant="primary" onClick={() => submit(true)} disabled={save.busy}>Review and approve</Btn></div>
+          <div className="actions">{!embedded && <LinkBtn href="/policies" variant="secondary">Cancel</LinkBtn>}<Btn onClick={() => submit(false)} busy={save.busy} busyLabel="Saving">Save draft</Btn><Btn variant="primary" onClick={() => submit(true)} disabled={save.busy}>Review and approve</Btn></div>
         </div>
       )}
     </>

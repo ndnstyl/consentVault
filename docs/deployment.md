@@ -23,7 +23,7 @@ ConsentVault.AI splits the database into roles, and the split is part of the pro
 | migrator (`consentvault_migrator`) | a login role that is a member of the owner, with the owner as its default role (`ALTER ROLE consentvault_migrator SET role = 'consentvault_owner'`), so every migration runs as the owner | `consentvault migrate` only (`CONSENTVAULT_OWNER_DSN`) |
 | operator console (`consentvault_operator_login`, a member of `consentvault_console`) | holds only the grants the operator console and the operator jobs need (migration `0019`), owns nothing, bound by row-level security; it cannot alter a table, replace a function or switch a trigger off | the operator console and `consentvault erasure-resume` (`CONSENTVAULT_OPERATOR_DSN`) |
 | runtime | a login role that is a **member of the group role `consentvault_app`**; it holds `SELECT` and `INSERT` on the ledger tables and the views and `EXECUTE` on the tenant functions, and nothing else | every other command and the API (`CONSENTVAULT_DSN`) |
-| worker (`consentvault_worker` group) | background jobs with per-organisation worker tokens | the sync worker |
+| worker (`consentvault_worker` group) | background jobs with per-organisation worker tokens, and the replay-guard sweep | the sync worker and `consentvault replay-sweep` (`CONSENTVAULT_DSN` set to the worker login) |
 
 The runtime and console roles own nothing, have no `TRUNCATE`, cannot alter the schema and cannot disable triggers,
 because all of that needs ownership. A superuser makes the roles once (the reference stack does it in
@@ -34,6 +34,10 @@ CREATE ROLE consentvault_app NOLOGIN;
 CREATE ROLE consentvault_worker NOLOGIN;
 CREATE ROLE consentvault_operator NOLOGIN BYPASSRLS;   -- owns the narrow cross-organisation lookups; nobody logs in as it
 CREATE ROLE consentvault_console NOLOGIN;
+CREATE ROLE consentvault_integrity NOLOGIN;            -- the seal, verify and anchor jobs in multi-tenant mode (0048)
+CREATE ROLE consentvault_records_jobs NOLOGIN;         -- the records export worker in multi-tenant mode (0050); sign-in by AWS token only
+CREATE ROLE consentvault_isolation_self_test NOLOGIN;  -- the nightly isolation self-test (0059): canary tokens and reads only
+CREATE ROLE consentvault_restore_drill NOLOGIN;        -- the restore drill (0059): appends its drill record only
 CREATE ROLE consentvault_owner NOLOGIN IN ROLE consentvault_operator;
 CREATE ROLE consentvault_migrator LOGIN PASSWORD '...' IN ROLE consentvault_owner;
 ALTER ROLE consentvault_migrator SET role = 'consentvault_owner';
@@ -132,6 +136,17 @@ ALTER ROLE consentvault_owner NOLOGIN;
 
 Then point `CONSENTVAULT_OWNER_DSN` at the migrator, the operator console and `erasure-resume` at the operator login
 (`CONSENTVAULT_OPERATOR_DSN`), and migrate. Migration 0019 refuses, by name, while `consentvault_console` is missing.
+
+## Scheduled jobs
+
+Run each as `python -m consentvault.jobs <name>`; a job that fails exits 2 and the schedule shows a failed task.
+
+| job | login | when |
+|---|---|---|
+| `alarm-relay` | worker (`CONSENTVAULT_DSN`; in the cloud its own task role whose database user is a member of `consentvault_worker`, allowed `sns:Publish` to the alerts topic only). It reads and marks alarms through two functions and holds no table right | every 5 minutes. Publishes each operator alarm not yet relayed to the alerts channel (`CONSENTVAULT_ALERTS_TOPIC_ARN`, an SNS topic, in the cloud; `CONSENTVAULT_ALERTS_LOG`, a file, in the self-host; a log file is refused in the cloud), retrying with backoff, and marks it relayed only after the publish succeeded. The message carries the alarm kind, organisation id, counts and times and nothing else. Exit 2 names an alarm it could not publish; exit 3 says an alarm waited past 15 minutes, so the relay itself was down |
+| `replay-sweep` | worker (`CONSENTVAULT_DSN`) | hourly. Deletes replay-guard rows that expired more than an hour ago (the hour is margin for clock skew between processes, so a late or early sweep never lets a signed request be accepted twice). On the runtime login it exits 2. |
+| `erasure-resume` | operator (`CONSENTVAULT_OPERATOR_DSN`) plus the key provider setting | as before |
+| `erasure-commit-sweep` | its own task role whose database user is a member of `consentvault_console` (the operator console's grants: read the requests and stop events, insert the commit record and the alarm). **No key provider, no KMS role, no key custody**: it never opens a contact key. Settings: the database login settings, `CONSENTVAULT_TOKEN_KEY_ID`/`_FILE`, and the ledger store (`CONSENTVAULT_LIFECYCLE_LEDGER_BUCKET` and `_REGION` in the cloud, read and write on that bucket only; `CONSENTVAULT_LIFECYCLE_LEDGER_DIR` in the self-host). A local folder is refused in the cloud. Fails by name on the worker or runtime login | hourly. Writes the ledger commits that are due, raises an operator alarm for each organisation holding an intent over an hour old without a commit, and exits 3 while any is overdue |
 
 ## Settings
 

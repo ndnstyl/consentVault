@@ -254,11 +254,11 @@ def decide(
     channel: str,
     purpose: str,
     contact_fp: str,
-    now: datetime | None = None,
+    now: datetime,
     apply_rules: bool = True,
 ) -> Outcome:
-    """The policy action for one evidence status. Raises ``PolicyRuleError`` on a malformed approved rule."""
-    now = now or datetime.now(timezone.utc)
+    """The policy action for one evidence status, judged at ``now``: the caller passes the database's clock, there is no default.
+    Raises ``PolicyRuleError`` on a malformed approved rule."""
     reasons = [evidence.reason]
     if policy is None:
         return Outcome(evidence.status, None, None, None, None, evidence.basis_event_ids,

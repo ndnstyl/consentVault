@@ -7,3 +7,4 @@
 /exports/* /exports.html 200
 /systems/new /systems/new.html 200
 /systems/* /systems.html 200
+/confirmations/* /confirmations.html 200

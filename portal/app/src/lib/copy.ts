@@ -1,6 +1,6 @@
 import type { OrgStatus, Role } from './api/types.ts';
 
-// Copy of record: /Users/oxfloors/debwe/portal/design/copy-rules.md and the wireframe text.
+// Copy of record: portal/design/copy-rules.md and the wireframe text.
 // No em dashes or en dashes. Never a legal conclusion.
 
 export const GATE_NOTICE = "Evidence status and the outcome of your organization's approved policy. Not a legal determination.";
@@ -64,6 +64,8 @@ export const ROLE_DESCRIPTION: Record<Role, string> = {
 
 // ---- Plain causes (copy-rules.md section 5, plus the contract errors the screens meet) ----
 const CAUSES: Record<string, string> = {
+  sso_required: 'your organization requires you to sign in with your company account, and this sign-in did not come through it',
+  sso_not_connected: "this organization has not connected that company sign-in, or its admin has not proved it yet",
   key_unavailable: "your organization's encryption key did not answer",
   service_unavailable: 'the service did not answer',
   stripe_unavailable: 'Stripe did not answer',
@@ -114,6 +116,22 @@ const CAUSES: Record<string, string> = {
   second_factor_required: 'your sign-in shows no passkey or second factor',
   not_a_member: 'you are not a member of that organization',
   unauthenticated: 'your session ended',
+  audit_unavailable: 'the audit log could not record this view',
+  export_too_large: 'the list is over the number of records one file can hold',
+  export_in_progress: 'another file for your organization is still being built',
+  export_link_expired: 'the download link expired',
+  link_host_dns_missing: 'the DNS record for the link host was not found',
+  link_host_not_verified: 'the wording link host is not verified',
+  texting_not_registered: 'texting registration is not marked complete',
+  inbound_not_verified: 'no test reply has reached ConsentVault',
+  no_sending_account: 'no sending account is connected for that channel',
+  sender_details_missing: 'the organization name, postal address or help contact is missing',
+  sender_not_verified: 'the sending domain is not verified at the provider',
+  provider_not_supported: 'that provider is not supported for this channel',
+  provider_unreachable: 'the sending provider did not answer',
+  provider_refused: 'the sending provider refused the request',
+  inbound_still_pointed_here: 'your number still sends its replies to ConsentVault',
+  step_not_skippable: 'only the optional steps can be skipped',
 };
 
 export function causeFor(code: string): string {
@@ -142,3 +160,50 @@ export const CAPTURE_REFUSALS: { answer: string; means: string; todo: string }[]
   { answer: '429 rate_limited', means: 'Too many requests.', todo: 'Wait and send again.' },
   { answer: '503 key_unavailable', means: 'Nothing was written. Your encryption key could not be reached.', todo: 'Send again in a minute. Report it if it repeats.' },
 ];
+
+// ---- Records, setup and confirmation messages (copy-rules.md section 8) ----
+export const RECORDS_NOTICE = 'Evidence status describes the records held. Your policy outcome for a contact is on its evidence lookup page.';
+export const RECORDS_SEARCH_HINT = 'Whole number or address only. Each contact is stored encrypted, so partial search is not possible.';
+export const REVEAL_DIALOG = 'Each page you open this way writes one audit row with your name and the records shown.';
+export const REGISTRATION_DIALOG = 'ConsentVault records who marked it and when. It does not check your registration with carriers or your provider.';
+
+/** Confirmation status words for a record's latest send (records.md section 2). */
+export function confirmationWord(c: { last_status: string; channel: string } | null): string {
+  if (!c) return 'None';
+  const ch = c.channel === 'sms' ? 'Text' : c.channel === 'email' ? 'Email' : c.channel;
+  const w: Record<string, string> = { sent: 'sent', delivered: 'delivered', failed: 'failed', dead: 'undelivered after 2 hours', skipped: 'not sent' };
+  return `${ch} ${w[c.last_status] ?? c.last_status}`;
+}
+
+/** Why a send did not go out (copy-rules.md section 8, skip names from confirmations.md section 5). */
+export function skipWord(reason: string | null, ctx: { brand?: string; delay?: number; hours?: number } = {}): string {
+  const b = ctx.brand ?? 'that brand';
+  const m: Record<string, string> = {
+    quiet_hours: "Not sent: outside texting hours (in the person's time zone)",
+    time_zone_unknown: "Not sent: the person's time zone could not be told from the number",
+    brand_not_in_grant: `Not sent: the consent does not name ${b}`,
+    inbound_not_verified: 'Not sent: no test reply has reached ConsentVault',
+    link_host_failing: 'Not sent: your wording link host is not answering',
+    no_sending_account: 'Not sent: no sending account connected',
+    sending_account_failing: 'Not sent: your provider refused the account 5 times in a row; check the account',
+    channel_not_in_grant: 'Not sent: the consent does not name this channel',
+    contact_kind: 'Not sent: no address for this channel',
+    late: `Not sent: the consent arrived more than ${ctx.delay ?? 10} minutes after it was captured`,
+    stop_on_record: 'Not sent: stop on record',
+    recent_confirmation: `Not sent: one was sent in the last ${ctx.hours ?? 24} hours`,
+    texting_not_registered: 'Not sent: texting registration not marked',
+    org_not_active: 'Not sent: organization not active',
+    test_event: 'Not sent: test events are off for this rule',
+    contact_erased: 'Not sent: the contact was erased',
+    org_hourly_cap: 'Not sent: the hourly sending limit was reached',
+  };
+  return reason ? m[reason] ?? `Not sent: ${reason.replace(/_/g, ' ')}` : 'Not sent';
+}
+
+export function deadCauseWord(cause: string | null): string {
+  if (!cause) return NA;
+  if (cause === 'provider_unreachable') return 'Provider did not answer (502 provider_unreachable)';
+  if (cause === 'key_unavailable') return "Your organization's encryption key did not answer (503 key_unavailable)";
+  const m = /^retry:(\d+)$/.exec(cause);
+  return m ? `Provider answered ${m[1]}` : `The service answered ${cause}`;
+}

@@ -1,0 +1,2354 @@
+{
+ "about": "Database refusal codes: one per (raising function and signature, sentence), current definitions only. Built by scripts/build_refusal_codes.py from the migrations; never edited by hand.",
+ "sites": [
+  {
+   "code": "db_append_audit_detailed_mpxkhs",
+   "function": "consentvault.append_audit_detailed",
+   "signature": "text,text,text,text,text,text,text,jsonb",
+   "line": 12,
+   "template": "consentvault audit: an audit row needs an entered tenant",
+   "meaning": "consentvault audit: an audit row needs an entered tenant",
+   "defined_in": "0045_audit_detail.sql"
+  },
+  {
+   "code": "db_append_audit_ymhngt",
+   "function": "consentvault.append_audit",
+   "signature": "text,text,text,text,text,text,text",
+   "line": 12,
+   "template": "consentvault audit: an audit row needs an entered tenant",
+   "meaning": "consentvault audit: an audit row needs an entered tenant",
+   "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_approve_operator_access_spyyrv",
+   "function": "consentvault.approve_operator_access",
+   "signature": "text,text,integer",
+   "line": 23,
+   "template": "consentvault operator access approval refused: the session is not an admin of the organization",
+   "meaning": "consentvault operator access approval refused: the session is not an admin of the organization",
+   "defined_in": "0021_access_approval_clock.sql"
+  },
+  {
+   "code": "db_approve_operator_access_xpyrhw",
+   "function": "consentvault.approve_operator_access",
+   "signature": "text,text,integer",
+   "line": 12,
+   "template": "consentvault operator access approval refused: no portal member session is entered",
+   "meaning": "consentvault operator access approval refused: no portal member session is entered",
+   "defined_in": "0021_access_approval_clock.sql"
+  },
+  {
+   "code": "db_approve_operator_access_zkxppp",
+   "function": "consentvault.approve_operator_access",
+   "signature": "text,text,integer",
+   "line": 18,
+   "template": "consentvault operator access approval refused: the session names no member",
+   "meaning": "consentvault operator access approval refused: the session names no member",
+   "defined_in": "0021_access_approval_clock.sql"
+  },
+  {
+   "code": "db_audit_chain_guard_hzzryj",
+   "function": "consentvault.audit_chain_guard",
+   "signature": "",
+   "line": 18,
+   "template": "consentvault audit: row_hash does not match the row",
+   "meaning": "consentvault audit: row_hash does not match the row",
+   "defined_in": "0045_audit_detail.sql"
+  },
+  {
+   "code": "db_audit_chain_guard_pxwjvg",
+   "function": "consentvault.audit_chain_guard",
+   "signature": "",
+   "line": 14,
+   "template": "consentvault audit: a row must extend the head of its chain (fork or gap refused)",
+   "meaning": "consentvault audit: a row must extend the head of its chain (fork or gap refused)",
+   "defined_in": "0045_audit_detail.sql"
+  },
+  {
+   "code": "db_audit_chain_guard_tkjnvn",
+   "function": "consentvault.audit_chain_guard",
+   "signature": "",
+   "line": 11,
+   "template": "consentvault audit: the first row of a chain is seq 1 on the zero hash",
+   "meaning": "consentvault audit: the first row of a chain is seq 1 on the zero hash",
+   "defined_in": "0045_audit_detail.sql"
+  },
+  {
+   "code": "db_billing_apply_status_vhqqsn",
+   "function": "consentvault.billing_apply_status",
+   "signature": "uuid,text,text,text,text[]",
+   "line": 10,
+   "template": "consentvault billing: cause % cannot lead to status %",
+   "meaning": "consentvault billing: cause % cannot lead to status %",
+   "defined_in": "0012_suspension_reason.sql"
+  },
+  {
+   "code": "db_billing_apply_status_vvvjgs",
+   "function": "consentvault.billing_apply_status",
+   "signature": "uuid,text,text,text,text[]",
+   "line": 21,
+   "template": "consentvault billing: organisation % does not exist",
+   "meaning": "consentvault billing: organisation % does not exist",
+   "defined_in": "0012_suspension_reason.sql"
+  },
+  {
+   "code": "db_billing_apply_status_zmygkw",
+   "function": "consentvault.billing_apply_status",
+   "signature": "uuid,text,text,text,text[]",
+   "line": 14,
+   "template": "consentvault billing: a webhook status change must name its Stripe event",
+   "meaning": "consentvault billing: a webhook status change must name its Stripe event",
+   "defined_in": "0012_suspension_reason.sql"
+  },
+  {
+   "code": "db_billing_clear_alarm_gswqgj",
+   "function": "consentvault.billing_clear_alarm",
+   "signature": "uuid,text,text",
+   "line": 7,
+   "template": "consentvault billing: an organisation is required",
+   "meaning": "consentvault billing: an organisation is required",
+   "defined_in": "0036_gate_check_tally.sql"
+  },
+  {
+   "code": "db_billing_clear_alarm_hqkzwm",
+   "function": "consentvault.billing_clear_alarm",
+   "signature": "uuid,text,text",
+   "line": 10,
+   "template": "consentvault billing: only the duplicate-subscription alarm is cleared here",
+   "meaning": "consentvault billing: only the duplicate-subscription alarm is cleared here",
+   "defined_in": "0036_gate_check_tally.sql"
+  },
+  {
+   "code": "db_billing_finish_event_xwwwgs",
+   "function": "consentvault.billing_finish_event",
+   "signature": "text,uuid,text",
+   "line": 6,
+   "template": "consentvault billing: event % is not open (unknown, or its outcome is already set)",
+   "meaning": "consentvault billing: event % is not open (unknown, or its outcome is already set)",
+   "defined_in": "0007_billing.sql"
+  },
+  {
+   "code": "db_billing_held_subscription_sxtswh",
+   "function": "consentvault.billing_held_subscription",
+   "signature": "uuid",
+   "line": 6,
+   "template": "consentvault billing: an organisation is required",
+   "meaning": "consentvault billing: an organisation is required",
+   "defined_in": "0029_billing_sent_marks.sql"
+  },
+  {
+   "code": "db_billing_link_account_kqpmqg",
+   "function": "consentvault.billing_link_account",
+   "signature": "uuid,text,text,text,text,text,text,bigint,bigint,timestamp with time zone,timestamp with time zone,text",
+   "line": 7,
+   "template": "consentvault billing: an organisation and a Stripe customer are required",
+   "meaning": "consentvault billing: an organisation and a Stripe customer are required",
+   "defined_in": "0041_price_set_mark.sql"
+  },
+  {
+   "code": "db_billing_link_account_snqpmp",
+   "function": "consentvault.billing_link_account",
+   "signature": "uuid,text,text,text,text,text,text,bigint,bigint,timestamp with time zone,timestamp with time zone,text",
+   "line": 14,
+   "template": "consentvault billing: organisation % is already linked to another Stripe customer",
+   "meaning": "consentvault billing: organisation % is already linked to another Stripe customer",
+   "defined_in": "0041_price_set_mark.sql"
+  },
+  {
+   "code": "db_billing_lock_account_phkwnt",
+   "function": "consentvault.billing_lock_account",
+   "signature": "uuid",
+   "line": 6,
+   "template": "consentvault billing: the lock is taken for the entered organisation only",
+   "meaning": "consentvault billing: the lock is taken for the entered organisation only",
+   "defined_in": "0031_billing_verdicts_and_locks.sql"
+  },
+  {
+   "code": "db_check_chain_head_nhykym",
+   "function": "consentvault.check_chain_head",
+   "signature": "",
+   "line": 17,
+   "template": "consentvault chain: event does not extend the current head (expected seq %)",
+   "meaning": "consentvault chain: event does not extend the current head (expected seq %)",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_check_chain_head_zwwmjm",
+   "function": "consentvault.check_chain_head",
+   "signature": "",
+   "line": 12,
+   "template": "consentvault chain: first event must have seq 1 and the genesis prev_hash",
+   "meaning": "consentvault chain: first event must have seq 1 and the genesis prev_hash",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_check_clear_contact_home_only_kwpxpt",
+   "function": "consentvault.check_clear_contact_home_only",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault tenancy: consentvault.% keeps a clear contact point only for the home organisation; store a fingerprint and ciphertext (hash version 2)",
+   "meaning": "consentvault tenancy: consentvault.% keeps a clear contact point only for the home organisation; store a fingerprint and ciphertext (hash version 2)",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_check_clear_contact_home_only_qsvryr",
+   "function": "consentvault.check_clear_contact_home_only",
+   "signature": "",
+   "line": 9,
+   "template": "consentvault tenancy: in multi mode no row keeps a clear contact point (consentvault.%); write hash version 2",
+   "meaning": "consentvault tenancy: in multi mode no row keeps a clear contact point (consentvault.%); write hash version 2",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_check_contact_salt_nknnym",
+   "function": "consentvault.check_contact_salt",
+   "signature": "",
+   "line": 9,
+   "template": "consentvault contact key: the row's contact has no key in consentvault.contact_key",
+   "meaning": "consentvault contact key: the row's contact has no key in consentvault.contact_key",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_check_contact_salt_tsypkk",
+   "function": "consentvault.check_contact_salt",
+   "signature": "",
+   "line": 17,
+   "template": "consentvault contact salt: the row must carry the contact's own salt",
+   "meaning": "consentvault contact salt: the row must carry the contact's own salt",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_check_grant_scope_krsnxy",
+   "function": "consentvault.check_grant_scope",
+   "signature": "",
+   "line": 12,
+   "template": "consentvault grant scope: disclosure % is not held",
+   "meaning": "consentvault grant scope: disclosure % is not held",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_check_grant_scope_sgmxwz",
+   "function": "consentvault.check_grant_scope",
+   "signature": "",
+   "line": 16,
+   "template": "consentvault grant scope: the grant names a channel or purpose its disclosure does not",
+   "meaning": "consentvault grant scope: the grant names a channel or purpose its disclosure does not",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_check_received_at_tmstqg",
+   "function": "consentvault.check_received_at",
+   "signature": "",
+   "line": 7,
+   "template": "consentvault received_at: the receipt time must be the vault server's own clock",
+   "meaning": "consentvault received_at: the receipt time must be the vault server's own clock",
+   "defined_in": "0001_init.sql"
+  },
+  {
+   "code": "db_check_release_ref_tkwxmg",
+   "function": "consentvault.check_release_ref",
+   "signature": "",
+   "line": 21,
+   "template": "consentvault release: a release must decide an earlier consumer grant of the same contact point",
+   "meaning": "consentvault release: a release must decide an earlier consumer grant of the same contact point",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_check_release_ref_tqsztm",
+   "function": "consentvault.check_release_ref",
+   "signature": "",
+   "line": 25,
+   "template": "consentvault release: a release may name only the channels and purposes of the grant it decides",
+   "meaning": "consentvault release: a release may name only the channels and purposes of the grant it decides",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_check_release_ref_wtphqt",
+   "function": "consentvault.check_release_ref",
+   "signature": "",
+   "line": 30,
+   "template": "consentvault release: only a grant whose contact point was verified (one-time code or inbound keyword) can lift a stop",
+   "meaning": "consentvault release: only a grant whose contact point was verified (one-time code or inbound keyword) can lift a stop",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_check_verified_claim_pznnzr",
+   "function": "consentvault.check_verified_claim",
+   "signature": "",
+   "line": 11,
+   "template": "consentvault verified contact: claiming a verified contact point needs the capture_verified scope",
+   "meaning": "consentvault verified contact: claiming a verified contact point needs the capture_verified scope",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_claim_replay_nonce_mhyxwh",
+   "function": "consentvault.claim_replay_nonce",
+   "signature": "uuid,text,timestamp with time zone",
+   "line": 10,
+   "template": "consentvault replay guard: expiry must be in the future and within one day",
+   "meaning": "consentvault replay guard: expiry must be in the future and within one day",
+   "defined_in": "0003_replay_guard.sql"
+  },
+  {
+   "code": "db_claim_replay_nonce_tkyrmq",
+   "function": "consentvault.claim_replay_nonce",
+   "signature": "uuid,text,timestamp with time zone",
+   "line": 6,
+   "template": "consentvault replay guard: organisation, nonce and expiry are required",
+   "meaning": "consentvault replay guard: organisation, nonce and expiry are required",
+   "defined_in": "0003_replay_guard.sql"
+  },
+  {
+   "code": "db_confirmation_alarm_raise_qxgtrq",
+   "function": "consentvault.confirmation_alarm_raise",
+   "signature": "text,jsonb,timestamp with time zone",
+   "line": 9,
+   "template": "consentvault confirmations: % is not a confirmation alarm",
+   "meaning": "consentvault confirmations: % is not a confirmation alarm",
+   "defined_in": "0049_confirmation_functions.sql"
+  },
+  {
+   "code": "db_confirmation_enqueue_vnnggs",
+   "function": "consentvault.confirmation_enqueue",
+   "signature": "uuid,text",
+   "line": 11,
+   "template": "consentvault confirmations: event % is not in the current organisation",
+   "meaning": "consentvault confirmations: event % is not in the current organisation",
+   "defined_in": "0056_confirmation_send_brand.sql"
+  },
+  {
+   "code": "db_confirmation_enqueue_wwtxxn",
+   "function": "consentvault.confirmation_enqueue",
+   "signature": "uuid,text",
+   "line": 15,
+   "template": "consentvault confirmations: event % is not for that contact fingerprint",
+   "meaning": "consentvault confirmations: event % is not for that contact fingerprint",
+   "defined_in": "0056_confirmation_send_brand.sql"
+  },
+  {
+   "code": "db_confirmation_system_source_stpxws",
+   "function": "consentvault.confirmation_system_source",
+   "signature": "text",
+   "line": 8,
+   "template": "consentvault confirmations: % is not a confirmation system source",
+   "meaning": "consentvault confirmations: % is not a confirmation system source",
+   "defined_in": "0049_confirmation_functions.sql"
+  },
+  {
+   "code": "db_confirmation_system_source_vxwgpm",
+   "function": "consentvault.confirmation_system_source",
+   "signature": "text",
+   "line": 17,
+   "template": "consentvault confirmations: a source named % already exists and is not the system source",
+   "meaning": "consentvault confirmations: a source named % already exists and is not the system source",
+   "defined_in": "0049_confirmation_functions.sql"
+  },
+  {
+   "code": "db_confirmation_wrapped_secret_rzjtrh",
+   "function": "consentvault.confirmation_wrapped_secret",
+   "signature": "text",
+   "line": 11,
+   "template": "consentvault confirmations: the secret kind is fingerprint or display",
+   "meaning": "consentvault confirmations: the secret kind is fingerprint or display",
+   "defined_in": "0049_confirmation_functions.sql"
+  },
+  {
+   "code": "db_connected_system_twenty_address_guar_krjnxv",
+   "function": "consentvault.connected_system_twenty_address_guard",
+   "signature": "",
+   "line": 9,
+   "template": "consentvault: a system's connector never changes",
+   "meaning": "consentvault: a system's connector never changes",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_connected_system_twenty_address_guar_mrzmnm",
+   "function": "consentvault.connected_system_twenty_address_guard",
+   "signature": "",
+   "line": 5,
+   "template": "consentvault: a Twenty system's address changes only with its API key entered again",
+   "meaning": "consentvault: a Twenty system's address changes only with its API key entered again",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_connected_system_twenty_address_guar_ntmkhj",
+   "function": "consentvault.connected_system_twenty_address_guard",
+   "signature": "",
+   "line": 12,
+   "template": "consentvault: a disconnected system is never reconnected; connect a new one",
+   "meaning": "consentvault: a disconnected system is never reconnected; connect a new one",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_connector_clear_supersede_gjsghm",
+   "function": "consentvault.connector_clear_supersede",
+   "signature": "uuid,text,text[],uuid,boolean",
+   "line": 7,
+   "template": "consentvault connector: a clear is superseded as held, declined, waived or erased, not %",
+   "meaning": "consentvault connector: a clear is superseded as held, declined, waived or erased, not %",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_connector_clear_supersede_twkjtt",
+   "function": "consentvault.connector_clear_supersede",
+   "signature": "uuid,text,text[],uuid,boolean",
+   "line": 11,
+   "template": "consentvault connector: a clear is waived only once its system is disconnected and its key destroyed",
+   "meaning": "consentvault connector: a clear is waived only once its system is disconnected and its key destroyed",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_connector_link_put_zrhhjz",
+   "function": "consentvault.connector_link_put",
+   "signature": "uuid,text,text,bytea,bigint,boolean",
+   "line": 7,
+   "template": "consentvault connector: no link for a contact with no key",
+   "meaning": "consentvault connector: no link for a contact with no key",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_connector_org_hrwxrv",
+   "function": "consentvault.connector_org",
+   "signature": "uuid,text[],boolean",
+   "line": 9,
+   "template": "consentvault connector: system % is not a Twenty system of the current organisation",
+   "meaning": "consentvault connector: system % is not a Twenty system of the current organisation",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_connector_org_vyywsz",
+   "function": "consentvault.connector_org",
+   "signature": "uuid,text[],boolean",
+   "line": 13,
+   "template": "consentvault connector: system % is disconnected",
+   "meaning": "consentvault connector: system % is disconnected",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_connector_set_state_nzxtyj",
+   "function": "consentvault.connector_set_state",
+   "signature": "uuid,text",
+   "line": 7,
+   "template": "consentvault connector: the receiver may only report a failing webhook",
+   "meaning": "consentvault connector: the receiver may only report a failing webhook",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_connector_window_hit_nzmjnv",
+   "function": "consentvault.connector_window_hit",
+   "signature": "uuid,text,integer,integer",
+   "line": 9,
+   "template": "consentvault connector: a window count needs a name, a window of 60 to 86400 seconds and a stop count of 1 to 1000",
+   "meaning": "consentvault connector: a window count needs a name, a window of 60 to 86400 seconds and a stop count of 1 to 1000",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_contact_key_hold_guard_ypmpjw",
+   "function": "consentvault.contact_key_hold_guard",
+   "signature": "",
+   "line": 6,
+   "template": "legal_hold_active:%",
+   "meaning": "legal_hold_active:%",
+   "defined_in": "0014_erasure_holds.sql"
+  },
+  {
+   "code": "db_contact_key_rewrap_guard_vhwptv",
+   "function": "consentvault.contact_key_rewrap_guard",
+   "signature": "",
+   "line": 7,
+   "template": "consentvault.contact_key: a contact key changes only by a re-wrap under a newer key version (UPDATE refused)",
+   "meaning": "consentvault.contact_key: a contact key changes only by a re-wrap under a newer key version (UPDATE refused)",
+   "defined_in": "0020_key_rotation.sql"
+  },
+  {
+   "code": "db_contact_key_version_guard_pnmwpk",
+   "function": "consentvault.contact_key_version_guard",
+   "signature": "",
+   "line": 8,
+   "template": "consentvault.contact_key: key version % of this organization is destroyed; wrap under the active version",
+   "meaning": "consentvault.contact_key: key version % of this organization is destroyed; wrap under the active version",
+   "defined_in": "0020_key_rotation.sql"
+  },
+  {
+   "code": "db_customer_alarm_rows_qvysgz",
+   "function": "consentvault.customer_alarm_rows",
+   "signature": "boolean",
+   "line": 6,
+   "template": "consentvault: the admin alarms need the admin scope",
+   "meaning": "consentvault: the admin alarms need the admin scope",
+   "defined_in": "0039_customer_alarm_rows.sql"
+  },
+  {
+   "code": "db_dispatch_org_ids_wggtgy",
+   "function": "consentvault.dispatch_org_ids",
+   "signature": "text",
+   "line": 4,
+   "template": "consentvault dispatch: job name must match ^[a-z][a-z0-9_]{0,40}$",
+   "meaning": "consentvault dispatch: job name must match ^[a-z][a-z0-9_]{0,40}$",
+   "defined_in": "0013_dispatch_per_org.sql"
+  },
+  {
+   "code": "db_dispatch_org_token_pxwppp",
+   "function": "consentvault.dispatch_org_token",
+   "signature": "text,uuid",
+   "line": 4,
+   "template": "consentvault dispatch: organisation % is not dispatched for job %",
+   "meaning": "consentvault dispatch: organisation % is not dispatched for job %",
+   "defined_in": "0013_dispatch_per_org.sql"
+  },
+  {
+   "code": "db_dispatch_orgs_hvxwnh",
+   "function": "consentvault.dispatch_orgs",
+   "signature": "text",
+   "line": 6,
+   "template": "consentvault dispatch: job name must match ^[a-z][a-z0-9_]{0,40}$",
+   "meaning": "consentvault dispatch: job name must match ^[a-z][a-z0-9_]{0,40}$",
+   "defined_in": "0011_evidence_jobs.sql"
+  },
+  {
+   "code": "db_doc_checklist_guard_gyywrw",
+   "function": "consentvault.doc_checklist_guard",
+   "signature": "",
+   "line": 7,
+   "template": "consentvault.doc_checklist: an approved version never changes",
+   "meaning": "consentvault.doc_checklist: an approved version never changes",
+   "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_doc_checklist_guard_jnmxzg",
+   "function": "consentvault.doc_checklist_guard",
+   "signature": "",
+   "line": 11,
+   "template": "consentvault.doc_checklist: identity columns never change",
+   "meaning": "consentvault.doc_checklist: identity columns never change",
+   "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_doc_checklist_guard_vztnsg",
+   "function": "consentvault.doc_checklist_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.doc_checklist is a record: DELETE refused",
+   "meaning": "consentvault.doc_checklist is a record: DELETE refused",
+   "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_enable_multi_tenant_htpkgy",
+   "function": "consentvault.enable_multi_tenant",
+   "signature": "",
+   "line": 8,
+   "template": "consentvault tenancy: the vault is already in multi mode",
+   "meaning": "consentvault tenancy: the vault is already in multi mode",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_ensure_gate_decision_partitions_shvtzw",
+   "function": "consentvault.ensure_gate_decision_partitions",
+   "signature": "integer",
+   "line": 10,
+   "template": "consentvault gate decisions: months ahead must be 0 to 24",
+   "meaning": "consentvault gate decisions: months ahead must be 0 to 24",
+   "defined_in": "0008_capture.sql"
+  },
+  {
+   "code": "db_enter_org_pmyvmh",
+   "function": "consentvault.enter_org",
+   "signature": "text",
+   "line": 7,
+   "template": "consentvault tenant token refused: bad signature, unknown or retired key, expired, or malformed",
+   "meaning": "consentvault tenant token refused: bad signature, unknown or retired key, expired, or malformed",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_erase_contact_mtzqwr",
+   "function": "consentvault.erase_contact",
+   "signature": "text",
+   "line": 9,
+   "template": "consentvault erase: the fingerprint must be 64 hex characters",
+   "meaning": "consentvault erase: the fingerprint must be 64 hex characters",
+   "defined_in": "0054_export_keys.sql"
+  },
+  {
+   "code": "db_erase_contact_thryzv",
+   "function": "consentvault.erase_contact",
+   "signature": "text",
+   "line": 16,
+   "template": "legal_hold_active:%",
+   "meaning": "legal_hold_active:%",
+   "defined_in": "0054_export_keys.sql"
+  },
+  {
+   "code": "db_erase_contact_vsvyym",
+   "function": "consentvault.erase_contact",
+   "signature": "text",
+   "line": 12,
+   "template": "consentvault erase: an admin or restore token is required",
+   "meaning": "consentvault erase: an admin or restore token is required",
+   "defined_in": "0054_export_keys.sql"
+  },
+  {
+   "code": "db_erasure_request_cover_rqrjxv",
+   "function": "consentvault.erasure_request_cover",
+   "signature": "",
+   "line": 5,
+   "template": "consentvault.erasure_request: a request is completed only after its contact key is deleted; the contact key still exists",
+   "meaning": "consentvault.erasure_request: a request is completed only after its contact key is deleted; the contact key still exists",
+   "defined_in": "0043_erasure_covers_seq.sql"
+  },
+  {
+   "code": "db_erasure_request_guard_hvvwnq",
+   "function": "consentvault.erasure_request_guard",
+   "signature": "",
+   "line": 23,
+   "template": "consentvault.erasure_request: only an open request changes, and only its status columns",
+   "meaning": "consentvault.erasure_request: only an open request changes, and only its status columns",
+   "defined_in": "0018_gag_safety.sql"
+  },
+  {
+   "code": "db_erasure_request_guard_kxggsr",
+   "function": "consentvault.erasure_request_guard",
+   "signature": "",
+   "line": 15,
+   "template": "legal_hold_active:%",
+   "meaning": "legal_hold_active:%",
+   "defined_in": "0018_gag_safety.sql"
+  },
+  {
+   "code": "db_erasure_request_guard_vnqrmr",
+   "function": "consentvault.erasure_request_guard",
+   "signature": "",
+   "line": 6,
+   "template": "consentvault.erasure_request is a record: DELETE refused",
+   "meaning": "consentvault.erasure_request is a record: DELETE refused",
+   "defined_in": "0018_gag_safety.sql"
+  },
+  {
+   "code": "db_erasure_request_initial_vmttmn",
+   "function": "consentvault.erasure_request_initial",
+   "signature": "",
+   "line": 8,
+   "template": "consentvault.erasure_request: a new request starts in its first state (pending operator confirmation, nothing confirmed, held, declined or completed)",
+   "meaning": "consentvault.erasure_request: a new request starts in its first state (pending operator confirmation, nothing confirmed, held, declined or completed)",
+   "defined_in": "0016_db_guards.sql"
+  },
+  {
+   "code": "db_erasure_request_initial_wait_zjxkvs",
+   "function": "consentvault.erasure_request_initial_wait",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.erasure_request: a new request starts without a wait",
+   "meaning": "consentvault.erasure_request: a new request starts without a wait",
+   "defined_in": "0017_lifecycle_fixes.sql"
+  },
+  {
+   "code": "db_evidence_object_guard_mntqpy",
+   "function": "consentvault.evidence_object_guard",
+   "signature": "",
+   "line": 9,
+   "template": "consentvault evidence object: only a pending object may be settled, once, as committed or uncommitted",
+   "meaning": "consentvault evidence object: only a pending object may be settled, once, as committed or uncommitted",
+   "defined_in": "0008_capture.sql"
+  },
+  {
+   "code": "db_export_job_guard_ptzqqv",
+   "function": "consentvault.export_job_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.export_job is a record: DELETE refused",
+   "meaning": "consentvault.export_job is a record: DELETE refused",
+   "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_export_job_guard_tkrjnh",
+   "function": "consentvault.export_job_guard",
+   "signature": "",
+   "line": 8,
+   "template": "consentvault.export_job: only status and progress columns change",
+   "meaning": "consentvault.export_job: only status and progress columns change",
+   "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_gate_decision_restore_guard_qxmssx",
+   "function": "consentvault.gate_decision_restore_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault gate: the database was restored and is not yet reconciled",
+   "meaning": "consentvault gate: the database was restored and is not yet reconciled",
+   "defined_in": "0014_erasure_holds.sql"
+  },
+  {
+   "code": "db_inline_code_block_gjgyhm",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 11,
+   "template": "consentvault migration 0048 refused: consentvault_integrity must be a NOLOGIN group, neither a ",
+   "meaning": "consentvault migration 0048 refused: consentvault_integrity must be a NOLOGIN group, neither a",
+   "defined_in": "0048_integrity_jobs.sql"
+  },
+  {
+   "code": "db_inline_code_block_gpsyhg",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 6,
+   "template": "consentvault migration 0025 refused: 0024 (manifest guard) is not applied",
+   "meaning": "consentvault migration 0025 refused: 0024 (manifest guard) is not applied",
+   "defined_in": "0025_partition_guard.sql"
+  },
+  {
+   "code": "db_inline_code_block_gswtmj",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 7,
+   "template": "consentvault migration 0059 refused: the role % does not exist. As a superuser (or the managed ",
+   "meaning": "consentvault migration 0059 refused: the role % does not exist. As a superuser (or the managed",
+   "defined_in": "0059_self_checks.sql"
+  },
+  {
+   "code": "db_inline_code_block_gvrxgp",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 5,
+   "template": "consentvault migration 0026 refused: 0025 (partition guard) is not applied",
+   "meaning": "consentvault migration 0026 refused: 0025 (partition guard) is not applied",
+   "defined_in": "0026_rds_master_allowance.sql"
+  },
+  {
+   "code": "db_inline_code_block_hgtysw",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 19,
+   "template": "consentvault tenancy: a runtime group role carries BYPASSRLS; remove it before migrating",
+   "meaning": "consentvault tenancy: a runtime group role carries BYPASSRLS; remove it before migrating",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_inline_code_block_hypxzt",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 5,
+   "template": "consentvault migration 0024 refused: 0023 (final guards) is not applied",
+   "meaning": "consentvault migration 0024 refused: 0023 (final guards) is not applied",
+   "defined_in": "0024_manifest_guard.sql"
+  },
+  {
+   "code": "db_inline_code_block_jmpgmn",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 16,
+   "template": "consentvault tenancy: % must be able to hand functions to consentvault_operator; a superuser must run: GRANT consentvault_operator TO %",
+   "meaning": "consentvault tenancy: % must be able to hand functions to consentvault_operator; a superuser must run: GRANT consentvault_operator TO %",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_inline_code_block_kggjzx",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 9,
+   "template": "consentvault migration 0030 refused: organisation % has % open erasure requests for contact %; ",
+   "meaning": "consentvault migration 0030 refused: organisation % has % open erasure requests for contact %;",
+   "defined_in": "0030_erasure_one_open_request.sql"
+  },
+  {
+   "code": "db_inline_code_block_kzrnzx",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 10,
+   "template": "consentvault migration 0019 refused: consentvault_console must be neither a superuser nor BYPASSRLS",
+   "meaning": "consentvault migration 0019 refused: consentvault_console must be neither a superuser nor BYPASSRLS",
+   "defined_in": "0019_role_layout.sql"
+  },
+  {
+   "code": "db_inline_code_block_kzvytx",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 10,
+   "template": "consentvault tenancy: role consentvault_operator (NOLOGIN BYPASSRLS) is missing; a superuser must run: CREATE ROLE consentvault_operator NOLOGIN BYPASSRLS; GRANT consentvault_operator TO %",
+   "meaning": "consentvault tenancy: role consentvault_operator (NOLOGIN BYPASSRLS) is missing; a superuser must run: CREATE ROLE consentvault_operator NOLOGIN BYPASSRLS; GRANT consentvault_operator TO %",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_inline_code_block_nvvwgn",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 13,
+   "template": "consentvault migration 0059 refused: % must be a NOLOGIN group, neither a superuser nor BYPASSRLS",
+   "meaning": "consentvault migration 0059 refused: % must be a NOLOGIN group, neither a superuser nor BYPASSRLS",
+   "defined_in": "0059_self_checks.sql"
+  },
+  {
+   "code": "db_inline_code_block_rjvzrw",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault migration 0050 refused: the role consentvault_records_jobs does not exist. As a superuser ",
+   "meaning": "consentvault migration 0050 refused: the role consentvault_records_jobs does not exist. As a superuser",
+   "defined_in": "0050_records_jobs.sql"
+  },
+  {
+   "code": "db_inline_code_block_rvwqpv",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 10,
+   "template": "consentvault 0043 refused: % completed erasure(s) have no stop in the event ledger to fix the sequence they cover: %",
+   "meaning": "consentvault 0043 refused: % completed erasure(s) have no stop in the event ledger to fix the sequence they cover: %",
+   "defined_in": "0043_erasure_covers_seq.sql"
+  },
+  {
+   "code": "db_inline_code_block_ttmqmy",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 13,
+   "template": "consentvault tenancy: role consentvault_worker is missing; a superuser must run: CREATE ROLE consentvault_worker NOLOGIN",
+   "meaning": "consentvault tenancy: role consentvault_worker is missing; a superuser must run: CREATE ROLE consentvault_worker NOLOGIN",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_inline_code_block_twpnsv",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault migration 0019 refused: the role consentvault_console does not exist. As a superuser ",
+   "meaning": "consentvault migration 0019 refused: the role consentvault_console does not exist. As a superuser",
+   "defined_in": "0019_role_layout.sql"
+  },
+  {
+   "code": "db_inline_code_block_vpnsxx",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 7,
+   "template": "consentvault tenancy: refusing to migrate as %, a superuser or BYPASSRLS role; migrate as the schema owner (never a superuser, never BYPASSRLS)",
+   "meaning": "consentvault tenancy: refusing to migrate as %, a superuser or BYPASSRLS role; migrate as the schema owner (never a superuser, never BYPASSRLS)",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_inline_code_block_wsjvjz",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault migration 0048 refused: the role consentvault_integrity does not exist. As a superuser ",
+   "meaning": "consentvault migration 0048 refused: the role consentvault_integrity does not exist. As a superuser",
+   "defined_in": "0048_integrity_jobs.sql"
+  },
+  {
+   "code": "db_inline_code_block_xgspxn",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 11,
+   "template": "consentvault migration 0050 refused: consentvault_records_jobs must be a NOLOGIN group, neither a ",
+   "meaning": "consentvault migration 0050 refused: consentvault_records_jobs must be a NOLOGIN group, neither a",
+   "defined_in": "0050_records_jobs.sql"
+  },
+  {
+   "code": "db_inline_code_block_zszqpx",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault migration 0023 refused: 0020 (key rotation) is not applied",
+   "meaning": "consentvault migration 0023 refused: 0020 (key rotation) is not applied",
+   "defined_in": "0023_final_guards.sql"
+  },
+  {
+   "code": "db_invite_guard_hgttkp",
+   "function": "consentvault.invite_guard",
+   "signature": "",
+   "line": 16,
+   "template": "consentvault.invite: a status column is set once",
+   "meaning": "consentvault.invite: a status column is set once",
+   "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_invite_guard_hkvynt",
+   "function": "consentvault.invite_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.invite is a record: DELETE refused",
+   "meaning": "consentvault.invite is a record: DELETE refused",
+   "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_invite_guard_stwgrh",
+   "function": "consentvault.invite_guard",
+   "signature": "",
+   "line": 10,
+   "template": "consentvault.invite: only accepted_at, accepted_member_id and withdrawn_at may change",
+   "meaning": "consentvault.invite: only accepted_at, accepted_member_id and withdrawn_at may change",
+   "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_isolation_canary_frozen_pvxktm",
+   "function": "consentvault.isolation_canary_frozen",
+   "signature": "",
+   "line": 3,
+   "template": "consentvault isolation canary: a canary is written once and never changed or removed",
+   "meaning": "consentvault isolation canary: a canary is written once and never changed or removed",
+   "defined_in": "0059_self_checks.sql"
+  },
+  {
+   "code": "db_isolation_canary_pair_zpznjz",
+   "function": "consentvault.isolation_canary_pair",
+   "signature": "",
+   "line": 9,
+   "template": "consentvault isolation self-test: the vault is in single-company mode; there is nothing to isolate",
+   "meaning": "consentvault isolation self-test: the vault is in single-company mode; there is nothing to isolate",
+   "defined_in": "0059_self_checks.sql"
+  },
+  {
+   "code": "db_isolation_canary_token_tgjtgt",
+   "function": "consentvault.isolation_canary_token",
+   "signature": "text",
+   "line": 7,
+   "template": "consentvault isolation self-test: there is no canary %; only a and b exist, made by isolation_canary_pair()",
+   "meaning": "consentvault isolation self-test: there is no canary %; only a and b exist, made by isolation_canary_pair()",
+   "defined_in": "0059_self_checks.sql"
+  },
+  {
+   "code": "db_key_rotation_guard_tqvxzn",
+   "function": "consentvault.key_rotation_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.key_rotation is a record: DELETE refused",
+   "meaning": "consentvault.key_rotation is a record: DELETE refused",
+   "defined_in": "0023_final_guards.sql"
+  },
+  {
+   "code": "db_key_rotation_guard_wtpppk",
+   "function": "consentvault.key_rotation_guard",
+   "signature": "",
+   "line": 14,
+   "template": "consentvault.key_rotation: only the progress and state of a rotation change, forward",
+   "meaning": "consentvault.key_rotation: only the progress and state of a rotation change, forward",
+   "defined_in": "0023_final_guards.sql"
+  },
+  {
+   "code": "db_key_rotation_guard_zmzkvg",
+   "function": "consentvault.key_rotation_guard",
+   "signature": "",
+   "line": 7,
+   "template": "consentvault.key_rotation: a % rotation does not change",
+   "meaning": "consentvault.key_rotation: a % rotation does not change",
+   "defined_in": "0023_final_guards.sql"
+  },
+  {
+   "code": "db_kms_key_ledger_write_kwvqhj",
+   "function": "consentvault.kms_key_ledger_write",
+   "signature": "text,jsonb",
+   "line": 13,
+   "template": "consentvault key ledger: org % was recorded destroyed at %; that is never changed",
+   "meaning": "consentvault key ledger: org % was recorded destroyed at %; that is never changed",
+   "defined_in": "0028_kms_key_ledger.sql"
+  },
+  {
+   "code": "db_kms_key_ledger_write_pgzzqv",
+   "function": "consentvault.kms_key_ledger_write",
+   "signature": "text,jsonb",
+   "line": 17,
+   "template": "consentvault key ledger: a destroyed version of org % would be dropped from the record",
+   "meaning": "consentvault key ledger: a destroyed version of org % would be dropped from the record",
+   "defined_in": "0028_kms_key_ledger.sql"
+  },
+  {
+   "code": "db_kms_key_ledger_write_qngtmx",
+   "function": "consentvault.kms_key_ledger_write",
+   "signature": "text,jsonb",
+   "line": 6,
+   "template": "consentvault key ledger: an org reference and a JSON object entry are required",
+   "meaning": "consentvault key ledger: an org reference and a JSON object entry are required",
+   "defined_in": "0028_kms_key_ledger.sql"
+  },
+  {
+   "code": "db_ledger_lock_key_htztzr",
+   "function": "consentvault.ledger_lock_key",
+   "signature": "uuid",
+   "line": 4,
+   "template": "consentvault ledger: no tenant entered (consentvault.current_org() is NULL)",
+   "meaning": "consentvault ledger: no tenant entered (consentvault.current_org() is NULL)",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_legal_hold_guard_grpmkg",
+   "function": "consentvault.legal_hold_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.legal_hold is a record: DELETE refused",
+   "meaning": "consentvault.legal_hold is a record: DELETE refused",
+   "defined_in": "0020_key_rotation.sql"
+  },
+  {
+   "code": "db_legal_hold_guard_jsvvwm",
+   "function": "consentvault.legal_hold_guard",
+   "signature": "",
+   "line": 24,
+   "template": "consentvault.legal_hold: only the release columns change, once",
+   "meaning": "consentvault.legal_hold: only the release columns change, once",
+   "defined_in": "0020_key_rotation.sql"
+  },
+  {
+   "code": "db_legal_hold_guard_ttghzr",
+   "function": "consentvault.legal_hold_guard",
+   "signature": "",
+   "line": 18,
+   "template": "consentvault.legal_hold: a released hold does not change",
+   "meaning": "consentvault.legal_hold: a released hold does not change",
+   "defined_in": "0020_key_rotation.sql"
+  },
+  {
+   "code": "db_legal_process_guard_qgyghq",
+   "function": "consentvault.legal_process_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.legal_process is a record: DELETE refused",
+   "meaning": "consentvault.legal_process is a record: DELETE refused",
+   "defined_in": "0014_erasure_holds.sql"
+  },
+  {
+   "code": "db_legal_process_guard_tkmqxr",
+   "function": "consentvault.legal_process_guard",
+   "signature": "",
+   "line": 14,
+   "template": "consentvault.legal_process: an entry only gains its hold, notice, production and close, once each",
+   "meaning": "consentvault.legal_process: an entry only gains its hold, notice, production and close, once each",
+   "defined_in": "0014_erasure_holds.sql"
+  },
+  {
+   "code": "db_lifecycle_lock_yprqxr",
+   "function": "consentvault.lifecycle_lock",
+   "signature": "",
+   "line": 6,
+   "template": "consentvault lifecycle: no organisation is entered",
+   "meaning": "consentvault lifecycle: no organisation is entered",
+   "defined_in": "0014_erasure_holds.sql"
+  },
+  {
+   "code": "db_mark_seal_verified_szwjzj",
+   "function": "consentvault.mark_seal_verified",
+   "signature": "uuid",
+   "line": 6,
+   "template": "consentvault seal: no seal % in the current organisation",
+   "meaning": "consentvault seal: no seal % in the current organisation",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_member_last_admin_guard_hsgprm",
+   "function": "consentvault.member_last_admin_guard",
+   "signature": "",
+   "line": 9,
+   "template": "consentvault last_admin: the change would leave the organisation with no admin",
+   "meaning": "consentvault last_admin: the change would leave the organisation with no admin",
+   "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_mint_contact_salt_yhnshn",
+   "function": "consentvault.mint_contact_salt",
+   "signature": "text",
+   "line": 8,
+   "template": "consentvault contact salt: clear salts are kept only for the home organisation",
+   "meaning": "consentvault contact salt: clear salts are kept only for the home organisation",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_offboarding_request_guard_qkpknw",
+   "function": "consentvault.offboarding_request_guard",
+   "signature": "",
+   "line": 13,
+   "template": "consentvault.offboarding_request: only an open request advances, and a taken export never changes",
+   "meaning": "consentvault.offboarding_request: only an open request advances, and a taken export never changes",
+   "defined_in": "0014_erasure_holds.sql"
+  },
+  {
+   "code": "db_offboarding_request_guard_qmnmkj",
+   "function": "consentvault.offboarding_request_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.offboarding_request is a record: DELETE refused",
+   "meaning": "consentvault.offboarding_request is a record: DELETE refused",
+   "defined_in": "0014_erasure_holds.sql"
+  },
+  {
+   "code": "db_offboarding_request_initial_pgghhp",
+   "function": "consentvault.offboarding_request_initial",
+   "signature": "",
+   "line": 6,
+   "template": "consentvault.offboarding_request: a new request starts in its first state (requested, no steps, no destruction date, no final export)",
+   "meaning": "consentvault.offboarding_request: a new request starts in its first state (requested, no steps, no destruction date, no final export)",
+   "defined_in": "0016_db_guards.sql"
+  },
+  {
+   "code": "db_operator_access_approval_guard_skpwky",
+   "function": "consentvault.operator_access_approval_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.operator_access_approval is a record: DELETE refused",
+   "meaning": "consentvault.operator_access_approval is a record: DELETE refused",
+   "defined_in": "0017_lifecycle_fixes.sql"
+  },
+  {
+   "code": "db_operator_access_approval_guard_xjtgxy",
+   "function": "consentvault.operator_access_approval_guard",
+   "signature": "",
+   "line": 12,
+   "template": "consentvault.operator_access_approval: an approval is only used, once",
+   "meaning": "consentvault.operator_access_approval: an approval is only used, once",
+   "defined_in": "0017_lifecycle_fixes.sql"
+  },
+  {
+   "code": "db_operator_access_gag_pmgwsr",
+   "function": "consentvault.operator_access_gag",
+   "signature": "",
+   "line": 7,
+   "template": "consentvault.operator_access: an emergency access notifies the customer unless its legal process prohibits notice",
+   "meaning": "consentvault.operator_access: an emergency access notifies the customer unless its legal process prohibits notice",
+   "defined_in": "0018_gag_safety.sql"
+  },
+  {
+   "code": "db_operator_access_guard_jjmsym",
+   "function": "consentvault.operator_access_guard",
+   "signature": "",
+   "line": 10,
+   "template": "consentvault.operator_access: an access only closes, once",
+   "meaning": "consentvault.operator_access: an access only closes, once",
+   "defined_in": "0017_lifecycle_fixes.sql"
+  },
+  {
+   "code": "db_operator_access_guard_twnsjq",
+   "function": "consentvault.operator_access_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.operator_access is a record: DELETE refused",
+   "meaning": "consentvault.operator_access is a record: DELETE refused",
+   "defined_in": "0017_lifecycle_fixes.sql"
+  },
+  {
+   "code": "db_operator_access_initial_ykswgq",
+   "function": "consentvault.operator_access_initial",
+   "signature": "",
+   "line": 6,
+   "template": "consentvault.operator_access: an access opens with an expiry within 12 hours and either a customer approval or an emergency notice",
+   "meaning": "consentvault.operator_access: an access opens with an expiry within 12 hours and either a customer approval or an emergency notice",
+   "defined_in": "0017_lifecycle_fixes.sql"
+  },
+  {
+   "code": "db_operator_alarm_guard_vzqvhq",
+   "function": "consentvault.operator_alarm_guard",
+   "signature": "",
+   "line": 11,
+   "template": "consentvault: an operator alarm is only ever acknowledged once and relayed once",
+   "meaning": "consentvault: an operator alarm is only ever acknowledged once and relayed once",
+   "defined_in": "0037_alarm_relay.sql"
+  },
+  {
+   "code": "db_org_display_key_guard_hwkkrv",
+   "function": "consentvault.org_display_key_guard",
+   "signature": "",
+   "line": 7,
+   "template": "consentvault.org_display_key is append-only: % refused (only a re-wrap under a newer key version changes it)",
+   "meaning": "consentvault.org_display_key is append-only: % refused (only a re-wrap under a newer key version changes it)",
+   "defined_in": "0044_records.sql"
+  },
+  {
+   "code": "db_org_fingerprint_secret_guard_pkzwhn",
+   "function": "consentvault.org_fingerprint_secret_guard",
+   "signature": "",
+   "line": 6,
+   "template": "consentvault.org_fingerprint_secret is append-only: % refused (only a re-wrap under a newer key version changes it)",
+   "meaning": "consentvault.org_fingerprint_secret is append-only: % refused (only a re-wrap under a newer key version changes it)",
+   "defined_in": "0020_key_rotation.sql"
+  },
+  {
+   "code": "db_org_key_hold_guard_nzphmt",
+   "function": "consentvault.org_key_hold_guard",
+   "signature": "",
+   "line": 10,
+   "template": "legal_hold_active:%",
+   "meaning": "legal_hold_active:%",
+   "defined_in": "0014_erasure_holds.sql"
+  },
+  {
+   "code": "db_org_key_version_guard_mgntpk",
+   "function": "consentvault.org_key_version_guard",
+   "signature": "",
+   "line": 15,
+   "template": "key_version_in_use: version % still wraps %",
+   "meaning": "key_version_in_use: version % still wraps %",
+   "defined_in": "0023_final_guards.sql"
+  },
+  {
+   "code": "db_org_key_version_guard_pkzktk",
+   "function": "consentvault.org_key_version_guard",
+   "signature": "",
+   "line": 20,
+   "template": "consentvault.org_key: a destroyed key version stays destroyed",
+   "meaning": "consentvault.org_key: a destroyed key version stays destroyed",
+   "defined_in": "0023_final_guards.sql"
+  },
+  {
+   "code": "db_org_key_version_guard_ptzkzp",
+   "function": "consentvault.org_key_version_guard",
+   "signature": "",
+   "line": 9,
+   "template": "consentvault.org_key: a key version is destroyed only inside its own organization",
+   "meaning": "consentvault.org_key: a key version is destroyed only inside its own organization",
+   "defined_in": "0023_final_guards.sql"
+  },
+  {
+   "code": "db_organization_single_mode_guard_jhvtxz",
+   "function": "consentvault.organization_single_mode_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault tenancy: a second organisation needs multi mode (consentvault.enable_multi_tenant())",
+   "meaning": "consentvault tenancy: a second organisation needs multi mode (consentvault.enable_multi_tenant())",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_pin_guards_nxrkzm",
+   "function": "consentvault_guard.pin_guards",
+   "signature": "",
+   "line": 7,
+   "template": "consentvault trigger guard: pinning the guards refused for %: only a superuser may",
+   "meaning": "consentvault trigger guard: pinning the guards refused for %: only a superuser may",
+   "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_policy_guard_kttkvw",
+   "function": "consentvault.policy_guard",
+   "signature": "",
+   "line": 16,
+   "template": "consentvault.policy: identity columns never change",
+   "meaning": "consentvault.policy: identity columns never change",
+   "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_policy_guard_qsnszj",
+   "function": "consentvault.policy_guard",
+   "signature": "",
+   "line": 7,
+   "template": "consentvault.policy: an approved or retired version never changes",
+   "meaning": "consentvault.policy: an approved or retired version never changes",
+   "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_policy_guard_trgksw",
+   "function": "consentvault.policy_guard",
+   "signature": "",
+   "line": 12,
+   "template": "consentvault.policy: status moves draft to approved to retired only",
+   "meaning": "consentvault.policy: status moves draft to approved to retired only",
+   "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_policy_guard_vxghks",
+   "function": "consentvault.policy_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.policy is a record: DELETE refused",
+   "meaning": "consentvault.policy is a record: DELETE refused",
+   "defined_in": "0005_admin.sql"
+  },
+  {
+   "code": "db_record_call_take_qygpvn",
+   "function": "consentvault.record_call_take",
+   "signature": "text,integer,integer",
+   "line": 11,
+   "template": "consentvault records: a call limit needs a member, a limit and a window",
+   "meaning": "consentvault records: a call limit needs a member, a limit and a window",
+   "defined_in": "0064_database_clock.sql"
+  },
+  {
+   "code": "db_record_display_write_rpvsqv",
+   "function": "consentvault.record_display_write",
+   "signature": "uuid,bytea,bytea",
+   "line": 12,
+   "template": "consentvault records: record % is not an active record of the current organisation",
+   "meaning": "consentvault records: record % is not an active record of the current organisation",
+   "defined_in": "0044_records.sql"
+  },
+  {
+   "code": "db_record_display_write_sjwhvw",
+   "function": "consentvault.record_display_write",
+   "signature": "uuid,bytea,bytea",
+   "line": 7,
+   "template": "consentvault records: a display row needs a name or a company",
+   "meaning": "consentvault records: a display row needs a name or a company",
+   "defined_in": "0044_records.sql"
+  },
+  {
+   "code": "db_record_doc_check_mjytth",
+   "function": "consentvault.record_doc_check",
+   "signature": "uuid,integer,text[],text[],uuid",
+   "line": 11,
+   "template": "consentvault doc check: checklist version % is not an approved version of this organisation",
+   "meaning": "consentvault doc check: checklist version % is not an approved version of this organisation",
+   "defined_in": "0015_hardening.sql"
+  },
+  {
+   "code": "db_record_doc_check_vmysnt",
+   "function": "consentvault.record_doc_check",
+   "signature": "uuid,integer,text[],text[],uuid",
+   "line": 7,
+   "template": "consentvault doc check: no organisation entered",
+   "meaning": "consentvault doc check: no organisation entered",
+   "defined_in": "0015_hardening.sql"
+  },
+  {
+   "code": "db_record_doc_check_xhqkxg",
+   "function": "consentvault.record_doc_check",
+   "signature": "uuid,integer,text[],text[],uuid",
+   "line": 15,
+   "template": "consentvault doc check: no such record in this organisation",
+   "meaning": "consentvault doc check: no such record in this organisation",
+   "defined_in": "0015_hardening.sql"
+  },
+  {
+   "code": "db_record_guard_smvyww",
+   "function": "consentvault.record_guard",
+   "signature": "",
+   "line": 10,
+   "template": "consentvault.record changes only when it is erased (erased_at from null to a time): UPDATE refused",
+   "meaning": "consentvault.record changes only when it is erased (erased_at from null to a time): UPDATE refused",
+   "defined_in": "0044_records.sql"
+  },
+  {
+   "code": "db_record_guard_zkmxnq",
+   "function": "consentvault.record_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.record is never deleted: DELETE refused",
+   "meaning": "consentvault.record is never deleted: DELETE refused",
+   "defined_in": "0044_records.sql"
+  },
+  {
+   "code": "db_record_index_derive_pttzxr",
+   "function": "consentvault.record_index_derive",
+   "signature": "uuid,uuid,bytea,text",
+   "line": 57,
+   "template": "consentvault records: the default subject fingerprint is not a fingerprint",
+   "meaning": "consentvault records: the default subject fingerprint is not a fingerprint",
+   "defined_in": "0058_record_person_link.sql"
+  },
+  {
+   "code": "db_record_index_derive_rkhhjs",
+   "function": "consentvault.record_index_derive",
+   "signature": "uuid,uuid,bytea,text",
+   "line": 66,
+   "template": "consentvault records: record % has no default subject fingerprint; the writer supplies it",
+   "meaning": "consentvault records: record % has no default subject fingerprint; the writer supplies it",
+   "defined_in": "0058_record_person_link.sql"
+  },
+  {
+   "code": "db_record_index_derive_zthkhr",
+   "function": "consentvault.record_index_derive",
+   "signature": "uuid,uuid,bytea,text",
+   "line": 18,
+   "template": "consentvault records: record % is not in the current organisation",
+   "meaning": "consentvault records: record % is not in the current organisation",
+   "defined_in": "0058_record_person_link.sql"
+  },
+  {
+   "code": "db_record_index_rebuild_svjwvn",
+   "function": "consentvault.record_index_rebuild",
+   "signature": "uuid",
+   "line": 9,
+   "template": "consentvault records: record % is not in the current organisation",
+   "meaning": "consentvault records: record % is not in the current organisation",
+   "defined_in": "0058_record_person_link.sql"
+  },
+  {
+   "code": "db_record_index_refresh_hhhjnh",
+   "function": "consentvault.record_index_refresh",
+   "signature": "uuid,text,bytea,text",
+   "line": 10,
+   "template": "consentvault records: event % is not in the current organisation",
+   "meaning": "consentvault records: event % is not in the current organisation",
+   "defined_in": "0058_record_person_link.sql"
+  },
+  {
+   "code": "db_record_index_refresh_mkgszt",
+   "function": "consentvault.record_index_refresh",
+   "signature": "uuid,text,bytea,text",
+   "line": 14,
+   "template": "consentvault records: event % is not for that contact fingerprint",
+   "meaning": "consentvault records: event % is not for that contact fingerprint",
+   "defined_in": "0058_record_person_link.sql"
+  },
+  {
+   "code": "db_record_index_refresh_xpygnq",
+   "function": "consentvault.record_index_refresh",
+   "signature": "uuid,text,bytea,text",
+   "line": 21,
+   "template": "consentvault records: no active record for that fingerprint; record_upsert comes first",
+   "meaning": "consentvault records: no active record for that fingerprint; record_upsert comes first",
+   "defined_in": "0058_record_person_link.sql"
+  },
+  {
+   "code": "db_record_index_set_confirmation_httjzm",
+   "function": "consentvault.record_index_set_confirmation",
+   "signature": "uuid,text,text,timestamp with time zone",
+   "line": 18,
+   "template": "consentvault records: record % has no index row in the current organisation",
+   "meaning": "consentvault records: record % has no index row in the current organisation",
+   "defined_in": "0044_records.sql"
+  },
+  {
+   "code": "db_record_index_set_confirmation_kpywry",
+   "function": "consentvault.record_index_set_confirmation",
+   "signature": "uuid,text,text,timestamp with time zone",
+   "line": 12,
+   "template": "consentvault records: a confirmation names its channel and the time of the fact",
+   "meaning": "consentvault records: a confirmation names its channel and the time of the fact",
+   "defined_in": "0044_records.sql"
+  },
+  {
+   "code": "db_record_index_set_confirmation_ygqmns",
+   "function": "consentvault.record_index_set_confirmation",
+   "signature": "uuid,text,text,timestamp with time zone",
+   "line": 8,
+   "template": "consentvault records: a confirmation status is sent, delivered, failed, dead or skipped",
+   "meaning": "consentvault records: a confirmation status is sent, delivered, failed, dead or skipped",
+   "defined_in": "0044_records.sql"
+  },
+  {
+   "code": "db_record_reveal_note_wpgvky",
+   "function": "consentvault.record_reveal_note",
+   "signature": "text,uuid[]",
+   "line": 12,
+   "template": "consentvault records: a revealed record is not in the current organisation",
+   "meaning": "consentvault records: a revealed record is not in the current organisation",
+   "defined_in": "0064_database_clock.sql"
+  },
+  {
+   "code": "db_record_upsert_hwmmgm",
+   "function": "consentvault.record_upsert",
+   "signature": "uuid,text,text",
+   "line": 15,
+   "template": "consentvault records: event % is not for that contact fingerprint and kind",
+   "meaning": "consentvault records: event % is not for that contact fingerprint and kind",
+   "defined_in": "0044_records.sql"
+  },
+  {
+   "code": "db_record_upsert_jwwxgw",
+   "function": "consentvault.record_upsert",
+   "signature": "uuid,text,text",
+   "line": 11,
+   "template": "consentvault records: event % is not in the current organisation",
+   "meaning": "consentvault records: event % is not in the current organisation",
+   "defined_in": "0044_records.sql"
+  },
+  {
+   "code": "db_refuse_change_rtpyst",
+   "function": "consentvault.refuse_change",
+   "signature": "",
+   "line": 3,
+   "template": "consentvault.% is append-only: % refused",
+   "meaning": "consentvault.% is append-only: % refused",
+   "defined_in": "0001_init.sql"
+  },
+  {
+   "code": "db_refuse_guard_change_znhqnr",
+   "function": "consentvault_guard.refuse_guard_change",
+   "signature": "",
+   "line": 53,
+   "template": "consentvault trigger guard: % refused: % (only a superuser may)",
+   "meaning": "consentvault trigger guard: % refused: % (only a superuser may)",
+   "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_refuse_policy_change_yvmxgw",
+   "function": "consentvault_guard.refuse_policy_change",
+   "signature": "",
+   "line": 16,
+   "template": "consentvault trigger guard: % refused: it changes a row security policy of the pinned guard table % (only a superuser may)",
+   "meaning": "consentvault trigger guard: % refused: it changes a row security policy of the pinned guard table % (only a superuser may)",
+   "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_refuse_policy_change_zgygrr",
+   "function": "consentvault_guard.refuse_policy_change",
+   "signature": "",
+   "line": 25,
+   "template": "consentvault trigger guard: % refused: it switches row security on the pinned guard table % (only a superuser may)",
+   "meaning": "consentvault trigger guard: % refused: it switches row security on the pinned guard table % (only a superuser may)",
+   "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_refuse_trigger_disable_stpnjp",
+   "function": "consentvault_guard.refuse_trigger_disable",
+   "signature": "",
+   "line": 21,
+   "template": "consentvault trigger guard: % refused: trigger % on % would no longer fire (only a superuser may)",
+   "meaning": "consentvault trigger guard: % refused: trigger % on % would no longer fire (only a superuser may)",
+   "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_refuse_trigger_drop_skmvrx",
+   "function": "consentvault_guard.refuse_trigger_drop",
+   "signature": "",
+   "line": 24,
+   "template": "consentvault trigger guard: % refused: it drops the row security policy % of a pinned guard table (only a superuser may)",
+   "meaning": "consentvault trigger guard: % refused: it drops the row security policy % of a pinned guard table (only a superuser may)",
+   "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_refuse_trigger_drop_tmpjjk",
+   "function": "consentvault_guard.refuse_trigger_drop",
+   "signature": "",
+   "line": 16,
+   "template": "consentvault trigger guard: % refused: it drops the pinned guard % % (only a superuser may)",
+   "meaning": "consentvault trigger guard: % refused: it drops the pinned guard % % (only a superuser may)",
+   "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_refuse_trigger_drop_vwmmhy",
+   "function": "consentvault_guard.refuse_trigger_drop",
+   "signature": "",
+   "line": 34,
+   "template": "consentvault trigger guard: % refused: it drops trigger % (only a superuser may)",
+   "meaning": "consentvault trigger guard: % refused: it drops trigger % (only a superuser may)",
+   "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_refuse_trigger_drop_ytszzj",
+   "function": "consentvault_guard.refuse_trigger_drop",
+   "signature": "",
+   "line": 29,
+   "template": "consentvault trigger guard: % refused: it drops the pinned guard table % and its row security (only a superuser may)",
+   "meaning": "consentvault trigger guard: % refused: it drops the pinned guard table % and its row security (only a superuser may)",
+   "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_refuse_vault_child_change_gjvzqx",
+   "function": "consentvault_guard.refuse_vault_child_change",
+   "signature": "",
+   "line": 36,
+   "template": "consentvault trigger guard: % refused: it detaches % from the vault table % (only a superuser may)",
+   "meaning": "consentvault trigger guard: % refused: it detaches % from the vault table % (only a superuser may)",
+   "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_refuse_vault_child_change_rjmtnn",
+   "function": "consentvault_guard.refuse_vault_child_change",
+   "signature": "",
+   "line": 20,
+   "template": "consentvault trigger guard: % refused: the table %, a child of the vault table %, leaves the vault schema (only a superuser may)",
+   "meaning": "consentvault trigger guard: % refused: the table %, a child of the vault table %, leaves the vault schema (only a superuser may)",
+   "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_refuse_vault_child_change_wyzzyz",
+   "function": "consentvault_guard.refuse_vault_child_change",
+   "signature": "",
+   "line": 23,
+   "template": "consentvault trigger guard: % refused: the table % is a child of the vault table % made outside the vault schema (only a superuser may)",
+   "meaning": "consentvault trigger guard: % refused: the table % is a child of the vault table % made outside the vault schema (only a superuser may)",
+   "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_refuse_vault_child_change_xpvzkm",
+   "function": "consentvault_guard.refuse_vault_child_change",
+   "signature": "",
+   "line": 51,
+   "template": "consentvault trigger guard: % refused: it attaches % to the vault table % (a vault table's children are made by CREATE TABLE in the vault schema; only a superuser may)",
+   "meaning": "consentvault trigger guard: % refused: it attaches % to the vault table % (a vault table's children are made by CREATE TABLE in the vault schema; only a superuser may)",
+   "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_refuse_vault_child_change_yjmhtj",
+   "function": "consentvault_guard.refuse_vault_child_change",
+   "signature": "",
+   "line": 40,
+   "template": "consentvault trigger guard: % refused: it renames or moves %, a child of the vault table %, to % (only a superuser may)",
+   "meaning": "consentvault trigger guard: % refused: it renames or moves %, a child of the vault table %, to % (only a superuser may)",
+   "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_release_hold_as_member_jsxvwn",
+   "function": "consentvault.release_hold_as_member",
+   "signature": "uuid,text,timestamp with time zone,bigint,text",
+   "line": 10,
+   "template": "consentvault hold release refused: no portal member session is entered",
+   "meaning": "consentvault hold release refused: no portal member session is entered",
+   "defined_in": "0016_db_guards.sql"
+  },
+  {
+   "code": "db_release_hold_as_member_kwwtjp",
+   "function": "consentvault.release_hold_as_member",
+   "signature": "uuid,text,timestamp with time zone,bigint,text",
+   "line": 25,
+   "template": "consentvault hold release refused: the named actor does not match the session member",
+   "meaning": "consentvault hold release refused: the named actor does not match the session member",
+   "defined_in": "0016_db_guards.sql"
+  },
+  {
+   "code": "db_release_hold_as_member_kyvpvp",
+   "function": "consentvault.release_hold_as_member",
+   "signature": "uuid,text,timestamp with time zone,bigint,text",
+   "line": 21,
+   "template": "consentvault hold release refused: the session is not an admin of the organization",
+   "meaning": "consentvault hold release refused: the session is not an admin of the organization",
+   "defined_in": "0016_db_guards.sql"
+  },
+  {
+   "code": "db_release_hold_as_member_mxwjrn",
+   "function": "consentvault.release_hold_as_member",
+   "signature": "uuid,text,timestamp with time zone,bigint,text",
+   "line": 16,
+   "template": "consentvault hold release refused: the session names no member",
+   "meaning": "consentvault hold release refused: the session names no member",
+   "defined_in": "0016_db_guards.sql"
+  },
+  {
+   "code": "db_release_hold_as_operator_jmqgkv",
+   "function": "consentvault.release_hold_as_operator",
+   "signature": "uuid,text,timestamp with time zone,bigint,text",
+   "line": 14,
+   "template": "consentvault hold release refused: the operator session names no operator",
+   "meaning": "consentvault hold release refused: the operator session names no operator",
+   "defined_in": "0019_role_layout.sql"
+  },
+  {
+   "code": "db_release_hold_as_operator_vgvmmw",
+   "function": "consentvault.release_hold_as_operator",
+   "signature": "uuid,text,timestamp with time zone,bigint,text",
+   "line": 18,
+   "template": "consentvault hold release refused: the named operator does not match the operator session",
+   "meaning": "consentvault hold release refused: the named operator does not match the operator session",
+   "defined_in": "0019_role_layout.sql"
+  },
+  {
+   "code": "db_release_hold_as_operator_zqssvr",
+   "function": "consentvault.release_hold_as_operator",
+   "signature": "uuid,text,timestamp with time zone,bigint,text",
+   "line": 9,
+   "template": "consentvault hold release refused: no operator session is entered",
+   "meaning": "consentvault hold release refused: no operator session is entered",
+   "defined_in": "0019_role_layout.sql"
+  },
+  {
+   "code": "db_release_hold_row_kszvjh",
+   "function": "consentvault.release_hold_row",
+   "signature": "uuid,uuid,text,text,text,timestamp with time zone,bigint",
+   "line": 17,
+   "template": "consentvault hold release refused: hold % is already released",
+   "meaning": "consentvault hold release refused: hold % is already released",
+   "defined_in": "0016_db_guards.sql"
+  },
+  {
+   "code": "db_release_hold_row_nqnkqx",
+   "function": "consentvault.release_hold_row",
+   "signature": "uuid,uuid,text,text,text,timestamp with time zone,bigint",
+   "line": 21,
+   "template": "consentvault hold release refused: a hold set for legal process is released only by the operator",
+   "meaning": "consentvault hold release refused: a hold set for legal process is released only by the operator",
+   "defined_in": "0016_db_guards.sql"
+  },
+  {
+   "code": "db_release_hold_row_rqkysq",
+   "function": "consentvault.release_hold_row",
+   "signature": "uuid,uuid,text,text,text,timestamp with time zone,bigint",
+   "line": 13,
+   "template": "consentvault hold release refused: no hold % in the entered organization",
+   "meaning": "consentvault hold release refused: no hold % in the entered organization",
+   "defined_in": "0016_db_guards.sql"
+  },
+  {
+   "code": "db_release_hold_row_rwyhgk",
+   "function": "consentvault.release_hold_row",
+   "signature": "uuid,uuid,text,text,text,timestamp with time zone,bigint",
+   "line": 7,
+   "template": "consentvault hold release refused: the release time must be now (got %)",
+   "meaning": "consentvault hold release refused: the release time must be now (got %)",
+   "defined_in": "0016_db_guards.sql"
+  },
+  {
+   "code": "db_repin_kpxxnn",
+   "function": "consentvault_guard.repin",
+   "signature": "",
+   "line": 6,
+   "template": "consentvault trigger guard: re-pinning the guards refused for %: only a superuser may",
+   "meaning": "consentvault trigger guard: re-pinning the guards refused for %: only a superuser may",
+   "defined_in": "20-trigger-guard.sql"
+  },
+  {
+   "code": "db_require_multi_tenant_mpgrky",
+   "function": "consentvault.require_multi_tenant",
+   "signature": "",
+   "line": 11,
+   "template": "consentvault tenancy: % % (owner %): %",
+   "meaning": "consentvault tenancy: % % (owner %): %",
+   "defined_in": "0008_capture.sql"
+  },
+  {
+   "code": "db_require_multi_tenant_qvnnzn",
+   "function": "consentvault.require_multi_tenant",
+   "signature": "",
+   "line": 6,
+   "template": "consentvault tenancy: this vault is in single mode; a multi-tenant service must not serve it",
+   "meaning": "consentvault tenancy: this vault is in single mode; a multi-tenant service must not serve it",
+   "defined_in": "0008_capture.sql"
+  },
+  {
+   "code": "db_restore_drill_run_frozen_wmwzyy",
+   "function": "consentvault.restore_drill_run_frozen",
+   "signature": "",
+   "line": 3,
+   "template": "consentvault restore drill: a drill record is written once and never changed or removed",
+   "meaning": "consentvault restore drill: a drill record is written once and never changed or removed",
+   "defined_in": "0059_self_checks.sql"
+  },
+  {
+   "code": "db_retire_token_key_tkwqhs",
+   "function": "consentvault.retire_token_key",
+   "signature": "text",
+   "line": 5,
+   "template": "consentvault tenant token: no unretired key %",
+   "meaning": "consentvault tenant token: no unretired key %",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_rewrap_contact_key_jpstgz",
+   "function": "consentvault.rewrap_contact_key",
+   "signature": "text,integer,bytea,integer",
+   "line": 8,
+   "template": "consentvault re-wrap refused: a contact key moves to a newer version with a wrapped key",
+   "meaning": "consentvault re-wrap refused: a contact key moves to a newer version with a wrapped key",
+   "defined_in": "0020_key_rotation.sql"
+  },
+  {
+   "code": "db_rewrap_hold_reason_xmvvkj",
+   "function": "consentvault.rewrap_hold_reason",
+   "signature": "uuid,text,text,text,text",
+   "line": 9,
+   "template": "consentvault re-wrap refused: both reasons of a hold move to the same version",
+   "meaning": "consentvault re-wrap refused: both reasons of a hold move to the same version",
+   "defined_in": "0020_key_rotation.sql"
+  },
+  {
+   "code": "db_rewrap_org_secret_shtzvn",
+   "function": "consentvault.rewrap_org_secret",
+   "signature": "text,uuid,bytea,bytea",
+   "line": 37,
+   "template": "consentvault re-wrap refused: unknown secret kind %",
+   "meaning": "consentvault re-wrap refused: unknown secret kind %",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_rewrap_org_secret_xtsrsq",
+   "function": "consentvault.rewrap_org_secret",
+   "signature": "text,uuid,bytea,bytea",
+   "line": 8,
+   "template": "consentvault re-wrap refused: a secret moves to a newer key version",
+   "meaning": "consentvault re-wrap refused: a secret moves to a newer key version",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_rewrap_target_ok_njmhzw",
+   "function": "consentvault.rewrap_target_ok",
+   "signature": "uuid,integer",
+   "line": 4,
+   "template": "consentvault re-wrap refused: no organization is entered",
+   "meaning": "consentvault re-wrap refused: no organization is entered",
+   "defined_in": "0020_key_rotation.sql"
+  },
+  {
+   "code": "db_rewrap_target_ok_zyyhrp",
+   "function": "consentvault.rewrap_target_ok",
+   "signature": "uuid,integer",
+   "line": 10,
+   "template": "consentvault re-wrap refused: version % is not the active key version of this organization",
+   "meaning": "consentvault re-wrap refused: version % is not the active key version of this organization",
+   "defined_in": "0020_key_rotation.sql"
+  },
+  {
+   "code": "db_seal_guard_pgpygs",
+   "function": "consentvault.seal_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault.seal is append-only: DELETE refused",
+   "meaning": "consentvault.seal is append-only: DELETE refused",
+   "defined_in": "0001_init.sql"
+  },
+  {
+   "code": "db_seal_guard_zzvtvn",
+   "function": "consentvault.seal_guard",
+   "signature": "",
+   "line": 9,
+   "template": "consentvault.seal is append-only: only verified_at may change",
+   "meaning": "consentvault.seal is append-only: only verified_at may change",
+   "defined_in": "0001_init.sql"
+  },
+  {
+   "code": "db_sign_org_token_grvtsr",
+   "function": "consentvault.sign_org_token",
+   "signature": "uuid,text[],text,integer",
+   "line": 14,
+   "template": "consentvault tenant token: no unretired signing key in consentvault.tenant_token_key",
+   "meaning": "consentvault tenant token: no unretired signing key in consentvault.tenant_token_key",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_sign_org_token_pqgmqh",
+   "function": "consentvault.sign_org_token",
+   "signature": "uuid,text[],text,integer",
+   "line": 8,
+   "template": "consentvault tenant token: org, scopes and a lifetime of 1 to 900 seconds are required",
+   "meaning": "consentvault tenant token: org, scopes and a lifetime of 1 to 900 seconds are required",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_sso_binding_check_jmxpjp",
+   "function": "consentvault.sso_binding_check",
+   "signature": "text",
+   "line": 6,
+   "template": "consentvault sso: an entered organization and a sign-in-service organization are required",
+   "meaning": "consentvault sso: an entered organization and a sign-in-service organization are required",
+   "defined_in": "0042_sso_binding_guards.sql"
+  },
+  {
+   "code": "db_sso_binding_check_nwrhsz",
+   "function": "consentvault.sso_binding_check",
+   "signature": "text",
+   "line": 13,
+   "template": "consentvault sso: that sign-in-service organization is already bound to another organization",
+   "meaning": "consentvault sso: that sign-in-service organization is already bound to another organization",
+   "defined_in": "0042_sso_binding_guards.sql"
+  },
+  {
+   "code": "db_sync_advance_state_rhgvsy",
+   "function": "consentvault.sync_advance_state",
+   "signature": "uuid,text",
+   "line": 17,
+   "template": "consentvault sync: event % is not for that contact fingerprint",
+   "meaning": "consentvault sync: event % is not for that contact fingerprint",
+   "defined_in": "0004_sync.sql"
+  },
+  {
+   "code": "db_sync_advance_state_zymjkq",
+   "function": "consentvault.sync_advance_state",
+   "signature": "uuid,text",
+   "line": 13,
+   "template": "consentvault sync: event % is not in the current organisation",
+   "meaning": "consentvault sync: event % is not in the current organisation",
+   "defined_in": "0004_sync.sql"
+  },
+  {
+   "code": "db_sync_attempt_started_pgptph",
+   "function": "consentvault.sync_attempt_started",
+   "signature": "uuid[],integer[]",
+   "line": 9,
+   "template": "consentvault sync: a push start needs its time and one attempt per row",
+   "meaning": "consentvault sync: a push start needs its time and one attempt per row",
+   "defined_in": "0062_sync_attempt_started.sql"
+  },
+  {
+   "code": "db_sync_attempt_started_xnprgr",
+   "function": "consentvault.sync_attempt_started",
+   "signature": "uuid[],integer[]",
+   "line": 16,
+   "template": "consentvault sync: a push started on an attempt that is no longer open",
+   "meaning": "consentvault sync: a push started on an attempt that is no longer open",
+   "defined_in": "0062_sync_attempt_started.sql"
+  },
+  {
+   "code": "db_sync_claim_person_hxkvvk",
+   "function": "consentvault.sync_claim_person",
+   "signature": "integer",
+   "line": 10,
+   "template": "consentvault sync: a person claim needs a lease of 5 to 3600 seconds",
+   "meaning": "consentvault sync: a person claim needs a lease of 5 to 3600 seconds",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_claim_vxhzhn",
+   "function": "consentvault.sync_claim",
+   "signature": "integer,integer",
+   "line": 9,
+   "template": "consentvault sync: claim needs a limit of 1 to 500 and a lease of 5 to 3600 seconds",
+   "meaning": "consentvault sync: claim needs a limit of 1 to 500 and a lease of 5 to 3600 seconds",
+   "defined_in": "0064_database_clock.sql"
+  },
+  {
+   "code": "db_sync_complete_connector_mkrksg",
+   "function": "consentvault.sync_complete_connector",
+   "signature": "uuid,integer,text,integer,text,bytea,integer,text",
+   "line": 44,
+   "template": "consentvault sync: only an acknowledged push carries confirmation %",
+   "meaning": "consentvault sync: only an acknowledged push carries confirmation %",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_complete_connector_ngrtzm",
+   "function": "consentvault.sync_complete_connector",
+   "signature": "uuid,integer,text,integer,text,bytea,integer,text",
+   "line": 29,
+   "template": "consentvault sync: a retry needs a backoff of 1 to 3600 seconds",
+   "meaning": "consentvault sync: a retry needs a backoff of 1 to 3600 seconds",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_complete_connector_nyspmw",
+   "function": "consentvault.sync_complete_connector",
+   "signature": "uuid,integer,text,integer,text,bytea,integer,text",
+   "line": 20,
+   "template": "consentvault sync: attempt % of outbox row % is not the open attempt (status %, attempts %)",
+   "meaning": "consentvault sync: attempt % of outbox row % is not the open attempt (status %, attempts %)",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_complete_connector_pyypjw",
+   "function": "consentvault.sync_complete_connector",
+   "signature": "uuid,integer,text,integer,text,bytea,integer,text",
+   "line": 17,
+   "template": "consentvault sync: outbox row % is not in the current organisation",
+   "meaning": "consentvault sync: outbox row % is not in the current organisation",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_complete_connector_rhpvhn",
+   "function": "consentvault.sync_complete_connector",
+   "signature": "uuid,integer,text,integer,text,bytea,integer,text",
+   "line": 41,
+   "template": "consentvault sync: unknown outcome %",
+   "meaning": "consentvault sync: unknown outcome %",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_complete_gxhykj",
+   "function": "consentvault.sync_complete",
+   "signature": "uuid,integer,text,integer,text,bytea,integer",
+   "line": 39,
+   "template": "consentvault sync: a retry needs a backoff of 1 to 3600 seconds",
+   "meaning": "consentvault sync: a retry needs a backoff of 1 to 3600 seconds",
+   "defined_in": "0064_database_clock.sql"
+  },
+  {
+   "code": "db_sync_complete_myqtwv",
+   "function": "consentvault.sync_complete",
+   "signature": "uuid,integer,text,integer,text,bytea,integer",
+   "line": 19,
+   "template": "consentvault sync: outbox row % is not in the current organisation",
+   "meaning": "consentvault sync: outbox row % is not in the current organisation",
+   "defined_in": "0064_database_clock.sql"
+  },
+  {
+   "code": "db_sync_complete_pwwyvq",
+   "function": "consentvault.sync_complete",
+   "signature": "uuid,integer,text,integer,text,bytea,integer",
+   "line": 23,
+   "template": "consentvault sync: attempt % of outbox row % is not the open attempt (status %, attempts %)",
+   "meaning": "consentvault sync: attempt % of outbox row % is not the open attempt (status %, attempts %)",
+   "defined_in": "0064_database_clock.sql"
+  },
+  {
+   "code": "db_sync_complete_spxntz",
+   "function": "consentvault.sync_complete",
+   "signature": "uuid,integer,text,integer,text,bytea,integer",
+   "line": 53,
+   "template": "consentvault sync: unknown outcome %",
+   "meaning": "consentvault sync: unknown outcome %",
+   "defined_in": "0064_database_clock.sql"
+  },
+  {
+   "code": "db_sync_deliveries_of_contact_kjshhw",
+   "function": "consentvault.sync_deliveries_of_contact",
+   "signature": "text,uuid,integer,timestamp with time zone,uuid",
+   "line": 8,
+   "template": "consentvault sync: system % is not in the current organisation",
+   "meaning": "consentvault sync: system % is not in the current organisation",
+   "defined_in": "0004_sync.sql"
+  },
+  {
+   "code": "db_sync_deliveries_of_contact_pjsmkt",
+   "function": "consentvault.sync_deliveries_of_contact",
+   "signature": "text,uuid,integer,timestamp with time zone,uuid",
+   "line": 12,
+   "template": "consentvault sync: limit must be 1 to 201",
+   "meaning": "consentvault sync: limit must be 1 to 201",
+   "defined_in": "0004_sync.sql"
+  },
+  {
+   "code": "db_sync_deliveries_of_system_rhntvy",
+   "function": "consentvault.sync_deliveries_of_system",
+   "signature": "uuid,text,timestamp with time zone,timestamp with time zone,integer,timestamp with time zone,uuid",
+   "line": 12,
+   "template": "consentvault sync: limit must be 1 to 201",
+   "meaning": "consentvault sync: limit must be 1 to 201",
+   "defined_in": "0004_sync.sql"
+  },
+  {
+   "code": "db_sync_deliveries_of_system_ytnkjv",
+   "function": "consentvault.sync_deliveries_of_system",
+   "signature": "uuid,text,timestamp with time zone,timestamp with time zone,integer,timestamp with time zone,uuid",
+   "line": 8,
+   "template": "consentvault sync: system % is not in the current organisation",
+   "meaning": "consentvault sync: system % is not in the current organisation",
+   "defined_in": "0004_sync.sql"
+  },
+  {
+   "code": "db_sync_enqueue_clear_jnstxw",
+   "function": "consentvault.sync_enqueue_clear",
+   "signature": "uuid,uuid,uuid,bytea",
+   "line": 40,
+   "template": "consentvault connector: a new clear needs its sealed marker body",
+   "meaning": "consentvault connector: a new clear needs its sealed marker body",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_enqueue_clear_sjswrq",
+   "function": "consentvault.sync_enqueue_clear",
+   "signature": "uuid,uuid,uuid,bytea",
+   "line": 18,
+   "template": "consentvault connector: erasure % is not pending and unheld",
+   "meaning": "consentvault connector: erasure % is not pending and unheld",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_enqueue_clear_sqjztq",
+   "function": "consentvault.sync_enqueue_clear",
+   "signature": "uuid,uuid,uuid,bytea",
+   "line": 15,
+   "template": "consentvault connector: erasure % is not in the current organisation",
+   "meaning": "consentvault connector: erasure % is not in the current organisation",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_enqueue_clear_xmqyjk",
+   "function": "consentvault.sync_enqueue_clear",
+   "signature": "uuid,uuid,uuid,bytea",
+   "line": 24,
+   "template": "consentvault connector: system % is not a live Twenty system of this organisation",
+   "meaning": "consentvault connector: system % is not a live Twenty system of this organisation",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_enqueue_clear_zzxzss",
+   "function": "consentvault.sync_enqueue_clear",
+   "signature": "uuid,uuid,uuid,bytea",
+   "line": 10,
+   "template": "consentvault connector: a clear is queued only under the lifecycle lock",
+   "meaning": "consentvault connector: a clear is queued only under the lifecycle lock",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_enqueue_pyxzpn",
+   "function": "consentvault.sync_enqueue",
+   "signature": "uuid,uuid,text,text,text,integer,bytea",
+   "line": 18,
+   "template": "consentvault sync: system % is not in the current organisation",
+   "meaning": "consentvault sync: system % is not in the current organisation",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_enqueue_refresh_wshrwm",
+   "function": "consentvault.sync_enqueue_refresh",
+   "signature": "uuid,uuid,text,bytea",
+   "line": 7,
+   "template": "consentvault connector: the fingerprint must be 64 hex characters",
+   "meaning": "consentvault connector: the fingerprint must be 64 hex characters",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_enqueue_xpzmkx",
+   "function": "consentvault.sync_enqueue",
+   "signature": "uuid,uuid,text,text,text,integer,bytea",
+   "line": 13,
+   "template": "consentvault sync: refused, version % of that key was not advanced by this transaction",
+   "meaning": "consentvault sync: refused, version % of that key was not advanced by this transaction",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_extend_lease_jpjhvn",
+   "function": "consentvault.sync_extend_lease",
+   "signature": "uuid[],integer[],integer",
+   "line": 9,
+   "template": "consentvault sync: a lease extension needs 5 to 600 seconds and one attempt per row",
+   "meaning": "consentvault sync: a lease extension needs 5 to 600 seconds and one attempt per row",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_extend_lease_zjnmng",
+   "function": "consentvault.sync_extend_lease",
+   "signature": "uuid[],integer[],integer",
+   "line": 17,
+   "template": "consentvault sync: the lease of this delivery was taken over or ran out",
+   "meaning": "consentvault sync: the lease of this delivery was taken over or ran out",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_org_rrzmkw",
+   "function": "consentvault.sync_org",
+   "signature": "text[]",
+   "line": 7,
+   "template": "consentvault sync: no tenant entered (consentvault.current_org() is NULL)",
+   "meaning": "consentvault sync: no tenant entered (consentvault.current_org() is NULL)",
+   "defined_in": "0004_sync.sql"
+  },
+  {
+   "code": "db_sync_org_vxxzhk",
+   "function": "consentvault.sync_org",
+   "signature": "text[]",
+   "line": 13,
+   "template": "consentvault sync: the token holds none of the scopes this call needs (%)",
+   "meaning": "consentvault sync: the token holds none of the scopes this call needs (%)",
+   "defined_in": "0004_sync.sql"
+  },
+  {
+   "code": "db_sync_rate_take_hqqvhq",
+   "function": "consentvault.sync_rate_take",
+   "signature": "uuid,integer",
+   "line": 10,
+   "template": "consentvault connector: take 1 to 80 requests",
+   "meaning": "consentvault connector: take 1 to 80 requests",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_redrive_start_kwykzs",
+   "function": "consentvault.sync_redrive_start",
+   "signature": "uuid,text,text",
+   "line": 14,
+   "template": "consentvault sync: system % is not in the current organisation",
+   "meaning": "consentvault sync: system % is not in the current organisation",
+   "defined_in": "0004_sync.sql"
+  },
+  {
+   "code": "db_sync_redrive_start_pjmmrw",
+   "function": "consentvault.sync_redrive_start",
+   "signature": "uuid,text,text",
+   "line": 9,
+   "template": "consentvault sync: a redrive needs a reason of 1 to 1000 characters",
+   "meaning": "consentvault sync: a redrive needs a reason of 1 to 1000 characters",
+   "defined_in": "0004_sync.sql"
+  },
+  {
+   "code": "db_sync_redrive_status_ypptpr",
+   "function": "consentvault.sync_redrive_status",
+   "signature": "uuid",
+   "line": 14,
+   "template": "consentvault sync: redrive % is not in the current organisation",
+   "meaning": "consentvault sync: redrive % is not in the current organisation",
+   "defined_in": "0004_sync.sql"
+  },
+  {
+   "code": "db_sync_release_gvwntg",
+   "function": "consentvault.sync_release",
+   "signature": "uuid,integer,integer",
+   "line": 6,
+   "template": "consentvault sync: a release needs a delay of 0 to 3600 seconds",
+   "meaning": "consentvault sync: a release needs a delay of 0 to 3600 seconds",
+   "defined_in": "0064_database_clock.sql"
+  },
+  {
+   "code": "db_sync_release_xvwwsh",
+   "function": "consentvault.sync_release",
+   "signature": "uuid,integer,integer",
+   "line": 12,
+   "template": "consentvault sync: attempt % of outbox row % is not the open attempt",
+   "meaning": "consentvault sync: attempt % of outbox row % is not the open attempt",
+   "defined_in": "0064_database_clock.sql"
+  },
+  {
+   "code": "db_sync_system_bind_credential_rqzqmp",
+   "function": "consentvault.sync_system_bind_credential",
+   "signature": "uuid,uuid",
+   "line": 15,
+   "template": "consentvault sync: system % is not in the current organisation",
+   "meaning": "consentvault sync: system % is not in the current organisation",
+   "defined_in": "0004_sync.sql"
+  },
+  {
+   "code": "db_sync_system_bind_credential_zzwhst",
+   "function": "consentvault.sync_system_bind_credential",
+   "signature": "uuid,uuid",
+   "line": 9,
+   "template": "consentvault sync: credential % is not a live capture credential of the current organisation",
+   "meaning": "consentvault sync: credential % is not a live capture credential of the current organisation",
+   "defined_in": "0004_sync.sql"
+  },
+  {
+   "code": "db_sync_system_unbind_credential_ptgzgh",
+   "function": "consentvault.sync_system_unbind_credential",
+   "signature": "uuid",
+   "line": 9,
+   "template": "consentvault sync: system % is not in the current organisation",
+   "meaning": "consentvault sync: system % is not in the current organisation",
+   "defined_in": "0011_evidence_jobs.sql"
+  },
+  {
+   "code": "db_sync_twenty_disconnect_qvzkrt",
+   "function": "consentvault.sync_twenty_disconnect",
+   "signature": "uuid,text",
+   "line": 8,
+   "template": "consentvault connector: a disconnect needs a reason",
+   "meaning": "consentvault connector: a disconnect needs a reason",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_sync_twenty_set_address_nhsyns",
+   "function": "consentvault.sync_twenty_set_address",
+   "signature": "uuid,text,bytea,bytea,text",
+   "line": 6,
+   "template": "consentvault connector: a new address needs the API key entered again",
+   "meaning": "consentvault connector: a new address needs the API key entered again",
+   "defined_in": "0060_twenty_connector.sql"
+  },
+  {
+   "code": "db_tenancy_setting_guard_qxqsgv",
+   "function": "consentvault.tenancy_setting_guard",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault tenancy: the mode moves only from single to multi and the home organisation never changes",
+   "meaning": "consentvault tenancy: the mode moves only from single to multi and the home organisation never changes",
+   "defined_in": "0002_tenancy.sql"
+  },
+  {
+   "code": "db_usage_acknowledge_verdict_hnhvtr",
+   "function": "consentvault.usage_acknowledge_verdict",
+   "signature": "date,text,text",
+   "line": 7,
+   "template": "consentvault usage: an acknowledgement names who made it",
+   "meaning": "consentvault usage: an acknowledgement names who made it",
+   "defined_in": "0032_usage_run_and_audit.sql"
+  },
+  {
+   "code": "db_usage_acknowledge_verdict_htpgpg",
+   "function": "consentvault.usage_acknowledge_verdict",
+   "signature": "date,text,text",
+   "line": 15,
+   "template": "consentvault usage: verdict % on % is already acknowledged",
+   "meaning": "consentvault usage: verdict % on % is already acknowledged",
+   "defined_in": "0032_usage_run_and_audit.sql"
+  },
+  {
+   "code": "db_usage_acknowledge_verdict_vgpzqp",
+   "function": "consentvault.usage_acknowledge_verdict",
+   "signature": "date,text,text",
+   "line": 12,
+   "template": "consentvault usage: no verdict % on % for %",
+   "meaning": "consentvault usage: no verdict % on % for %",
+   "defined_in": "0032_usage_run_and_audit.sql"
+  },
+  {
+   "code": "db_usage_claim_send_ywhnym",
+   "function": "consentvault.usage_claim_send",
+   "signature": "date,text",
+   "line": 13,
+   "template": "consentvault usage: no count recorded for % on %",
+   "meaning": "consentvault usage: no count recorded for % on %",
+   "defined_in": "0029_billing_sent_marks.sql"
+  },
+  {
+   "code": "db_usage_claim_send_zhqkvx",
+   "function": "consentvault.usage_claim_send",
+   "signature": "date,text",
+   "line": 7,
+   "template": "consentvault usage: a meter (events or gate_checks) is required",
+   "meaning": "consentvault usage: a meter (events or gate_checks) is required",
+   "defined_in": "0029_billing_sent_marks.sql"
+  },
+  {
+   "code": "db_usage_mark_reported_wtpngk",
+   "function": "consentvault.usage_mark_reported",
+   "signature": "date,text,text",
+   "line": 15,
+   "template": "consentvault usage: no count recorded for % on %",
+   "meaning": "consentvault usage: no count recorded for % on %",
+   "defined_in": "0007_billing.sql"
+  },
+  {
+   "code": "db_usage_mark_reported_zswtvk",
+   "function": "consentvault.usage_mark_reported",
+   "signature": "date,text,text",
+   "line": 6,
+   "template": "consentvault usage: a meter (events or gate_checks) and a Stripe acknowledgement are required",
+   "meaning": "consentvault usage: a meter (events or gate_checks) and a Stripe acknowledgement are required",
+   "defined_in": "0007_billing.sql"
+  },
+  {
+   "code": "db_usage_note_verdict_mvwkyz",
+   "function": "consentvault.usage_note_verdict",
+   "signature": "date,text",
+   "line": 13,
+   "template": "consentvault usage: no count recorded for % on %",
+   "meaning": "consentvault usage: no count recorded for % on %",
+   "defined_in": "0031_billing_verdicts_and_locks.sql"
+  },
+  {
+   "code": "db_usage_note_verdict_rzmmwm",
+   "function": "consentvault.usage_note_verdict",
+   "signature": "date,text",
+   "line": 8,
+   "template": "consentvault usage: a verdict key of 1 to 60 characters is required",
+   "meaning": "consentvault usage: a verdict key of 1 to 60 characters is required",
+   "defined_in": "0031_billing_verdicts_and_locks.sql"
+  },
+  {
+   "code": "db_usage_record_day_zrjywp",
+   "function": "consentvault.usage_record_day",
+   "signature": "date,bigint,bigint",
+   "line": 6,
+   "template": "consentvault usage: day % is not closed yet",
+   "meaning": "consentvault usage: day % is not closed yet",
+   "defined_in": "0007_billing.sql"
+  },
+  {
+   "code": "db_usage_require_scope_mpjgvr",
+   "function": "consentvault.usage_require_scope",
+   "signature": "",
+   "line": 9,
+   "template": "consentvault usage: the token lacks the worker:usage scope",
+   "meaning": "consentvault usage: the token lacks the worker:usage scope",
+   "defined_in": "0007_billing.sql"
+  },
+  {
+   "code": "db_usage_require_scope_zyvyrw",
+   "function": "consentvault.usage_require_scope",
+   "signature": "",
+   "line": 6,
+   "template": "consentvault usage: no tenant entered",
+   "meaning": "consentvault usage: no tenant entered",
+   "defined_in": "0007_billing.sql"
+  },
+  {
+   "code": "db_usage_unreported_days_qhstxy",
+   "function": "consentvault.usage_unreported_days",
+   "signature": "date,date",
+   "line": 6,
+   "template": "consentvault usage: a day range with from on or before through is required",
+   "meaning": "consentvault usage: a day range with from on or before through is required",
+   "defined_in": "0027_usage_plan_of_record.sql"
+  },
+  {
+   "code": "db_workflow_credential_issue_mhwzxy",
+   "function": "consentvault.workflow_credential_issue",
+   "signature": "uuid,text,text",
+   "line": 45,
+   "template": "replacement refused: the system already has a current gate credential",
+   "meaning": "replacement refused: the system already has a current gate credential",
+   "defined_in": "0061_workflow_credential.sql"
+  },
+  {
+   "code": "db_workflow_credential_issue_mtrgvz",
+   "function": "consentvault.workflow_credential_issue",
+   "signature": "uuid,text,text",
+   "line": 17,
+   "template": "policy_required: no approved policy is in force, so no gate credential is issued",
+   "meaning": "policy_required: no approved policy is in force, so no gate credential is issued",
+   "defined_in": "0061_workflow_credential.sql"
+  },
+  {
+   "code": "db_workflow_credential_issue_wypypk",
+   "function": "consentvault.workflow_credential_issue",
+   "signature": "uuid,text,text",
+   "line": 29,
+   "template": "replacement refused: one gate credential per system; a replacement may be made from day 76 of the current one",
+   "meaning": "replacement refused: one gate credential per system; a replacement may be made from day 76 of the current one",
+   "defined_in": "0061_workflow_credential.sql"
+  },
+  {
+   "code": "db_workflow_credential_issue_ygxjwv",
+   "function": "consentvault.workflow_credential_issue",
+   "signature": "uuid,text,text",
+   "line": 14,
+   "template": "system_disconnected: the system is disconnected, so no gate credential is issued",
+   "meaning": "system_disconnected: the system is disconnected, so no gate credential is issued",
+   "defined_in": "0061_workflow_credential.sql"
+  }
+ ]
+}

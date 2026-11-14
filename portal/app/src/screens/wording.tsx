@@ -7,6 +7,7 @@ import { Link, useRouter } from '../lib/router.tsx';
 import { canDo } from '../lib/roles.ts';
 import { useSession } from '../lib/session.tsx';
 import { fmtDate, shortId } from '../lib/format.ts';
+import type { Embedded } from '../components/ui.tsx';
 import { Banner, Btn, Check, CopyButton, DataTable, ErrorBlock, ErrorSummary, KV, LinkBtn, NotAvailable, PageHead, Radio, Skeleton, StateBlock, SuccessBanner, TextArea, TextField, Time } from '../components/ui.tsx';
 
 
@@ -65,7 +66,7 @@ export function Wording() {
 }
 
 // ---------- 10 Register wording ----------
-export function WordingNew() {
+export function WordingNew({ embedded }: { embedded?: Embedded } = {}) {
   const { api, role } = useSession();
   const { search, navigate } = useRouter();
   const res = useResource(async () => {
@@ -93,7 +94,8 @@ export function WordingNew() {
     const r = await register.run({ body: d.body, label: d.label.trim(), channels: d.channels, purposes: d.purposes, brand_ids: d.brands, ...(d.replaces ? { supersedes_sha256: d.replaces } : {}), effective_from: `${d.from}T00:00:00Z` });
     if (r.ok) {
       try { sessionStorage.removeItem('cv.draft.wording-new'); } catch { /* nothing to clear */ }
-      navigate(`/wording/${r.value.sha256}?registered=1`);
+      if (embedded) embedded.onDone(`Wording registered as version ${d.label.trim()}. It can never be edited; a change is a new version.`);
+      else navigate(`/wording/${r.value.sha256}?registered=1`);
     } else summary.current?.focus();
   };
   useEffect(() => { if (register.error) summary.current?.focus(); }, [register.error]);
@@ -103,7 +105,7 @@ export function WordingNew() {
   const existingLabel = data?.existing.find((x) => x.sha256 === existingSha)?.version_label;
   return (
     <>
-      <PageHead title="Register wording" lede="Paste the exact text people see next to the checkbox. It is stored character for character, including spaces and punctuation. Registered wording can never be edited." />
+      {!embedded && <PageHead title="Register wording" lede="Paste the exact text people see next to the checkbox. It is stored character for character, including spaces and punctuation. Registered wording can never be edited." />}
       {res.status === 'loading' && <Skeleton what="the form" />}
       {res.status === 'error' && <ErrorBlock title="The form did not load" err={res.error} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {data && (
@@ -125,7 +127,7 @@ export function WordingNew() {
             {data.existing.map((x) => <Radio key={x.sha256} name="replaces" label={x.version_label} checked={d.replaces === x.sha256} onChange={() => setD({ replaces: x.sha256 })} />)}
           </fieldset>
           <TextField label="Shown on your forms from" name="from" type="date" value={d.from} onChange={(e) => setD({ from: e.target.value })} required />
-          <div className="actions"><LinkBtn href="/wording" variant="secondary">Cancel</LinkBtn><Btn type="submit" variant="primary" busy={register.busy} busyLabel="Registering">Register wording</Btn></div>
+          <div className="actions">{!embedded && <LinkBtn href="/wording" variant="secondary">Cancel</LinkBtn>}<Btn type="submit" variant="primary" busy={register.busy} busyLabel="Registering">Register wording</Btn></div>
         </form>
       )}
     </>

@@ -181,6 +181,8 @@ def accept(conn: psycopg.Connection, token_key: TokenKey, *, token: str, identit
     display = claims.get("name") if isinstance(claims.get("name"), str) and claims.get("name").strip() else None
     try:
         with org_transaction(conn, entry):
+            from .session import check_sso_entry, current_sso
+            check_sso_entry(current_sso(conn), claims.get("sso_connection_id"), None, claims.get("sso_organization_id"))
             row = conn.execute(
                 "UPDATE consentvault.invite SET accepted_at = now() WHERE org_id = (SELECT consentvault.current_org())"
                 " AND invite_id = %s AND accepted_at IS NULL AND withdrawn_at IS NULL AND expires_at > now()"

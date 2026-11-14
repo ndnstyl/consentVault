@@ -6,13 +6,14 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "mock": "node mock/server.ts --port 4010",
-    "build": "next build",
+    "build": "next build && node scripts/csp-hashes.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/*.test.ts",
-    "e2e": "node e2e/run.mjs"
+    "test": "node --test test/*.test.ts test/*.test.mjs",
+    "e2e": "node e2e/run.mjs",
+    "e2e:real": "node e2e/real/run.mjs"
   },
   "dependencies": {
-    "next": "14.2.35",
+    "next": "15.5.28",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },
@@ -20,6 +21,13 @@
     "@types/node": "20.14.10",
     "@types/react": "18.3.11",
     "@types/react-dom": "18.3.0",
+    "axe-core": "4.14.0",
+    "playwright": "1.63.0",
     "typescript": "5.6.2"
+  },
+  "overrides": {
+    "next": {
+      "postcss": "8.5.32"
+    }
   }
 }

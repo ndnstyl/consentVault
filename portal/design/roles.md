@@ -45,3 +45,24 @@ Legend: **W** read and change · **R** read only · **-** hidden from navigation
 3. The last admin of an organization cannot be removed or demoted (proposed rule, `last_admin` in contract-gaps.md).
 4. The developer role never sees a contact point in clear. Delivery lists show fingerprints only.
 5. Operator is not a client role and never appears in the portal's role picker.
+
+## Additions 2026-10-30
+
+| Screen or action | Admin | Compliance viewer | Developer |
+|---|---|---|---|
+| 23 Records: list, counts, chart | W (masked by default; name and company shown) | R (masked by default; name and company shown) | R (fingerprints only, never name or company; rows do not open) |
+| 23 Records: exact search | W | R | - |
+| 23 Records: show full contact points (audited per page) | W | R | - |
+| 23 Records: export the list | W | W | - |
+| 24 Setup: brand, wording, policy, confirmations steps | W | - (progress read on 05) | - (shows "Waiting on an admin") |
+| 24 Setup: source, credential, test event, connected system steps | W | - | W |
+| 24 Setup: skip or un-skip an optional step | W | - | W (connected system only) |
+| 25 Confirmation messages: read settings, rules, templates | W | R | R |
+| 25 Connect or check a sending account; set the wording link host | W | - | W |
+| 25 Turn a rule on or off, edit templates, sender details, stop scope | W | - | - |
+| 25 Mark or withdraw texting registration | W | - | - |
+| 25 Activity and replies (masked contact, reply text) | W | R | activity with fingerprints, no reply text |
+| 25 Record a reply as a stop or not a stop | W | - | - |
+
+Rule 6: every list view of records and every reveal of a full contact point writes an audit row before the answer is
+returned; no audit row, no data (contracts/records.md section 3 and 6).

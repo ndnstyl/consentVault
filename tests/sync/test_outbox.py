@@ -147,7 +147,7 @@ def test_a_push_in_flight_is_not_superseded_and_the_newer_one_waits(env):
     with env.worker_conn() as w:
         token = env.dispatch(w, a)
         with org_transaction(w, token):
-            claimed = w.execute("SELECT * FROM consentvault.sync_claim(10, 60, %s)", (env.clock(),)).fetchall()
+            claimed = w.execute("SELECT * FROM consentvault.sync_claim(10, 60)").fetchall()
     assert len(claimed) == 1
     env.stop(a, A_PHONE)
     assert [(r["version"], r["status"]) for r in env.outbox(a)] == [(1, "sent"), (2, "pending")]

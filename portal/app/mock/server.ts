@@ -7,6 +7,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type * as T from '../src/lib/api/types.ts';
 import { ATTESTATION, CHANNELS, DEFAULT_SCENARIO, newStore, nid, ORG_ID, ORG_NAME, PLANS, PURPOSES, REFERENCES } from './data.ts';
+import { isEd25519, isHmac } from '../src/lib/signature.ts';
+import { registerRecords } from './records.ts';
+import { registerConfirmations } from './confirmations.ts';
 import type { FailRule, Scenario, Store } from './data.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -109,6 +112,7 @@ route('GET', '/v1/org', (c) => {
   const nul = st.scenario.nulls.includes('key');
   return OK({
     org_id: ORG_ID, name: ORG_NAME, status: st.status, region: 'us', created_at: '2026-10-29T14:00:00Z', plan: st.status === 'trial' ? null : { plan_id: 'plan_growth', name: 'Growth' },
+    sso: (c.st as any).sso ?? { connected: c.st.scenario.sso !== 'none', connection_id: c.st.scenario.sso === 'verified' ? 'conn_01E4ZCR3C56J083X43JQXF3JK5' : null, required: false, verified: c.st.scenario.sso === 'verified' },
     key: nul ? null : { status: 'active', version: 1, destroy_after: off ? '2026-12-04T14:00:00Z' : null },
     offboarding: off ? { requested_at: '2026-11-03T14:00:00Z', requested_by: 'Dana Ruiz', state: 'in_progress', steps, destroy_after: '2026-12-04T14:00:00Z', held: { legal_hold_active: false, since: null } }
       : st.offboardingRequested ? { requested_at: nowIso(), requested_by: 'Dana Ruiz', state: 'requested', steps: [], destroy_after: null, held: { legal_hold_active: false, since: null } } : null,
@@ -120,7 +124,10 @@ route('GET', '/v1/health', (c) => {
   if (sc.nulls.includes('health')) return OK({ evaluated_at: nowIso(), unsealed_events_over_1h: null, dead_deliveries: null, last_chain_verification: null, first_event: null });
   const dead = c.st.systems.reduce((n, s) => n + (c.st.deliveries[s.system_id] ?? []).filter((d) => d.status === 'dead').length, 0);
   const first = sc.firstEvent === 'none' ? null : { at: '2026-10-31T14:42:07Z', sealed: sc.firstEvent === 'sealed' };
-  return OK({ evaluated_at: nowIso(), unsealed_events_over_1h: 0, dead_deliveries: dead, last_chain_verification: { at: nowIso(), result: 'ok' }, first_event: first });
+  const counts: Record<string, number> = { 'restore.stops_unconfirmed': 2, reveal_volume: 5200 };
+  const alarms = sc.alarms.map((name, i) => ({ name, since: new Date(Date.now() - (i + 1) * 3600e3).toISOString(), count: counts[name] ?? null, next_action: `Next step for ${name}.` }))
+    .filter((a) => c.st.role === 'admin' || (c.st.role === 'compliance_viewer' && a.name !== 'billing.second_live_subscription'));
+  return OK({ evaluated_at: nowIso(), unsealed_events_over_1h: 0, dead_deliveries: dead, last_chain_verification: { at: nowIso(), result: 'ok' }, first_event: first, alarms: sc.nulls.includes('alarms') ? null : alarms });
 });
 route('POST', '/v1/offboarding-requests', (c) => {
   const x = allow(c, 'admin'); if (x) return x;
@@ -206,6 +213,15 @@ route('POST', '/v1/brands', (c) => {
   const b = { brand_id: nid('brd'), display_name: name, created_at: nowIso(), source_count: 0, disclosure_count: 0 };
   c.st.brands.push(b); return OK({ brand_id: b.brand_id, display_name: b.display_name, created_at: b.created_at }, 201);
 });
+// admin.md (ruled 2026-10-31): the one brand and source read a compliance viewer has: ids and names, nothing else
+route('GET', '/v1/brand-names', (c) => {
+  const x = allow(c, 'admin', 'developer', 'compliance_viewer'); if (x) return x;
+  return OK(page(c.st.brands.slice().sort((a, b) => a.display_name.localeCompare(b.display_name)).map((b) => ({ brand_id: b.brand_id, display_name: b.display_name })), c.query));
+});
+route('GET', '/v1/source-names', (c) => {
+  const x = allow(c, 'admin', 'developer', 'compliance_viewer'); if (x) return x;
+  return OK(page(c.st.sources.slice().sort((a, b) => a.name.localeCompare(b.name)).map((s) => ({ source_id: s.source_id, name: s.name })), c.query));
+});
 route('GET', '/v1/sources', (c) => {
   const x = allow(c, 'admin', 'developer'); if (x) return x;
   const nul = c.st.scenario.nulls.includes('last_event');
@@ -268,6 +284,15 @@ route('GET', '/v1/retention', (c) => {
   const items = c.st.retention;
   if (c.st.scenario.nulls.includes('retention_history')) return OK({ current: items[0] ?? null, platform_minimum_years: 5, items: [], next_cursor: null, partial: ['history'] });
   return OK({ current: items[0] ?? null, platform_minimum_years: 5, items: page(items, c.query).items, next_cursor: null });
+});
+route('PUT', '/v1/org/sso', (c) => {
+  const x = allow(c, 'admin'); if (x) return x;
+  const keys = Object.keys(c.body ?? {}); const req = c.body?.require_sso;
+  if (keys.some((k) => k !== 'require_sso') || typeof req !== 'boolean') return E(422, 'validation_failed', 'Not accepted: the connection is bound by your operator.');
+  const before = (c.st as any).sso ?? { connected: c.st.scenario.sso !== 'none', connection_id: c.st.scenario.sso === 'verified' ? 'conn_01E4ZCR3C56J083X43JQXF3JK5' : null, required: false, verified: c.st.scenario.sso === 'verified' };
+  if (req && !before.verified) return E(422, 'validation_failed', 'Sign in through your company account as an admin first.');
+  (c.st as any).sso = { ...before, required: req };
+  return OK({ version: 1, connection_id: before.connection_id, required: req, verified: before.verified, applies_from: nowIso() });
 });
 route('PUT', '/v1/retention', (c) => {
   const x = allow(c, 'admin'); if (x) return x;
@@ -383,9 +408,9 @@ route('POST', '/v1/systems', (c) => {
   if (!b.name || !b.kind || !b.endpoint) return E(422, 'validation_failed');
   if (!/^https:\/\//.test(b.endpoint)) return E(422, 'endpoint_not_https');
   if (c.st.systems.some((s) => s.name.toLowerCase() === String(b.name).toLowerCase())) return E(409, 'system_exists');
-  const s: T.System = { system_id: nid('sys'), name: b.name, kind: b.kind, connector: 'generic_webhook', endpoint: b.endpoint, signature: b.signature, contact_form: b.contact_form, retry_window_hours: b.retry_window_hours ?? 24, status: 'active', public_key: b.signature === 'ed25519' ? 'MCowBQYDK2VwAyEAmock0PublicKey0Value0Here000000000000000' : null, created_at: nowIso(), last_delivery_at: null, counts: { pending: 0, dead: 0, acknowledged_24h: 0 }, last_test: null };
+  const s: T.System = { system_id: nid('sys'), name: b.name, kind: b.kind, connector: 'generic_webhook', endpoint: b.endpoint, signature: b.signature, contact_form: b.contact_form, retry_window_hours: b.retry_window_hours ?? 24, status: 'active', public_key: isEd25519(b.signature) ? 'MCowBQYDK2VwAyEAmock0PublicKey0Value0Here000000000000000' : null, created_at: nowIso(), last_delivery_at: null, counts: { pending: 0, dead: 0, acknowledged_24h: 0 }, last_test: null };
   c.st.systems.push(s); c.st.deliveries[s.system_id] = [];
-  return OK({ ...s, ...(b.signature === 'hmac' ? { hmac_secret: 'hmac_mock_2b4d6f8a0c1e3a5b7d9f1c3e5a7b9d1f' } : {}) }, 201);
+  return OK({ ...s, ...(isHmac(b.signature) ? { hmac_secret: 'hmac_mock_2b4d6f8a0c1e3a5b7d9f1c3e5a7b9d1f' } : {}) }, 201);
 });
 route('PATCH', '/v1/systems/:id', (c) => {
   const x = allow(c, 'admin', 'developer'); if (x) return x;
@@ -489,6 +514,9 @@ route('POST', '/v1/billing/checkout', (c) => {
 route('POST', '/v1/billing/portal', (c) => { const x = allow(c, 'admin'); if (x) return x; return OK({ portal_url: '/__mock/stripe/portal' }, 201); });
 
 // ---- dispatch ----
+registerRecords({ route, E, OK, page, allow, suspendedBlock, nowIso });
+registerConfirmations({ route, E, OK, page, allow, suspendedBlock, nowIso });
+
 function matchFail(st: Store, key: string): FailRule | null {
   for (const [k, rule] of Object.entries(st.scenario.fail)) {
     const ok = k.endsWith('*') ? key.startsWith(k.slice(0, -1)) : k === key;
@@ -502,7 +530,19 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function createMock() {
   let st = newStore({ ...DEFAULT_SCENARIO });
-  const csp = (() => { try { const t = fs.readFileSync(path.join(here, '..', 'public', '_headers'), 'utf8'); const m = /Content-Security-Policy:\s*(.+)/.exec(t); return m ? m[1].trim() : ''; } catch { return ''; } })();
+  const csp = (() => { try { const t = fs.readFileSync(path.join(here, '..', fs.existsSync(path.join(here, '..', 'out', '_headers')) ? 'out' : 'public', '_headers'), 'utf8') /* the shipped policy, with the boot hashes */; const m = /Content-Security-Policy:\s*(.+)/.exec(t); return m ? m[1].trim() : ''; } catch { return ''; } })();
+  // Every other header the edge applies to every path (out/_headers, block "/*"), so the run exercises the shipped isolation headers.
+  const shipped: Record<string, string> = (() => {
+    const t = fs.readFileSync(path.join(here, '..', fs.existsSync(path.join(here, '..', 'out', '_headers')) ? 'out' : 'public', '_headers'), 'utf8');
+    const h: Record<string, string> = {}; let all = false;
+    for (const line of t.split('\n')) {
+      if (!line.trim()) continue;
+      if (!/^\s/.test(line)) { all = line.trim() === '/*'; continue; }
+      const k = line.slice(0, line.indexOf(':')).trim();
+      if (all && !['content-security-policy', 'cache-control'].includes(k.toLowerCase())) h[k.toLowerCase()] = line.slice(line.indexOf(':') + 1).trim();
+    }
+    return h;
+  })();
 
   async function api(req: http.IncomingMessage, url: URL, raw: string): Promise<Res | null> {
     const method = req.method ?? 'GET';
@@ -539,7 +579,7 @@ export function createMock() {
   }
 
   const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.txt': 'text/plain' };
-  const DYNAMIC = ['/sources/', '/wording/', '/policies/', '/checklists/', '/exports/', '/systems/'];
+  const DYNAMIC = ['/sources/', '/wording/', '/policies/', '/checklists/', '/exports/', '/systems/', '/confirmations/'];
 
   function serveStatic(root: string, pathname: string, res: http.ServerResponse): void {
     const clean = path.posix.normalize(decodeURIComponent(pathname)).replace(/^(\.\.\/)+/, '');
@@ -557,6 +597,7 @@ export function createMock() {
     const ext = path.extname(file);
     const headers: Record<string, string> = { 'content-type': MIME[ext] ?? 'application/octet-stream', 'cache-control': 'no-store' };
     if (ext === '.html' && csp) headers['content-security-policy'] = csp;
+    Object.assign(headers, shipped);
     res.writeHead(200, headers); res.end(fs.readFileSync(file));
   }
 

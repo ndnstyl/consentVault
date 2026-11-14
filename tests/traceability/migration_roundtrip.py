@@ -46,6 +46,7 @@ def shape(dsn: str) -> list[tuple]:
 def main() -> int:
     bindir = c._pg_bin()
     root = Path(tempfile.mkdtemp(prefix="cv-roundtrip-"))
+    c.claim_cluster(root)
     data, port = root / "data", c._free_port()
     subprocess.run([str(bindir / "initdb"), "-D", str(data), "-U", "postgres", "-A", "trust", "-E", "UTF8", "--locale=C"],
                    check=True, capture_output=True)

@@ -94,3 +94,9 @@ test("address classifier", () => {
   }
   for (const ip of ["93.184.216.34", "8.8.8.8", "172.32.0.1", "2606:4700:4700::1111"]) assert.equal(isPublicAddress(ip), true, ip);
 });
+
+test("every push names itself with the ConsentVault user-agent", async () => {
+  const { d, calls } = mk();
+  await handleEgress(post(body()), ENV, d);
+  assert.equal((calls[0].init.headers as Headers).get("user-agent"), "ConsentVault/1.0 (+https://consentvault.ai)");
+});

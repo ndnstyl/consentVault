@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 import psycopg
 import pytest
 
-from consentvault import db
+from consentvault import db, dbclock
 from consentvault.evidence import ExportService
 from consentvault.providers.evidence import LocalAppendOnlyEvidenceStore
 from consentvault.tenancy import admin, erasure, holds, legal_process, offboard, restore
@@ -58,7 +58,7 @@ def _op_hold(env, org):
 
 def _confirm(env, org, eid, ledger=None):
     with env.operator() as c:
-        return erasure.confirm_erasure(c, token_key=env.t.key, ledger=ledger or env.ledger, operator_id=OPERATOR,
+        return erasure.confirm_erasure(c, token_key=env.t.key, crypto=env.t.crypto, ledger=ledger or env.ledger, operator_id=OPERATOR,
                                        request_id="req-e", org_id=org.org_id, erasure_id=eid)
 
 
@@ -198,7 +198,7 @@ def test_a_committed_erasure_is_never_replayed_under_a_hold_it_is_reported_held(
     r = _copy(t, pg_server["port"])          # the copy has the request open
     with db.connect(r.operator_dsn) as o:       # a hold only the restored copy holds
         holds.place_hold_operator(o, token_key=t.key, ledger=LifecycleLedger(LocalAppendOnlyEvidenceStore(
-            tmp_path / "other")), custody=None, operator_id=OPERATOR, request_id="req-h2",
+            tmp_path / "other"), clock=dbclock.datetime_clock(lambda: db.connect(t.app_dsn))), custody=None, operator_id=OPERATOR, request_id="req-h2",
             org_id=t.a.org_id, scope="org", reason="preserve", crypto=t.crypto)
     _confirm(env, t.a, eid)                  # erased live
     rep = _reconcile(env, r)
@@ -238,9 +238,9 @@ def test_g_an_erasure_waits_until_the_stop_push_is_delivered_then_completes(senv
     env.run_worker()                         # the stop push failed once and waits to retry
     assert (2, "failed") in {(r["version"], r["status"]) for r in env.outbox(a)}
     eid = _sync_admin_ctx_erasure(t, a, P)
-    ledger = LifecycleLedger(LocalAppendOnlyEvidenceStore(tmp_path / "arch"))
+    ledger = LifecycleLedger(LocalAppendOnlyEvidenceStore(tmp_path / "arch"), clock=dbclock.datetime_clock(lambda: db.connect(t.app_dsn)))
     with t.operator() as o:
-        out = erasure.confirm_erasure(o, token_key=t.key, ledger=ledger, operator_id=OPERATOR, request_id="req-e",
+        out = erasure.confirm_erasure(o, token_key=t.key, crypto=t.crypto, ledger=ledger, operator_id=OPERATOR, request_id="req-e",
                                       org_id=a.org_id, erasure_id=eid)
     assert out["status"] == "held" and out["held_reason"] == "pending_suppression_delivery"
     assert ledger.entries(a.org_id) == []    # nothing irreversible ran
@@ -249,7 +249,7 @@ def test_g_an_erasure_waits_until_the_stop_push_is_delivered_then_completes(senv
     after = {(r["version"], r["status"]) for r in env.outbox(a)}
     assert (2, "acknowledged") in after and "superseded" not in {st for _, st in after}
     with t.operator() as o:
-        done = erasure.resume_waiting(o, token_key=t.key, ledger=ledger, org_id=a.org_id, request_id="req-w")
+        done = erasure.resume_waiting(o, token_key=t.key, crypto=t.crypto, ledger=ledger, org_id=a.org_id, request_id="req-w")
     assert done["completed"] == [eid]
     with t.superuser() as su:
         assert su.execute("SELECT status FROM consentvault.erasure_request WHERE erasure_id=%s",
@@ -464,7 +464,8 @@ def test_the_sync_worker_pauses_while_a_restore_is_unreconciled(senv, tmp_path):
     drop_synthetic_seals(t)
     with psycopg.connect(t.operator_dsn, autocommit=True, row_factory=psycopg.rows.dict_row) as o:
         restore.reconcile(o, token_key=t.key, crypto=t.crypto, store=None,
-                          ledger=LifecycleLedger(LocalAppendOnlyEvidenceStore(tmp_path / "arch")),
+                          ledger=LifecycleLedger(LocalAppendOnlyEvidenceStore(tmp_path / "arch"),
+                                                clock=dbclock.datetime_clock(lambda: db.connect(t.app_dsn))),
                           inventory=lambda org, since: [], operator_id=OPERATOR, request_id="req-rc")
     rep = env.run_worker()
     assert rep.paused is None and len(env.transport.to(s.endpoint)) == 1

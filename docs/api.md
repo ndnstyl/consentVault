@@ -44,8 +44,8 @@ vault received them.
 
 Answers: 201 `{"ok": true, "event_id", "seq", "row_hash"}`, plus `release` (`released_channels` and `refusals`) after a
 consumer grant, because the release rule runs automatically once the grant is recorded; if that decision cannot be
-written the grant stays recorded and the answer carries `release_error`; 400 for a malformed body; 401 unsigned, bad or stale
-signature; 409 replay; 413 body too large; 422 a named vault refusal (`error` carries its class name).
+written the grant stays recorded and the answer carries `release_error`; 400 for a malformed body; 401 for every authentication failure (unsigned, bad or stale signature, non-finite timestamp, a request already
+accepted), with one body that does not say which; the reason is in the server log; 413 body too large; 422 a named vault refusal (`error` carries its class name).
 
 A consumer grant lifts the contact's own earlier stop only when its `contact_verification` is `otp` or `inbound_keyword`. A
 plain web-form grant (`none`) is answered with `release.refusals` of `contact_control_unverified`, the stop stays in

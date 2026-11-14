@@ -1,7 +1,7 @@
 """KeyProvider: per-org key custody.
 
 One interface, two open implementations. The managed service plugs an AWS KMS adapter into the same interface
-from the private repository.
+from the private repository, named by configuration through ``consentvault.providers.plugins``.
 
 * ``OpenBaoKeyProvider`` talks to an OpenBao (or HashiCorp Vault) transit engine over HTTP. A transit key can be
   deleted for real, so destruction here is provable when the server is backed by an HSM or a managed seal.
@@ -40,6 +40,8 @@ from typing import Callable, Optional
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from ..safelog import describe, http_error_response
+from ..urlguard import open_no_redirect
 from ._names import check_org_id
 from .errors import (
     DestructionWindowError,
@@ -229,11 +231,11 @@ class _DestructionLedger:
         except FileNotFoundError:
             return {}
         except OSError as exc:
-            raise KeyProviderError(f"cannot read the destruction ledger {self._path}: {exc}") from exc
+            raise KeyProviderError(f"cannot read the destruction ledger {self._path}: {describe(exc)}") from exc
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise KeyProviderError(f"destruction ledger {self._path} is not valid JSON: {exc}") from exc
+            raise KeyProviderError(f"destruction ledger {self._path} is not valid JSON: {describe(exc)}") from exc
         if not isinstance(data, dict):
             raise KeyProviderError(f"destruction ledger {self._path} must hold a JSON object")
         return data
@@ -248,7 +250,7 @@ class _DestructionLedger:
                 os.fsync(fh.fileno())
             os.replace(tmp, self._path)
         except OSError as exc:
-            raise KeyProviderError(f"cannot write the destruction ledger {self._path}: {exc}") from exc
+            raise KeyProviderError(f"cannot write the destruction ledger {self._path}: {describe(exc)}") from exc
 
     @staticmethod
     def _to_status(org_id: str, row: Optional[dict]) -> DestructionStatus:
@@ -350,7 +352,7 @@ class LocalFileKeyProvider(KeyProvider):
             self._root.mkdir(parents=True, exist_ok=True)
             os.chmod(self._root, 0o700)
         except OSError as exc:
-            raise ProviderConfigError(f"cannot prepare the key directory {self._root}: {exc}") from exc
+            raise ProviderConfigError(f"cannot prepare the key directory {self._root}: {describe(exc)}") from exc
 
     def _path(self, org_id: str) -> Path:
         return self._root / f"{check_org_id(org_id, ProviderConfigError)}.key.json"
@@ -376,14 +378,14 @@ class LocalFileKeyProvider(KeyProvider):
         except FileExistsError as exc:
             raise KeyExistsError(f"a key file already exists for org {org_id} version {version}") from exc
         except OSError as exc:
-            raise KeyProviderError(f"cannot create the key file for org {org_id}: {exc}") from exc
+            raise KeyProviderError(f"cannot create the key file for org {org_id}: {describe(exc)}") from exc
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(body)
                 fh.flush()
                 os.fsync(fh.fileno())
         except OSError as exc:
-            raise KeyProviderError(f"cannot write the key file for org {org_id}: {exc}") from exc
+            raise KeyProviderError(f"cannot write the key file for org {org_id}: {describe(exc)}") from exc
 
     def create_org_key(self, org_id: str) -> str:
         self._path(org_id)
@@ -406,12 +408,12 @@ class LocalFileKeyProvider(KeyProvider):
         except FileNotFoundError as exc:
             raise KeyNotFoundError(f"no key exists for org {org_id}" + ("" if version == 1 else f" version {version}")) from exc
         except (OSError, json.JSONDecodeError) as exc:
-            raise KeyProviderError(f"cannot read the key file for org {org_id}: {exc}") from exc
+            raise KeyProviderError(f"cannot read the key file for org {org_id}: {describe(exc)}") from exc
         try:
             salt, nonce, ct = (base64.b64decode(doc[k], validate=True) for k in ("salt", "nonce", "ct"))
             org_key = AESGCM(self._kek(salt)).decrypt(nonce, ct, self._aad(org_id, version))
         except (KeyError, binascii.Error) as exc:
-            raise KeyProviderError(f"the key file for org {org_id} is malformed: {exc!r}") from exc
+            raise KeyProviderError(f"the key file for org {org_id} is malformed: {describe(exc)}") from exc
         except InvalidTag as exc:
             raise KeyProviderError(f"the key file for org {org_id} did not open: wrong passphrase or altered file") from exc
         self._cache[(org_id, version)] = org_key
@@ -467,7 +469,7 @@ class LocalFileKeyProvider(KeyProvider):
         except FileNotFoundError:
             pass
         except OSError as exc:
-            raise KeyProviderError(f"cannot destroy the key file for org {org_id}: {exc}") from exc
+            raise KeyProviderError(f"cannot destroy the key file for org {org_id}: {describe(exc)}") from exc
 
     def destroy_version(self, org_id: str, version: int) -> bool:
         _require_usable(self._ledger.get(check_org_id(org_id, ProviderConfigError)))
@@ -516,11 +518,6 @@ class LocalFileKeyProvider(KeyProvider):
 Transport = Callable[[str, str, Optional[dict]], "tuple[int, dict]"]
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):  # type: ignore[override]
-        return None
-
-
 class UrllibBaoTransport:
     """HTTP transport for a real OpenBao server: ``(method, path, body) -> (status, json)``. Never logs the token."""
 
@@ -530,7 +527,6 @@ class UrllibBaoTransport:
         if not token:
             raise ProviderConfigError("an OpenBao token is required")
         self._address, self._token, self._timeout, self._ns = address.rstrip("/"), token, timeout_s, namespace
-        self._opener = urllib.request.build_opener(_NoRedirect)
 
     def __call__(self, method: str, path: str, body: Optional[dict]) -> tuple[int, dict]:
         headers = {"X-Vault-Token": self._token, "Content-Type": "application/json"}
@@ -539,12 +535,12 @@ class UrllibBaoTransport:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         req = urllib.request.Request(f"{self._address}{path}", data=data, method=method, headers=headers)
         try:
-            with self._opener.open(req, timeout=self._timeout) as resp:
+            with open_no_redirect(req, timeout=self._timeout) as resp:
                 raw, status = resp.read(), resp.status
         except urllib.error.HTTPError as exc:
-            raw, status = exc.read(), exc.code
+            status, _headers, raw = http_error_response(exc)
         except OSError as exc:
-            raise ProviderTransportError(f"OpenBao {method} {path} unreachable: {exc}") from exc
+            raise ProviderTransportError(f"OpenBao {method} {path} unreachable: {describe(exc)}") from exc
         try:
             return status, (json.loads(raw) if raw else {})
         except json.JSONDecodeError as exc:
@@ -701,7 +697,7 @@ class OpenBaoKeyProvider(KeyProvider):
                         self._delete_transit_key(org_id, version)
                     except KeyProviderError as exc:
                         raise KeyProviderError(f"OpenBao still holds the transit key for org {org_id} after deletion"
-                                               f" ({exc})") from exc
+                                               f" ({describe(exc)})") from exc
             self._ledger.mark_destroyed(org_id)
             done.append(org_id)
         return done

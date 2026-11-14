@@ -30,6 +30,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature, encode_dss_signature
 
+from .. import dbclock
+from ..lengths import is_bytes_of_len
 from .errors import ReplayError, TenancyError
 from .replay import claim_nonce
 
@@ -38,7 +40,7 @@ MAX_ASSERTION_LIFETIME = 300
 CLOCK_LEEWAY = 30
 ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 MACHINE_SCOPES = ("capture", "capture_verified", "gate_read", "proof_read")
-NEVER_ISSUED = ("admin", "developer", "audit_read", "operator")
+NEVER_ISSUED = ("admin", "developer", "audit_read", "records_read", "operator")
 PINNED_ALGS = ("ES256", "EdDSA")
 # a credential's organisation may still use its credentials in these statuses (contracts/billing.md)
 ORG_STATUSES_SERVED = ("active", "trial", "past_due", "suspended", "offboarding")
@@ -106,7 +108,7 @@ def _signature_ok(alg: str, public_key, signing_input: bytes, signature: bytes) 
         if alg == "ES256":
             if not isinstance(public_key, ec.EllipticCurvePublicKey) or not isinstance(public_key.curve, ec.SECP256R1):
                 return False
-            if len(signature) != 64:
+            if not is_bytes_of_len(signature, 64):
                 return False
             der = encode_dss_signature(int.from_bytes(signature[:32], "big"), int.from_bytes(signature[32:], "big"))
             public_key.verify(der, signing_input, ec.ECDSA(hashes.SHA256()))
@@ -237,7 +239,7 @@ def issue_token(
     *,
     token_endpoint_url: str,
     signer: AccessTokenSigner,
-    now: Callable[[], float] = time.time,
+    now: Callable[[], float] | None = None,
 ) -> IssuedToken:
     """Verify one client-credentials request and issue an access token. Raises an ``OAuthError`` subclass."""
     bad_client = InvalidClientError("client authentication failed")
@@ -262,12 +264,12 @@ def issue_token(
         public_key = _load_public_key(row["public_key"])
     if public_key is None:
         # spend one signature check so an unknown client times like a known one, then refuse
-        _signature_ok("ES256", _DECOY_KEY, signing_input, signature if len(signature) == 64 else b"\0" * 64)
+        _signature_ok("ES256", _DECOY_KEY, signing_input, signature if is_bytes_of_len(signature, 64) else b"\0" * 64)
         raise bad_client
     if not _signature_ok(alg, public_key, signing_input, signature):
         raise bad_client
 
-    t = now()
+    t = dbclock.epoch(conn) if now is None else now()   # the assertion is judged on the database's clock; a test may pin one
     exp, aud, jti = payload.get("exp"), payload.get("aud"), payload.get("jti")
     auds = aud if isinstance(aud, list) else [aud]
     if (payload.get("sub") != payload.get("iss") or token_endpoint_url not in auds
@@ -289,7 +291,7 @@ def issue_token(
                     datetime.fromtimestamp(max(exp, int(t) + 1) + CLOCK_LEEWAY, timezone.utc))
     except ReplayError:
         raise bad_client from None
-    issued_at = int(t)
+    issued_at = int(time.time() if now is None else t)   # the token this service mints and verifies itself carries the host's time
     token = signer.issue({
         "iss": signer.issuer, "org_id": str(row["org_id"]), "credential_id": client_id,
         "scope": " ".join(scopes), "jti": str(uuid.uuid4()), "iat": issued_at, "exp": issued_at + ACCESS_TOKEN_TTL,

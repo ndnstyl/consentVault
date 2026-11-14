@@ -1,0 +1,7 @@
+python.yml and typescript.yml are snapshots of the Semgrep registry packs p/python and p/typescript taken 2026-10-30
+(https://semgrep.dev/c/p/python, https://semgrep.dev/c/p/typescript), vendored so a rule change never lands without a
+reviewed commit. Refresh by re-downloading, diffing and committing. custom.yml holds the ConsentVault rules (webhook
+standard rule W-I2: constant-time signature comparison, plus eval, innerHTML, shell execution).
+59d7d16cdde439f90c2288ce6122183a10c77560b553338118a48d9e98ae880e  scripts/security/semgrep/custom.yml
+de5bc79d074c3b4146338a0bf95830406f169bd91ac590a2f1ef111f162e23f5  scripts/security/semgrep/python.yml
+967e551f37a9f27ce8b396ed121e5e127bf9ea60148e10589b794bd4ffe73395  scripts/security/semgrep/typescript.yml

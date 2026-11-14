@@ -21,6 +21,7 @@ class PlanFacts:
     plan_name: str | None = None
     included_events: int | None = None
     included_gate_checks: int | None = None
+    price_set: str | None = None  # every price on the subscription (base and overage), sorted, comma-joined
 
 
 def record_event(conn: psycopg.Connection, event_id: str, event_type: str) -> bool:
@@ -47,9 +48,26 @@ def link_account(conn: psycopg.Connection, org_id: uuid.UUID, customer: str, *, 
                  status: str | None = None, facts: PlanFacts = PlanFacts(), period_start: datetime | None = None,
                  period_end: datetime | None = None) -> None:
     conn.execute(
-        "SELECT consentvault.billing_link_account(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        "SELECT consentvault.billing_link_account(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (org_id, customer, subscription, facts.price_id, status, facts.plan_id, facts.plan_name, facts.included_events,
-         facts.included_gate_checks, period_start, period_end))
+         facts.included_gate_checks, period_start, period_end, facts.price_set))
+
+
+def lock_account(conn: psycopg.Connection, org_id: uuid.UUID) -> bool:
+    """Lock the entered organisation's billing row until the transaction ends. False when it has no row yet."""
+    return bool(conn.execute("SELECT consentvault.billing_lock_account(%s) AS held", (org_id,)).fetchone()["held"])
+
+
+def held_subscription(conn: psycopg.Connection, org_id: uuid.UUID) -> tuple[str | None, str | None]:
+    """The subscription id and status the vault holds for an organisation (None, None when none is held)."""
+    row = conn.execute("SELECT stripe_subscription_id, status FROM consentvault.billing_held_subscription(%s)",
+                       (org_id,)).fetchone()
+    return (row["stripe_subscription_id"], row["status"]) if row else (None, None)
+
+
+def clear_alarm(conn: psycopg.Connection, org_id: uuid.UUID, name: str, by: str) -> int:
+    """Acknowledge the organisation's open alarm of that name; returns how many were open."""
+    return conn.execute("SELECT consentvault.billing_clear_alarm(%s, %s, %s) AS n", (org_id, name, by)).fetchone()["n"]
 
 
 def apply_status(conn: psycopg.Connection, org_id: uuid.UUID, to: str, cause: str, event_id: str,

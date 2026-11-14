@@ -8,6 +8,8 @@ from typing import Any
 
 import psycopg
 
+from . import dbclock
+from .safelog import describe
 from .errors import ConsentVaultError, NormalizationError
 from .ledger import HASH_VERSIONS, _canon_value, canonical_dumps, content_sha256, subject_commitment
 from .seal import seal_binds_event
@@ -35,7 +37,7 @@ def _resolve(query: str, region: str | None) -> tuple[str, dict]:
         kind, norm = normalize_contact(q, "phone", region)
         return "contact", {"contact_kind": kind, "contact_norm": norm, "resolved_as": kind}
     except NormalizationError as exc:
-        return "subject", {"subject_key": q, "resolved_as": "subject_key", "note": f"not read as a phone number: {exc}"}
+        return "subject", {"subject_key": q, "resolved_as": "subject_key", "note": f"not read as a phone number: {describe(exc)}"}
 
 
 def gather(conn: psycopg.Connection, query: str, region: str | None = None) -> tuple[dict, dict[str, bytes]]:
@@ -230,16 +232,18 @@ def _page_args(page: Any) -> tuple[str | None, str | None, int]:
     return page["section"], cursor, limit
 
 
-def tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any, page: Any = None, region: str | None = None,
-                  cursor_key: bytes, policy=None, now: float | None = None) -> dict:
+def tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any = None, page: Any = None, region: str | None = None,
+                  cursor_key: bytes, policy=None, now: float | None = None, contact_fp: str | None = None,
+                  contact_kind: str | None = None) -> dict:
     """The proof answer (contracts/proof-export.md) for one contact in the entered organisation.
 
     Shows evidence and the client's policy outcome only; never a contact point, never a statement that a record
     establishes valid consent. A section that could not be read is named in ``partial`` and is ``null``.
-    """
-    import time as _time
-    from datetime import datetime, timezone
 
+    A caller that holds a record (records.md, proof by ``record_id``) passes ``contact_fp`` and ``contact_kind`` instead of
+    ``contact``: the lookup then needs no contact point, so a record whose contact key was erased answers with the stops it
+    still holds.
+    """
     from .gate import tenant_evidence
     from .gate_rules import engine
     from .tenancy.admin_base import ApiError, decode_cursor, encode_cursor
@@ -247,13 +251,16 @@ def tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any, page: 
     from .tenancy.pipeline import normalize
 
     section, cursor, limit = _page_args(page)
-    kind, norm = normalize(contact, region)
-    try:
-        fp = crypto.contact_fingerprint(org, kind, norm)
-    except KeyProviderError as exc:
-        raise ApiError("key_unavailable", "the organization key could not be used; nothing was read") from exc
-    now_s = _time.time() if now is None else now
-    evaluated_at = _iso_z(datetime.now(timezone.utc))
+    if contact_fp is not None:
+        kind, fp = contact_kind, contact_fp
+    else:
+        kind, norm = normalize(contact, region)
+        try:
+            fp = crypto.contact_fingerprint(org, kind, norm)
+        except KeyProviderError as exc:
+            raise ApiError("key_unavailable", "the organization key could not be used; nothing was read") from exc
+    now_s = dbclock.epoch(conn) if now is None else now
+    evaluated_at = _iso_z(dbclock.now(conn))
     after: list[str] | None = None
     if cursor is not None:
         values = decode_cursor(cursor_key, f"proof:{section}", cursor, now_s)
@@ -357,7 +364,7 @@ def tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any, page: 
         (fps,), ("contacted_at", "contact_log_uuid"), False,
         lambda r: {"contact_log_id": str(r["contact_log_uuid"]), "at": _iso_z(r["contacted_at"]),
                    "channel": r["channel"], "purpose": r["purpose"], "outcome": r["outcome"],
-                   "recorded_by": r["recorded_by"]})
+                   "recorded_by": r["recorded_by"], "sealed": False})  # contact-log rows are not in the hash chain yet (core change C3)
     reviews = paged(
         "reviews", "SELECT review_uuid, created_at, kind, event_id FROM consentvault.review"
         " WHERE org_id = consentvault.current_org() AND contact_fp = ANY(%s)", (fps,), ("created_at", "review_uuid"),
@@ -385,7 +392,8 @@ def tenant_lookup(conn: psycopg.Connection, crypto, *, org, contact: Any, page: 
             " ORDER BY channel, purpose", (kind, fps)).fetchall()
         for p in pairs:
             ev = tenant_evidence(conn, kind, fp, p["channel"], p["purpose"])
-            o = engine.decide(ev, policy, channel=p["channel"], purpose=p["purpose"], contact_fp=fp)
+            o = engine.decide(ev, policy, channel=p["channel"], purpose=p["purpose"], contact_fp=fp,
+                            now=dbclock.now(conn))
             out.append({"channel": p["channel"], "purpose": p["purpose"], "evidence_status": o.evidence_status,
                         "policy_action": o.policy_action, "policy_version": o.policy_version,
                         "basis_event_ids": list(o.basis_event_ids)})

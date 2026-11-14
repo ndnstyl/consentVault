@@ -196,3 +196,144 @@ flowchart TD
   C --> D[Pending operator confirmation gap: status read]
   D --> E[Done: contact unreadable; stop kept; chain verifies]
 ```
+
+## Additions 2026-10-30
+
+## F11. Work the records list (screen 23)
+
+```mermaid
+flowchart TD
+  A[Nav: Records, or Overview tile, or a link with filters] --> B[GET /v1/records + GET /v1/records/summary, same filters]
+  B -->|audit row not written| B1[Error: list not shown, audit_unavailable. Try again]
+  B -->|list fails| B2[Error: named cause. Capture unaffected. Try again]
+  B -->|summary fails| B3[Partial: tiles or chart Not available, list shown]
+  B -->|display key fails| B4[Partial: contact column Not available, statuses and stops shown]
+  B -->|no records at all| B5[Empty: no records yet. Send a test event]
+  B --> C[Tiles, chart, channel share, table, pager]
+  C --> D{What next}
+  D -->|change a filter| E[URL query updates, back button restores, focus stays on the control] --> B
+  E -->|no match| E1[Empty: filters named, Clear filters]
+  D -->|Find exact contact| F[POST /v1/records:search contact in body, URL unchanged]
+  F -->|invalid| F1[Inline: not a complete phone number or email]
+  F -->|none| F2[Empty: no record for that exact contact in this org. Back to list]
+  F --> G[One row]
+  D -->|open a row| H[13 /evidence?record=id; POST /v1/proof record_id]
+  H -->|back| C
+  D -->|Show full contact points| I[First time this session: confirm dialog, optional reason]
+  I --> J[POST /v1/records:reveal page ids]
+  J -->|audit_unavailable or key_unavailable| J1[Error banner, masks stay, toggle returns to off]
+  J -->|rate_limited| J2[Banner: wait N seconds, masks stay]
+  J --> K[Full contact points on this page; banner with audit time; each later page reveals again]
+  D -->|Export this list| L[Dialog: masked, full with reason, or fingerprints]
+  L --> M[POST /v1/records/exports]
+  M -->|export_too_large| M1[Error with count; change filters]
+  M -->|org_suspended| M2[Paused banner, link to billing]
+  M --> N[Poll every 3 s: building N of M] -->|failed| N1[Named cause; export again]
+  N --> O[Ready: download once in 15 min, fingerprint, kept 24 h]
+  O -->|link used or expired| O1[Get a new link while kept; after 24 h build again]
+```
+
+## F12. First-run walkthrough, invitation to first system (screen 24, ties to 05)
+
+```mermaid
+flowchart TD
+  A[02 invitation accepted] --> B{Role and setup state, GET /v1/setup}
+  B -->|compliance viewer| B1[05 Overview, setup progress read only]
+  B -->|setup already done| B2[05 Overview]
+  B -->|setup read fails| B3[05 Overview with the error; Setup link retries]
+  B --> C[24 Welcome: 8 steps, time estimate, trial note]
+  C --> D[Step = first not done and not skipped]
+  D --> E{Step kind}
+  E -->|admin-only step, developer signed in| E1[Waiting on an admin; go to the next step this role can do]
+  E -->|depends on an unfinished step| E2[Names the step it needs; button opens it]
+  E -->|org suspended and step creates a credential or system| E3[Paused, link to billing; earlier steps stay done]
+  E --> F[Step form, same component and endpoint as its own screen]
+  F -->|write fails| F1[Named error, form kept, step stays To do]
+  F --> G[Step done: success line; Continue to next]
+  G --> H{Step 5 test event}
+  H -->|no event in 15 min| H1[Named: no event arrived; keep waiting, check credential, or leave and return]
+  H -->|received, seal pending| H2[Partial: received; continue allowed]
+  H --> I[Step 6 policy: template or blank, approve with attestation, returns to setup]
+  I -->|policy_superseded| I1[Open newer version]
+  I --> J[Step 7 connect a system, optional]
+  J -->|skip| J1[Skip dialog, optional reason; POST skip; shown Skipped on 05]
+  J -->|test push fails| J2[Named answer; system saved, step stays To do until a test push answers 2xx]
+  J --> K[Step 8 confirmations, optional, opens 25 in setup mode]
+  K --> L[Setup complete: Records, or turn on skipped steps]
+  D -.->|leave at any point| M[05 shows the same steps; Resume setup opens the first open step]
+```
+
+Done is read from the server, never from the browser: a step is done when its fact exists (a brand, a source, a
+registered wording, an active capture credential, a recorded event, an approved policy, a connected system with a 2xx
+test push, a confirmation rule on). Skips are stored server side with who and when, so another admin or device sees the
+same progress.
+
+## F13. A new consent triggers a confirmation (screen 25, evidence on 13). Revised 2026-10-30
+
+```mermaid
+flowchart TD
+  A[Grant recorded from source S] --> B[Same transaction: one send intent per enabled rule, unique per contact, channel and consent event]
+  B -->|duplicate| B0[Nothing new]
+  B --> C[Worker locks the intent]
+  C --> D{Checks in order: channel in grant, contact kind, sending brand named in grant, arrived within delay, texts only: quiet hours in recipient zone and zone known (email has no sending hours), no stop, no recent confirmation, texting registration and test reply and link host, org active, test-event option}
+  D -->|any fails| D1[Skip recorded with its name; never delayed into the next window]
+  D --> E[Send from the organization's own domain or number]
+  E -->|retryable error| E1[Retry at 1, 2, 4, 8, 16, 32, 57 min; each try re-checks stop, registration, org status, and quiet hours for texts]
+  E1 -->|a re-check fails| D1
+  E1 -->|still failing after about 2 hours| E2[Dead: recorded, listed under Undelivered, never retried]
+  E -->|non-retryable refusal| E3[Failed with provider code; a text opt-out answer also records the stop, F14]
+  E --> F[Sent: exact text sealed in the chain; counts as one event; delivery report updates status]
+```
+
+## F14. Replies, stop links and START (screen 25, 23, 13). Revised 2026-10-30
+
+```mermaid
+flowchart TD
+  A[Person texts the organization's number] --> B[Provider posts to the inbound address]
+  B -->|signature fails| B1[401; 5 in 10 min raises the signature alarm on 25]
+  B -->|vault cannot record| B2[503 so the provider retries; a provider refusal of the next send is the backstop]
+  B --> C{Classify: a stop word anywhere wins}
+  C -->|core classifier: stop, or a stop word inside a longer message| D[Stop, method keyword: the org's channels among texts, calls, AI-voice calls; email kept; pushed to connected systems]
+  D --> D1{Admin answered Yes: does Twilio reply to STOP, HELP and START itself?}
+  D1 -->|no| D2[One opt-out reply within 5 min, any hour; dead after 5 min alarms]
+  D1 -->|yes| D3[None from us]
+  C -->|HELP| E[One reply: brand, help contact, how to stop, rates line]
+  C -->|START| G{Stop on record?}
+  G -->|no| G3[Recorded, nothing changes, no reply]
+  G -->|yes| G0[Grant for texts only: prior purposes and wording, inbound_keyword, session_ref from the provider message id]
+  G0 --> G4{Core release rule decides}
+  G4 -->|released| G1[Texts on again; calls stay stopped; reply unless Twilio answers START]
+  G4 -->|refused: staff, system or import stop, no earlier grant, contact since stop| G2[Stop kept; reply: contact us at help contact; to read with the cause]
+  C -->|other| F[To read; count on 25 and overview]
+  F -->|unread 24 h| F1[Alarm row on 25 and overview; no email]
+  F --> F2{Admin decides, reason required}
+  F2 -->|stop| D
+  F2 -->|not a stop| F3[Marked, audited]
+  H[Email stop link on the organization's domain] --> I[Page: Stop email, or Stop everything]
+  I -->|email| J[Revoke email]
+  I -->|everything| K[Revoke email, texts, calls, AI-voice calls]
+  I -->|already stopped| I1[Already stopped; nothing new]
+  I -->|vault down| I2[Not recorded, try again; buttons kept]
+  L[Provider refuses a send: number opted out at the provider, Twilio 21610] --> L2[Stop recorded, recorded_by provider_refusal; alarm on 25]
+```
+
+## F15. Turn texts on (screen 25). Revised 2026-10-30
+
+```mermaid
+flowchart TD
+  A[25 Texts off] --> B[Connect a text provider: Twilio]
+  B -->|provider_not_supported, refused or unreachable| B1[Named error with provider code; nothing saved]
+  B --> C[Point the number's incoming webhook at the inbound address; vault sets it when it can, else shows field and value]
+  C --> D[Vault reads whether the provider sends its own opt-out reply]
+  D --> E[Admin texts the number from a phone they hold]
+  E -->|nothing in 15 min| E1[Named: no test text arrived; show the webhook step again]
+  E --> F[Test reply arrived; account connected]
+  F --> G[Wording link host on the organization's domain: CNAME and TXT, check]
+  G -->|link_host_dns_missing| G1[Named record missing; check again]
+  G --> H[Sender details: name, postal address, help contact]
+  H --> I[Mark texting registration: approved box and filed-samples box, the four fixed texts shown]
+  I -->|a box unticked| I1[Mark complete disabled with reason]
+  I --> J[Text toggles available per source]
+  J --> K[On. Next new consent naming texts and the sending brand gets one, inside quiet hours only]
+  K -.->|withdraw, disconnect, fixed text changes, link host failing| L[Texts off at once; queued texts recorded as not sent]
+```

@@ -21,11 +21,12 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Optional
 
 import psycopg
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
+from .. import dbclock
 from ..ledger import canonical_dumps
 from ..normalize import normalize_contact
 from ..providers.errors import EvidenceStoreError
@@ -106,7 +107,8 @@ EVENT_TYPES = ("grant", "revoke", "suppress")
 @dataclass(frozen=True)
 class CaptureRequest:
     fields: dict[str, Any]
-    body: bytes  # the request as received (its keyed hash goes on the row, the bytes into the evidence object)
+    body: bytes  # the bytes stored and hashed: the request as received, or (with a display) the canonical rest of it
+    display: dict[str, str] | None = None  # name and/or company; goes to the display table only, never into the evidence
 
 
 @dataclass(frozen=True)
@@ -137,10 +139,38 @@ def _time(value: Any, name: str) -> datetime | None:
     return t
 
 
+DISPLAY_KEYS = ("name", "company")
+DISPLAY_FIELD_MAX = 200
+
+
+def _split_display(payload: dict) -> tuple[dict, dict | None]:
+    """Take ``display`` off the top level of a capture body before anything is checked or hashed (records.md section 9).
+    Returns (the rest, the validated display or None). A display is an object holding only ``name`` and/or ``company``,
+    each text of 1 to 200 characters; anything else is ``validation_failed`` with ``fields.display``."""
+    if "display" not in payload:
+        return payload, None
+    rest = {k: v for k, v in payload.items() if k != "display"}
+    shown = payload["display"]
+    bad = ApiError("validation_failed", "display is an object with a name and/or a company, each 1 to 200 characters",
+                   {"display": "an object with only name and/or company, each text of 1 to 200 characters"})
+    if not isinstance(shown, dict) or not shown or set(shown) - set(DISPLAY_KEYS):
+        raise bad
+    if not all(isinstance(v, str) and 1 <= len(v) <= DISPLAY_FIELD_MAX for v in shown.values()):
+        raise bad
+    return rest, dict(shown)
+
+
 def parse_capture(payload: Any, body: bytes, scopes: tuple[str, ...]) -> CaptureRequest:
-    """Shape checks that need no database. Refuses with a contract error name."""
+    """Shape checks that need no database. Refuses with a contract error name.
+
+    A top-level ``display`` is removed first. When it was present, the stored and hashed body becomes the canonical JSON
+    of the rest of the object (sorted keys, compact separators, UTF-8, no ASCII escaping); when it was absent, the body is
+    the bytes as received."""
     if not isinstance(payload, dict):
         raise ApiError("invalid_request", "the body must be a JSON object")
+    payload, display = _split_display(payload)
+    if display is not None:
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     if "disclosure_text" in payload:
         raise ApiError("validation_failed", "wording is never accepted on the wire; register it and send its sha256",
                        {"disclosure_text": "not accepted"})
@@ -193,7 +223,7 @@ def parse_capture(payload: Any, body: bytes, scopes: tuple[str, ...]) -> Capture
             raise ApiError("UnknownDisclosureError", "a grant must carry the sha256 of wording this organization registered")
         if not f.get("brand_ids"):
             raise ApiError("validation_failed", "a grant names the brands on its wording", {"brand_ids": "required on a grant"})
-    return CaptureRequest(f, body)
+    return CaptureRequest(f, body, display)
 
 
 # Org checks (inside the tenant) --------------------------------------------------------------------------------------
@@ -211,6 +241,12 @@ def require_serving(conn: psycopg.Connection) -> str:
     if status == "closed":
         raise ApiError("org_not_active", "the organization's status refuses this action")
     return status
+
+
+def org_region(conn: psycopg.Connection, deployment_region: str | None) -> str | None:
+    """The phone region national-format numbers are read with: the organization's own, else the deployment's setting."""
+    row = conn.execute("SELECT default_region FROM consentvault.organization WHERE org_id = consentvault.current_org()").fetchone()
+    return row["default_region"] if row is not None and row["default_region"] else deployment_region
 
 
 def org_channels(conn: psycopg.Connection) -> set[str]:
@@ -322,7 +358,7 @@ def normalize(contact: Any, region: str | None) -> tuple[str, str]:
 class CapturePipeline:
     def __init__(self, *, store: EvidenceStore, crypto: TenantCrypto, receipts: ReceiptSigner,
                  default_retain_years: int, region: str | None = None,
-                 clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)):
+                 clock: Optional[Callable[[], datetime]] = None):
         if not isinstance(store, EvidenceStore):
             raise TenancyError("store must be an EvidenceStore")
         if not isinstance(default_retain_years, int) or default_retain_years < 1:
@@ -341,17 +377,19 @@ class CapturePipeline:
         from ..capture import tenant_capture
 
         f = dict(req.fields)
-        kind, norm = normalize(f["contact"], self.region)
         object_id = uuid.uuid4()
         key = f"events/{object_id}"
         try:
             with enter(conn) as org:
                 require_serving(conn)
+                region = org_region(conn, self.region)
+                kind, norm = normalize(f["contact"], region)
                 check_channel_purpose(conn, f["channels"], f["purposes"], allow_star=f["event_type"] != "grant")
                 _check_source_and_brands(conn, f, credential_id)
                 _check_disclosure(conn, f)
                 fp, data_key = contact_key(conn, self.crypto, org, kind, norm, create=True)
-                retain = retention_until(conn, self.default_retain_years, self.clock())
+                retain = retention_until(conn, self.default_retain_years,
+                                        self.clock() if self.clock else dbclock.now(conn))
                 conn.execute("INSERT INTO consentvault.evidence_object (org_id, object_id, object_key, contact_fp,"
                              " retain_until) VALUES (%s, %s, %s, %s, %s)", (org, object_id, key, fp, retain))
         except KeyProviderError as exc:
@@ -370,8 +408,8 @@ class CapturePipeline:
 
         try:
             with enter(conn):
-                ev = tenant_capture(conn, self.crypto, payload=req.body, region=self.region,
-                                    allowed_purposes=None, **f)
+                ev = tenant_capture(conn, self.crypto, payload=req.body, region=region,
+                                    allowed_purposes=None, display=req.display, **f)
                 conn.execute("UPDATE consentvault.evidence_object SET status = 'committed', event_id = %s,"
                              " sha256 = %s, settled_at = clock_timestamp()"
                              " WHERE org_id = consentvault.current_org() AND object_id = %s",

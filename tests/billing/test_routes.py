@@ -20,16 +20,22 @@ def call(r, method, path, org=None, role="admin", body=b""):
     return r.handle(method, path, body=body, caller=caller)
 
 
-def test_plans_come_from_the_stripe_prices_sorted_by_amount(tenancy, stripe):
+def test_plans_come_from_the_stripe_prices_sorted_by_amount_and_enterprise_has_no_list_price(tenancy, stripe):
     res = call(routes_for(tenancy, stripe), "GET", "/v1/billing/plans", tenancy.a)
     assert res.status == 200 and res.payload["next_cursor"] is None
-    assert [p["plan_id"] for p in res.payload["items"]] == ["starter", "growth", "enterprise"]
+    assert [(p["plan_id"], p["interval"]) for p in res.payload["items"]] == [
+        ("starter", "month"), ("starter", "year"), ("growth", "month"), ("growth", "year")]
     assert res.payload["items"][0] == {
-        "plan_id": "starter", "name": "Starter", "interval": "month", "unit_amount": 29900, "currency": "usd",
-        "included_events": 10000, "included_gate_checks": 200000, "orgs_brands": "3 brands"}
+        "plan_id": "starter", "name": "Starter", "interval": "month", "unit_amount": 4900, "currency": "usd",
+        "included_events": 1000, "included_gate_checks": 25000, "systems": 1, "legal_holds": False}
+    growth = res.payload["items"][2]
+    assert (growth["unit_amount"], growth["included_events"], growth["included_gate_checks"], growth["systems"],
+            growth["legal_holds"]) == (49900, 15000, 500000, 5, True)
+    assert [p["unit_amount"] for p in res.payload["items"] if p["interval"] == "year"] == [49000, 499000]
     stripe.prices["price_starter"]["metadata"]["included_events"] = "ten thousand"
-    bad = call(routes_for(tenancy, stripe), "GET", "/v1/billing/plans", tenancy.a)
-    assert bad.status == 502 and bad.payload["error"] == "stripe_unavailable"
+    bad = call(routes_for(tenancy, stripe, alarm=lambda name, detail: None), "GET", "/v1/billing/plans", tenancy.a)
+    assert bad.status == 200  # the one malformed Price is dropped by name; the rest of the list stands
+    assert ("starter", "month") not in [(p["plan_id"], p["interval"]) for p in bad.payload["items"]]
 
 
 @pytest.mark.parametrize("role", ["developer", "compliance_viewer", "operator", "member"])
@@ -66,7 +72,7 @@ def test_summary_reports_plan_period_inclusions_and_usage_against_them(tenancy, 
     start, end = now - timedelta(days=10), now + timedelta(days=20)
     with tenancy.app() as app:
         app.execute("SELECT consentvault.billing_link_account(%s, %s, %s, 'price_starter', 'active', 'starter',"
-                    " 'Starter', 10000, 200000, %s, %s)", (org.org_id, cus, sub, start, end))
+                    " 'Starter', 1000, 25000, %s, %s)", (org.org_id, cus, sub, start, end))
     with tenancy.superuser() as su:
         for i, (ev, gc) in enumerate([(120, 2400), (80, 1600)]):
             su.execute("INSERT INTO consentvault.usage_day (org_id, day, events, gate_checks, reported_at)"
@@ -76,8 +82,8 @@ def test_summary_reports_plan_period_inclusions_and_usage_against_them(tenancy, 
     res = call(routes_for(tenancy, stripe), "GET", "/v1/billing", org)
     assert res.status == 200
     p = res.payload
-    assert p["status"] == "active" and p["plan"] == {"plan_id": "starter", "name": "Starter"}
-    assert p["included"] == {"events": 10000, "gate_checks": 200000}
+    assert p["status"] == "active" and p["plan"] == {"plan_id": "starter", "name": "Starter", "contract_pending": False}
+    assert p["included"] == {"events": 1000, "gate_checks": 25000}
     assert p["used"] == {"events": 200, "gate_checks": 4000}  # organisation B's 5000 never appears
     assert p["period"]["start"].endswith("Z") and p["last_reported_at"].endswith("Z")
 
@@ -88,7 +94,7 @@ def test_an_unread_gate_count_is_null_never_zero(tenancy, stripe):
     now = datetime.now(timezone.utc)
     with tenancy.app() as app:
         app.execute("SELECT consentvault.billing_link_account(%s, %s, %s, 'price_starter', 'active', 'starter',"
-                    " 'Starter', 10000, 200000, %s, %s)",
+                    " 'Starter', 1000, 25000, %s, %s)",
                     (org.org_id, cus, sub, now - timedelta(days=5), now + timedelta(days=25)))
     with tenancy.superuser() as su:
         su.execute("INSERT INTO consentvault.usage_day (org_id, day, events, gate_checks) VALUES (%s, %s, 70, NULL)",
@@ -113,6 +119,27 @@ def test_checkout_creates_the_customer_with_the_org_id_and_returns_the_hosted_ur
                      {"price": "price_growth_gc"}]
     call(r, "POST", "/v1/billing/checkout", org, body=json.dumps({"plan_id": "starter"}).encode())
     assert stripe.count("create_customer") == 1  # the second checkout reuses the linked customer
+
+
+def test_annual_checkout_uses_the_annual_price_with_the_same_overage_prices(tenancy, stripe):
+    org = tenancy.a
+    set_status(tenancy, org, "trial")
+    res = call(routes_for(tenancy, stripe), "POST", "/v1/billing/checkout", org,
+               body=json.dumps({"plan_id": "starter", "interval": "year"}).encode())
+    assert res.status == 201
+    items = [c for c in stripe.calls if c[0] == "create_checkout_session"][0][1][1]
+    assert items == [{"price": "price_starter_annual", "quantity": 1}, {"price": "price_starter_ev"},
+                     {"price": "price_starter_gc"}]
+    bad = call(routes_for(tenancy, stripe), "POST", "/v1/billing/checkout", tenancy.b,
+               body=json.dumps({"plan_id": "starter", "interval": "week"}).encode())
+    assert bad.status == 422 and bad.payload["error"] == "validation_failed"
+
+
+def test_enterprise_cannot_be_bought_at_checkout_it_is_by_consultation(tenancy, stripe):
+    res = call(routes_for(tenancy, stripe), "POST", "/v1/billing/checkout", tenancy.a,
+               body=b'{"plan_id":"enterprise"}')
+    assert res.status == 404 and res.payload["error"] == "not_found"
+    assert stripe.count("create_checkout_session") == 0
 
 
 def test_checkout_refuses_a_second_subscription_an_unknown_plan_and_a_bad_body(tenancy, stripe):

@@ -27,6 +27,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+from ..safelog import describe
 from .errors import FieldCryptoError, FieldDecryptError, KeyProviderError
 from .keys_protocol import KeyProvider, WrappedKey
 
@@ -45,7 +46,7 @@ def _org(org_id: uuid.UUID | str) -> uuid.UUID:
     try:
         return uuid.UUID(str(org_id))
     except ValueError as exc:
-        raise FieldCryptoError(f"org_id is not a UUID: {exc}") from exc
+        raise FieldCryptoError(f"org_id is not a UUID: {describe(exc)}") from exc
 
 
 def _part(value: str, what: str) -> bytes:
@@ -101,7 +102,7 @@ def decrypt_text(data_key: bytes, org_id: uuid.UUID | str, record_id: str, colum
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise FieldCryptoError(f"field {column!r} is not UTF-8 text: {exc}") from exc
+        raise FieldCryptoError(f"field {column!r} is not UTF-8 text: {describe(exc)}") from exc
 
 
 def payload_mac(data_key: bytes, payload: bytes) -> str:
@@ -199,10 +200,20 @@ class TenantCrypto:
             raise KeyProviderError("wrap_data_key must return a WrappedKey with bytes and a key version >= 1")
         return out
 
+    # display key ---------------------------------------------------------------------------------------------------
+
+    def display_key(self, org_id: uuid.UUID | str) -> bytes:
+        """The organisation's 32-byte display key (records.md section 8), which seals a record's masked contact, name and
+        company with ``encrypt_field``. A provider without one raises ``KeyProviderError`` by name; none is invented."""
+        key = self._call("display_key", _org(org_id))
+        if not isinstance(key, bytes) or len(key) != DATA_KEY_BYTES:
+            raise KeyProviderError(f"display_key must return {DATA_KEY_BYTES} bytes")
+        return key
+
     def _call(self, method: str, *args):
         try:
             return getattr(self._provider, method)(*args)
         except KeyProviderError:
             raise
         except Exception as exc:  # any provider fault is named here and carried, never swallowed
-            raise KeyProviderError(f"key provider {method} failed: {type(exc).__name__}: {exc}") from exc
+            raise KeyProviderError(f"key provider {method} failed: {describe(exc)}") from exc

@@ -10,6 +10,20 @@ from consentvault.providers.errors import (
 from consentvault.providers.keys import KeyProvider, LocalFileKeyProvider, OpenBaoKeyProvider
 
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+# A provider kept outside this repository (the managed service's) runs these same contract tests by naming a factory
+# ``module:function`` that takes (tmp_path, clock) and returns a KeyProvider; see consentvault.providers.plugins.
+ENV_CONTRACT_FACTORY = "CONSENTVAULT_KEY_PROVIDER_CONTRACT"
+
+
+def external_contract_factory():
+    import os
+
+    spec = os.environ.get(ENV_CONTRACT_FACTORY)
+    if not spec:
+        return None
+    from consentvault.providers.plugins import resolve_object
+
+    return resolve_object(spec)
 
 
 class Clock:
@@ -63,10 +77,12 @@ class FakeBao:
         raise AssertionError(path)
 
 
-@pytest.fixture(params=["local", "bao"])
+@pytest.fixture(params=["local", "bao", *(["external"] if external_contract_factory() else [])])
 def provider(request, tmp_path):
     clock = Clock()
-    if request.param == "local":
+    if request.param == "external":
+        p = external_contract_factory()(tmp_path, clock)
+    elif request.param == "local":
         p = LocalFileKeyProvider(tmp_path / "keys", "correct horse battery", clock=clock)
     else:
         p = OpenBaoKeyProvider(FakeBao(), tmp_path / "ledger.json", clock=clock)

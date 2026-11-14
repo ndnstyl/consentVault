@@ -1,16 +1,16 @@
 # UX audit: ConsentVault Cloud portal (app.consentvault.ai)
 
-Date 2026-10-29. Seat: ui-ux-engineer. Sources read: `/Users/oxfloors/brain/specs/268-consentvault-cloud/spec.md`,
-`data-model.md`, `tasks.md`, `contracts/*.md`; the open core at `/Users/oxfloors/debwe/` (`docs/api.md`,
-`src/consentvault/proof.py`); the marketing site at `/Users/oxfloors/brain/projects/consentVault/site/src/`.
+Date 2026-10-29. Seat: ui-ux-engineer. Sources read: the cloud specification,
+data model, task list and contracts; the open core in this repository (`docs/api.md`,
+`src/consentvault/proof.py`); the marketing site's `src/`.
 
 ## 1. What exists today
 
 | Surface | State | Evidence |
 |---|---|---|
-| Portal app | **Does not exist.** No route, no screen, no component. | `ls /Users/oxfloors/debwe/portal` returned "No such file or directory" before this package was written. tasks.md line 58 (portal build) is unchecked. |
-| Core UI | None. The open core is CLI plus HTTP API only. | `/Users/oxfloors/debwe/src/consentvault/cli.py`, `api.py`; no templates directory. |
-| Marketing site | Live, Next.js 14 static, React 18. Holds the brand system the portal must share. | `/Users/oxfloors/brain/projects/consentVault/site/package.json` (next 14.2.35). |
+| Portal app | **Does not exist.** No route, no screen, no component. | `ls portal` returned "No such file or directory" before this package was written. tasks.md line 58 (portal build) is unchecked. |
+| Core UI | None. The open core is CLI plus HTTP API only. | `src/consentvault/cli.py`, `api.py`; no templates directory. |
+| Marketing site | Live, Next.js 14 static, React 18. Holds the brand system the portal must share. | the marketing site's `package.json` (next 14.2.35). |
 | Sign-in | Not built. WorkOS AuthKit hosted page is ruled. | contracts/auth.md "Portal sessions"; spec Rulings. |
 | Billing pages | Not built. Stripe hosted Checkout and Customer Portal are ruled. | contracts/billing.md. |
 

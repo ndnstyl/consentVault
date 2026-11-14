@@ -43,11 +43,10 @@ export function SignIn() {
     <CenteredCard>
       {expired && <Banner kind="warning" title="Your session ended">Your session ended after 8 hours. Sign in again to continue. Anything you had not saved is kept on this device until you return.</Banner>}
       <h1 ref={h} tabIndex={-1}>Sign in to ConsentVault</h1>
-      <p>Use a passkey, or your work Google or Microsoft account.</p>
+      <p>Use a passkey, or sign in with your company account if your organization has connected one.</p>
       <div className="btn-col">
         <a className="btn btn-primary" href={q('passkey')}>{expired ? 'Sign in again with a passkey' : 'Sign in with a passkey'}</a>
-        <a className="btn btn-secondary" href={q('google')}>Continue with Google</a>
-        <a className="btn btn-secondary" href={q('microsoft')}>Continue with Microsoft</a>
+        <a className="btn btn-secondary" href={q('sso')}>Sign in with your company</a>
       </div>
       <p className="hint mt4">Hosted by WorkOS under the ConsentVault brand. No password is ever asked for or stored.</p>
       {FOOTER}
@@ -61,7 +60,7 @@ type CbState =
   | { k: 'noorg'; email: string } | { k: 'factor' } | { k: 'error'; err: ApiError };
 
 export function Callback() {
-  const { api, selectOrg } = useSession();
+  const { api, selectOrg, signOut } = useSession();
   const { navigate, search } = useRouter();
   const [s, setS] = useState<CbState>({ k: 'loading' });
   const [nonce, setNonce] = useState(0);
@@ -100,7 +99,7 @@ export function Callback() {
         <div role="alert"><h1 ref={h} tabIndex={-1}>Your account is not a member of any organization</h1>
           <p><b>Cause:</b> {`You signed in as ${s.email}, and no organization on ConsentVault lists that address as a member.`}</p>
           <p><b>Next:</b> Ask your organization&apos;s admin to invite this address, or sign in with the address your invitation was sent to.</p>
-          <div className="btn-row">{again}<a className="btn btn-secondary" href="/auth/logout">Sign out</a></div></div>
+          <div className="btn-row">{again}<button type="button" className="btn btn-secondary" onClick={signOut}>Sign out</button></div></div>
       )}
       {s.k === 'factor' && (
         <div role="alert"><h1 ref={h} tabIndex={-1}>Your sign-in needs a second factor</h1>
@@ -123,7 +122,7 @@ type InvState =
   | { k: 'loading' } | { k: 'ok'; inv: InviteLookup } | { k: 'joined'; m: Membership } | { k: 'wrong'; hint: string; email: string | null; inv: InviteLookup | null } | { k: 'fail'; err: ApiError };
 
 export function Invite() {
-  const { api } = useSession();
+  const { api, signOut } = useSession();
   const { search, navigate } = useRouter();
   const token = search.get('token');
   const [s, setS] = useState<InvState>({ k: 'loading' });
@@ -175,7 +174,7 @@ export function Invite() {
         <div role="alert"><h1 ref={h} tabIndex={-1}>You are signed in with a different address</h1>
           <p><b>Cause:</b> {`The invitation was sent to ${s.hint}.${s.email ? ` You are signed in as ${s.email}.` : ''}`}</p>
           <p><b>Next:</b> {`Sign out, then sign in with ${s.hint}.`}</p>
-          <a className="btn btn-secondary" href="/auth/logout">Sign out and switch account</a></div>
+          <button type="button" className="btn btn-secondary" onClick={signOut}>Sign out and switch account</button></div>
       )}
       {s.k === 'joined' && (
         <div role="status"><h1 ref={h} tabIndex={-1}>{`You joined ${s.m.name} as ${ROLE_LABEL[s.m.role]}.`}</h1>

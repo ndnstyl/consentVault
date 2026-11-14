@@ -21,7 +21,7 @@ class RefusingSink(AnchorSink):
     label = "refusing"
 
     def publish(self, org_id, record):
-        raise AnchorSinkError("the tenant's webhook answered HTTP 503")
+        raise AnchorSinkError("the tenant's webhook answered HTTP 503", code="http_503")  # as the real webhook sink raises it
 
 
 @pytest.fixture
@@ -103,7 +103,7 @@ def test_one_organizations_failing_sink_is_named_and_does_not_stop_the_others(an
     with pytest.raises(TenantAnchorRunError) as err:
         run(anchors, sinks)
     assert [org for org, _ in err.value.failures] == [str(t.b.org_id)]
-    assert "HTTP 503" in err.value.failures[0][1] and str(t.b.org_id) in str(err.value)
+    assert err.value.failures[0][1] == "AnchorSinkError (code http_503)" and str(t.b.org_id) in str(err.value)
     assert [r["org_id"] for r in err.value.results if r["status"] == "published"] == [str(t.a.org_id)]
     assert len(lines(anchors["tmp"] / "alpha.jsonl")) == 1 and not (anchors["tmp"] / "bravo.jsonl").exists()
     assert chain_heads(t, t.b) == []
@@ -113,7 +113,7 @@ def test_an_organization_with_no_sink_is_a_named_failure_and_an_empty_ledger_is_
     t = anchors["t"]
     with pytest.raises(TenantAnchorRunError) as err:
         run(anchors, {t.a.org_id: anchors["sinks"][t.a.org_id]})
-    assert err.value.failures[0][0] == str(t.b.org_id) and "no anchor sink" in err.value.failures[0][1]
+    assert err.value.failures[0][0] == str(t.b.org_id) and err.value.failures[0][1] == "AnchorError (code no_anchor_sink)"
     from isolation.harness import create_org
 
     with db.connect(t.operator_dsn) as owner:

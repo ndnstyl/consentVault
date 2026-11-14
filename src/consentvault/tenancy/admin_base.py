@@ -19,6 +19,7 @@ from typing import Any, Callable, Iterable, Optional, Sequence
 
 import psycopg
 
+from .. import dbclock
 from . import audit
 from .errors import TenancyError
 
@@ -28,16 +29,23 @@ STATUS: dict[str, int] = {
     "second_factor_required": 403, "role_not_allowed": 403, "not_a_member": 403, "org_not_active": 403,
     "org_suspended": 403, "source_not_allowed": 403, "brand_not_allowed": 403, "invite_wrong_account": 403,
     "not_found": 404, "invite_not_found": 404, "no_records": 404, "invite_expired": 410, "invite_used": 410,
-    "invite_withdrawn": 410, "no_org_selected": 409, "export_expired": 410, "brand_exists": 409, "source_exists": 409, "system_exists": 409,
+    "invite_withdrawn": 410, "no_org_selected": 409, "export_expired": 410, "brand_exists": 409, "source_exists": 409, "system_exists": 409, "credential_exists": 409,
     "disclosure_exists": 409, "already_member": 409, "already_revoked": 409, "already_subscribed": 409,
     "policy_required": 409, "policy_superseded": 409, "version_not_draft": 409, "attestation_mismatch": 409,
     "last_admin": 409, "legal_hold_active": 409, "export_not_ready": 409, "export_not_resumable": 409,
-    "redrive_in_progress": 409, "offboarding_already_requested": 409, "rotation_in_progress": 409, "validation_failed": 422,
+    "redrive_in_progress": 409, "erasure_already_requested": 409, "contact_already_erased": 409,
+    "contact_not_held": 404, "offboarding_already_requested": 409, "rotation_in_progress": 409, "validation_failed": 422,
     "invalid_origin": 422, "private_key_refused": 422, "below_platform_minimum": 422, "endpoint_not_https": 422,
     "unknown_brand": 422, "invalid_contact": 422, "invalid_channel": 422, "UnknownPurposeError": 422,
     "UnknownDisclosureError": 422, "policy_incomplete": 422, "stop_cannot_proceed": 422, "unavailable_cannot_proceed": 422,
     "acknowledgement_required": 422, "org_name_mismatch": 422, "rate_limited": 429, "email_send_failed": 502,
-    "stripe_unavailable": 502, "key_unavailable": 503,
+    "stripe_unavailable": 502, "key_unavailable": 503, "misconfigured": 500, "sso_not_connected": 403, "sso_required": 403,
+    "sso_binding_taken": 409, "audit_unavailable": 503, "service_unavailable": 503, "export_too_large": 422,
+    "export_in_progress": 409, "export_link_expired": 410, "export_link_used": 410, "export_link_invalid": 403,
+    "texting_not_registered": 409, "inbound_not_verified": 409, "no_sending_account": 409, "sender_details_missing": 409,
+    "link_host_not_verified": 409, "link_host_dns_missing": 422, "sender_not_verified": 422, "provider_not_supported": 422,
+    "provider_unreachable": 502, "inbound_still_pointed_here": 409, "inbound_too_large": 413, "inbound_number_mismatch": 403,
+    "provider_refused": 502, "step_not_skippable": 422,
 }
 
 ROLE_ADMIN = "admin"
@@ -50,7 +58,7 @@ CLIENT_ROLES = (ROLE_ADMIN, ROLE_DEVELOPER, ROLE_VIEWER)
 ROLE_SCOPES: dict[str, tuple[str, ...]] = {
     ROLE_ADMIN: ("admin",),
     ROLE_DEVELOPER: ("developer",),
-    ROLE_VIEWER: ("proof_read", "audit_read"),
+    ROLE_VIEWER: ("proof_read", "audit_read", "records_read"),
 }
 
 PLATFORM_MINIMUM_RETENTION_YEARS = 5
@@ -66,6 +74,7 @@ class ApiError(TenancyError):
         self.name = name
         self.detail = detail
         self.fields = fields
+        self.retry_after: Optional[int] = None  # seconds, for a rate_limited refusal (sent as Retry-After)
 
     @property
     def status(self) -> int:
@@ -110,7 +119,14 @@ class Ctx:
     request_id: str
     cursor_key: bytes = b""
     custody: Any = None
-    now: Callable[[], float] = time.time
+    now: Optional[Callable[[], float]] = None   # seconds since the epoch; None reads the database's clock on this request's connection
+    crypto: Any = None  # tenancy.crypto.TenantCrypto, for the records routes (fingerprints, display key, contact keys)
+    token: Optional[str] = None  # the caller's tenant token, to write an audit row that commits on its own connection
+    connect: Any = None  # a runtime-role connection factory, for the same
+
+    def __post_init__(self) -> None:
+        if self.now is None:
+            self.now = lambda: dbclock.epoch(self.conn)
 
     def org_id(self) -> uuid.UUID:
         row = self.conn.execute("SELECT consentvault.current_org() AS org").fetchone()
@@ -118,9 +134,11 @@ class Ctx:
             raise ApiError("unauthenticated", "no organization is entered for this request")
         return row["org"]
 
-    def audit(self, action: str, target_kind: str, target_id: Optional[str] = None, reason: Optional[str] = None) -> None:
-        audit.append(self.conn, actor_kind=self.actor.kind, actor_id=self.actor.id, action=action,
-                     target_kind=target_kind, target_id=target_id, reason=reason, request_id=self.request_id)
+    def audit(self, action: str, target_kind: str, target_id: Optional[str] = None, reason: Optional[str] = None,
+              detail: Optional[dict] = None):
+        return audit.append(self.conn, actor_kind=self.actor.kind, actor_id=self.actor.id, action=action,
+                            target_kind=target_kind, target_id=target_id, reason=reason, request_id=self.request_id,
+                            detail=detail)
 
 
 # ---- organisation status gates (contracts/billing.md table) -----------------------------------------------------------
@@ -259,6 +277,9 @@ def decode_cursor(key: bytes, endpoint: str, cursor: str, now: float) -> list[st
     return [str(x) for x in data["k"]]
 
 
+_SQL_NAME = re.compile(r"[a-z_][a-z0-9_]*")
+
+
 def paginate(ctx: Ctx, *, endpoint: str, select_sql: str, params: Sequence[Any], key_cols: tuple[str, str],
              key_types: tuple[str, str], descending: bool, limit: Any, cursor: Optional[str],
              shape: Callable[[dict], dict]) -> dict:
@@ -266,6 +287,8 @@ def paginate(ctx: Ctx, *, endpoint: str, select_sql: str, params: Sequence[Any],
 
     The second key is a unique id, so the order is stable. Answers ``{items, next_cursor}``.
     """
+    if not all(_SQL_NAME.fullmatch(c) for c in key_cols) or not all(_SQL_NAME.fullmatch(t) for t in key_types):
+        raise ValueError("a sort-key column or type is not a plain SQL name")
     n = parse_limit(limit)
     args = list(params)
     where = ""

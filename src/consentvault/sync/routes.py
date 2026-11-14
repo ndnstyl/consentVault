@@ -34,10 +34,12 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Optional
 
 import psycopg
 
+from .. import dbclock
+from ..safelog import caller_detail
 from ..errors import NormalizationError
 from ..ledger import CHANNELS  # noqa: F401  (documented channel list)
 from ..normalize import normalize_contact
@@ -85,6 +87,7 @@ class Route:
 
 ROUTES = (
     Route("POST", "/v1/signals", "signals", frozenset({"capture"})),
+    Route("POST", "/v1/systems/{system_id}:test", "system_test", frozenset({"admin", "developer"})),
     Route("POST", "/v1/deliveries:query", "deliveries_query", frozenset({"admin", "proof_read"})),
     Route("GET", "/v1/systems/{system_id}/deliveries", "system_deliveries", frozenset({"admin", "developer", "proof_read"})),
     Route("POST", "/v1/deliveries:redrive", "redrive", frozenset({"admin", "developer"})),
@@ -101,7 +104,10 @@ def _match(route: Route, method: str, path: str) -> dict | None:
     params: dict[str, str] = {}
     for h, w in zip(have, want):
         if w.startswith("{"):
-            params[w[1:-1]] = h
+            name, _, suffix = w[1:].partition("}")  # "{system_id}:test" keeps its ":test" fixed
+            if suffix and not h.endswith(suffix):
+                return None
+            params[name] = h[:-len(suffix)] if suffix else h
         elif h != w:
             return None
     return params
@@ -123,12 +129,13 @@ def _uuid(value) -> uuid.UUID | None:
 
 class SyncRoutes:
     def __init__(self, connect: Callable[[], psycopg.Connection], crypto: tc.TenantCrypto, *, region: str | None = None,
-                 allowed_purposes=None, clock: Callable[[], float] = time.time) -> None:
+                 allowed_purposes=None, clock: Optional[Callable[[], float]] = None, custody=None, transport=None, mint_token=None) -> None:
+        self.custody, self.transport, self.mint_token = custody, transport, mint_token  # a test push needs the key custody and the egress door
         self.connect = connect
         self.crypto = crypto
         self.region = region
         self.allowed_purposes = allowed_purposes
-        self.clock = clock
+        self.clock = clock or dbclock.epoch_clock(connect)   # tests pin one; production reads the database's
 
     def matches(self, method: str, path: str) -> bool:
         return any(_match(r, method, path) is not None for r in ROUTES)
@@ -144,9 +151,9 @@ class SyncRoutes:
             try:
                 return getattr(self, "_" + route.name)(req, params)
             except TenantTokenError as exc:
-                return _error(401, "unauthenticated", str(exc), req.request_id)
+                return _error(401, "unauthenticated", caller_detail(exc), req.request_id)
             except KeyProviderError as exc:
-                return _error(503, "key_unavailable", f"the organization key could not be used: {exc}", req.request_id)
+                return _error(503, "key_unavailable", f"the organization key could not be used: {caller_detail(exc)}", req.request_id)
             except psycopg.errors.InsufficientPrivilege:
                 return _error(403, "role_not_allowed", "the token holds none of the scopes this call needs", req.request_id)
         return _error(404, "not_found", "no such route", req.request_id)
@@ -182,11 +189,45 @@ class SyncRoutes:
 
     # handlers ---------------------------------------------------------------------------------------------------------
 
+    def _system_test(self, req: Request, params: dict) -> Response:
+        from datetime import datetime as dt
+
+        from .connectors.webhook import send_test_push
+        from .systems import CredentialError, open_credentials
+
+        sid = _uuid(params["system_id"])
+        if sid is None:
+            return _error(404, "not_found", "no such connected system", req.request_id)
+        if self.custody is None or self.transport is None:
+            return _error(503, "service_unavailable", "test pushes are not configured on this server", req.request_id)
+        # 1. in a short transaction: find the system, count the last minute in the database, take the sealed credential
+        with self.connect() as conn, org_transaction(conn, req.token):
+            row = conn.execute("SELECT found, limited, endpoint, signature, credentials_ct FROM consentvault.system_test_begin(%s)",
+                               (sid,)).fetchone()
+        if not row["found"]:
+            return _error(404, "not_found", "no such connected system", req.request_id)
+        if row["limited"]:
+            return _error(429, "rate_limited", "at most 6 test pushes a minute for one system", req.request_id)
+        try:
+            secret = open_credentials(self.custody, req.org_id, sid, row["credentials_ct"])
+        except CredentialError as exc:
+            return _error(503, "key_unavailable", caller_detail(exc), req.request_id)
+        # 2. the outbound call, with no transaction and no connection held while the receiver answers
+        answer = send_test_push(self.transport, endpoint=row["endpoint"], signature=row["signature"], secret=secret,
+                                org_id=req.org_id)
+        answer["at"] = dt.fromtimestamp(self.clock(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # 3. record the answer through the scoped function, on a fresh token: the request's own may have run out while a slow
+        # receiver answered
+        token = self.mint_token(req.org_id, sorted(req.scopes)) if self.mint_token is not None else req.token
+        with self.connect() as conn, org_transaction(conn, token):
+            conn.execute("SELECT consentvault.system_test_record(%s, %s::jsonb)", (sid, json.dumps(answer)))
+        return Response(200, answer)
+
     def _signals(self, req: Request, params: dict) -> Response:
         try:
             signal = parse_signal(req.body)
         except SignalValidationError as exc:
-            return _error(422, "validation_failed", str(exc), req.request_id, exc.fields)
+            return _error(422, "validation_failed", caller_detail(exc), req.request_id, exc.fields)
         cid = _uuid(req.credential_id)
         with self.connect() as conn, org_transaction(conn, req.token):
             system_id = conn.execute("SELECT consentvault.sync_system_of_credential(%s) AS s", (cid,)).fetchone()["s"] \
@@ -199,7 +240,7 @@ class SyncRoutes:
                 result = process_signal(conn, self.crypto, org_id=req.org_id, system_id=system_id, signal=signal,
                                         region=self.region, allowed_purposes=self.allowed_purposes)
             except InvalidContactError as exc:
-                return _error(422, "invalid_contact", str(exc), req.request_id)
+                return _error(422, "invalid_contact", caller_detail(exc), req.request_id)
         body = {"signal_id": str(result.signal_id), "resolution": result.resolution}
         if result.event_id:
             body["event_id"] = result.event_id
@@ -223,9 +264,9 @@ class SyncRoutes:
             try:
                 kind, norm = normalize_contact(body["contact"], None, self.region)
             except NormalizationError as exc:
-                return _error(422, "invalid_contact", str(exc), req.request_id)
+                return _error(422, "invalid_contact", caller_detail(exc), req.request_id)
         except _Refusal as r:
-            return _fill(r.response, req.request_id)
+            return _fill(r.refusal_response, req.request_id)
         fp = self.crypto.contact_fingerprint(req.org_id, kind, norm)
         try:
             with self.connect() as conn, org_transaction(conn, req.token):
@@ -250,7 +291,7 @@ class SyncRoutes:
             limit = self._limit(q.get("limit"))
             after = self._cursor_in(q.get("cursor"), "system_deliveries")
         except _Refusal as r:
-            return _fill(r.response, req.request_id)
+            return _fill(r.refusal_response, req.request_id)
         status = q.get("status")
         if status is not None and status not in STATUS_FILTERS:
             return _error(422, "validation_failed", "status must be one of " + ", ".join(STATUS_FILTERS),
@@ -333,7 +374,7 @@ class SyncRoutes:
 class _Refusal(Exception):
     def __init__(self, response: Response) -> None:
         super().__init__(response.body["error"])
-        self.response = response
+        self.refusal_response = response  # the ready API response for the caller
 
 
 def _fill(response: Response, rid: str) -> Response:

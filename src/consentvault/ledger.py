@@ -12,7 +12,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Collection, Iterable
 
 import psycopg
+from psycopg import sql
 
+from .safelog import describe
 from . import disclosure as disclosure_mod
 from .errors import (
     ChainError,
@@ -79,6 +81,12 @@ _CIPHER_COLUMNS_V2: dict[str, str] = {
 _LOCK_SQL = "SELECT pg_advisory_xact_lock(consentvault.ledger_lock_key(consentvault.current_org()))"
 _HEAD_SQL = ("SELECT seq, row_hash FROM consentvault.event WHERE org_id = consentvault.current_org()"
              " ORDER BY seq DESC LIMIT 1")
+
+
+def _insert_event_sql(cols) -> sql.Composed:
+    """INSERT into consentvault.event for ``cols``; every column is a quoted identifier, every value a parameter."""
+    return sql.SQL("INSERT INTO consentvault.event ({}) VALUES ({})").format(
+        sql.SQL(", ").join(sql.Identifier(c) for c in cols), sql.SQL(", ").join(sql.Placeholder() for _ in cols))
 
 
 @dataclass(frozen=True)
@@ -362,12 +370,9 @@ def record_event(
             row_hash = compute_row_hash(prev, values, CURRENT_HASH_VERSION)
             cols = list(values) + ["prev_hash", "row_hash"]
             params = list(values.values()) + [prev, row_hash]
-            conn.execute(
-                f"INSERT INTO consentvault.event ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})",
-                params,
-            )
+            conn.execute(_insert_event_sql(cols), params)
     except psycopg.Error as exc:
-        raise LedgerError(f"event refused by the database: {exc}") from exc
+        raise LedgerError(f"event refused by the database: {describe(exc)}") from exc
     return Event(seq=values["seq"], event_id=str(values["event_id"]), row_hash=row_hash, prev_hash=prev)
 
 
@@ -404,6 +409,7 @@ def record_tenant_event(
     allowed_purposes: Collection[str] | None = None,
     contact_verification: str = "none",
     source_system_id: str | uuid.UUID | None = None,
+    display: dict | None = None,
 ) -> Event:
     """Append one hash-version-2 event to the current organisation's chain.
 
@@ -411,6 +417,11 @@ def record_tenant_event(
     (``sync.outbox.enqueue_event_pushes``), so the event and its pushes commit together or not at all; an
     ``OutboxError`` rolls the event back. ``source_system_id`` names the connected system whose signal caused the
     event (it is never pushed its own signal back).
+
+    The contact record list is written in the same transaction (``records.write_event_records``): the record of the
+    contact point, its derived index, and, when the capture carried a ``display`` ``{name?, company?}``, the sealed name
+    and company. A failure there rolls the event back too. ``display`` is never part of the event, its evidence or its
+    chain; it goes only to the display table, under the organisation's display key.
 
     Needs an entered tenant (``tenancy.tokens.org_transaction``) and a ``tenancy.crypto.TenantCrypto``. The contact
     point, subject key, salt and evidence fields are stored only as ciphertexts under the contact's data key; the row
@@ -434,7 +445,7 @@ def record_tenant_event(
         source_uuid = uuid.UUID(str(source_id)) if source_id is not None else None
         release_uuid = uuid.UUID(str(release_of_event_id)) if release_of_event_id is not None else None
     except ValueError as exc:
-        raise InvalidEventError(f"source_id, brand_ids and release_of_event_id must be UUIDs: {exc}") from exc
+        raise InvalidEventError(f"source_id, brand_ids and release_of_event_id must be UUIDs: {describe(exc)}") from exc
     attribution_sha = attribution_digest(attribution)
     subject = make_subject_key(norm, subject_key)
     event_id = uuid.uuid4()
@@ -512,33 +523,56 @@ def record_tenant_event(
             row_hash = compute_row_hash(prev, row, 2)
             cols = list(row) + list(cipher) + ["prev_hash", "row_hash"]
             params = list(row.values()) + list(cipher.values()) + [prev, row_hash]
-            conn.execute(
-                f"INSERT INTO consentvault.event ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})",
-                params,
-            )
+            conn.execute(_insert_event_sql(cols), params)
             from .sync.outbox import enqueue_event_pushes
             pushes = enqueue_event_pushes(conn, event_id=rid, contact_fp=fp, contact=norm, data_key=data_key,
                                           source_system_id=source_system_id)
+            from .records import write_event_records
+            write_event_records(conn, crypto, org=org, event_id=rid, contact_fp=fp, contact_kind=kind, contact_norm=norm,
+                                display=display)
+            # confirmations.md section 5 (core change R1): one send intent per enabled rule of this grant's source, in the
+            # event's own transaction, so the event and its intents commit together or not at all
+            # (only a grant is confirmed; a stop, a release or an erasure's stop enqueues nothing, and the operator console role
+            # that writes an erasure's stop holds no right to the enqueue function)
+            if event_type == "grant":
+                from .confirmations import enqueue_confirmation_intents
+                enqueue_confirmation_intents(conn, event_id=rid, contact_fp=fp)
     except psycopg.Error as exc:
-        raise LedgerError(f"event refused by the database: {exc}") from exc
+        raise LedgerError(f"event refused by the database: {describe(exc)}") from exc
     return Event(seq=row["seq"], event_id=rid, row_hash=row_hash, prev_hash=prev, pushes=pushes)
 
 
 def _plaintext_breaks(conn: psycopg.Connection, crypto, row: dict) -> list[Break]:
     """Decrypt a version-2 row and check its fingerprint, commitments and evidence digest against the plaintext.
 
-    A row whose contact key was deleted (erased) is skipped: its links still verify; its content no longer can.
-    A ciphertext that fails authentication is a break. A key provider that cannot answer raises.
+    A row covered by a completed erasure of its contact (its sequence at or before the sequence the erasure recorded) is
+    skipped: its links still verify; its content no longer can, and a key held now is a returning person's. A row with no
+    contact key that no completed erasure covers is a break (``contact_key_missing``): only an erasure makes a row read as
+    erased. A completed erasure of the contact with no recorded sequence (``erasure_coverage``) is a break for every row of
+    that contact (``erasure_without_sequence``); nothing is ever decided by a clock. A ciphertext that fails authentication
+    is a break. A key provider that cannot answer raises.
     """
     from .tenancy import crypto as tc
     from .tenancy.errors import FieldCryptoError
     from .tenancy.keys_protocol import WrappedKey
 
     seq, eid, org = row["seq"], str(row["event_id"]), row["org_id"]
+    cover = conn.execute("SELECT coalesce(bool_or(c.erasure_id IS NULL), false) AS unsequenced,"
+                         " coalesce(bool_or(c.covers_through_seq >= %s), false) AS covered"
+                         " FROM consentvault.erasure_request r LEFT JOIN consentvault.erasure_coverage c"
+                         " ON c.org_id = r.org_id AND c.erasure_id = r.erasure_id"
+                         " WHERE r.org_id = %s AND r.contact_fp = %s AND r.status = 'completed'",
+                         (seq, org, row["contact_fp"])).fetchone()
+    if cover["unsequenced"]:
+        return [Break(seq, eid, "erasure_without_sequence")]
+    if cover["covered"]:
+        # a completed erasure covering this sequence destroyed the key it was sealed under; the row reads as erased
+        # (its links and hashes are checked by the caller either way)
+        return []
     held = conn.execute("SELECT wrapped_key, key_version, salt_ct FROM consentvault.contact_key"
                         " WHERE org_id = %s AND contact_fp = %s", (org, row["contact_fp"])).fetchone()
     if held is None:
-        return []
+        return [Break(seq, eid, "contact_key_missing")]
     data_key = crypto.open_contact_key(org, WrappedKey(bytes(held["wrapped_key"]), held["key_version"]))
     try:
         salt = tc.decrypt_text(data_key, org, row["contact_fp"], "contact_salt", held["salt_ct"])
@@ -588,9 +622,9 @@ def read_file_sink(path: str) -> list[dict]:
                         anchor["org_id"] = str(uuid.UUID(str(rec["org_id"])))
                     anchors.append(anchor)
                 except (ValueError, KeyError, TypeError) as exc:
-                    raise ChainError(f"anchor sink {path} line {n} is not an anchor record: {exc}") from exc
+                    raise ChainError(f"anchor sink {path} line {n} is not an anchor record: {describe(exc)}") from exc
     except OSError as exc:
-        raise ChainError(f"cannot read the anchor sink {path}: {exc}") from exc
+        raise ChainError(f"cannot read the anchor sink {path}: {describe(exc)}") from exc
     return anchors
 
 

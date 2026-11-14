@@ -14,7 +14,9 @@ import urllib.error
 import urllib.request
 from typing import Callable
 
+from ..safelog import describe
 from ..errors import ConsentVaultError
+from ..urlguard import open_no_redirect
 from .base import PermissionChange
 
 
@@ -57,7 +59,7 @@ class WebhookCrmAdapter:
         self.url = url
         self.secret = secret
         self.timeout = timeout
-        self._open = opener or urllib.request.urlopen
+        self._open = opener or open_no_redirect
         self._clock = clock
 
     def push_permission_change(self, change: PermissionChange) -> None:
@@ -79,6 +81,6 @@ class WebhookCrmAdapter:
         except urllib.error.HTTPError as exc:
             raise AdapterError(f"webhook {self.url} answered {exc.code}; change not delivered") from exc
         except (urllib.error.URLError, OSError) as exc:
-            raise AdapterError(f"webhook {self.url} unreachable: {exc}; change not delivered") from exc
+            raise AdapterError(f"webhook {self.url} unreachable: {describe(exc)}; change not delivered") from exc
         if not 200 <= int(status) < 300:
             raise AdapterError(f"webhook {self.url} answered {status}; change not delivered")

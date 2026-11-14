@@ -7,15 +7,34 @@ from datetime import datetime, timezone
 
 import psycopg
 
-from .cli import EXIT_OK, _connect, register
+import sys
+
+from .safelog import describe
+from . import integrity
+from .cli import EXIT_BROKEN, EXIT_OK, _connect, register
 from .errors import AnchorError, ConsentVaultError
 
 
 def _run_anchor(args, cfg) -> int:
-    from .anchor import anchor
+    from .anchor import anchor, cloud_sink
 
-    sink = args.sink or cfg.require_anchor_sink()
+    sink = args.sink or cloud_sink(cfg)
     with _connect(cfg) as conn:
+        try:
+            per_org = integrity.per_org_mode(conn)
+        except integrity.MultiTenantRefused as exc:
+            print(f"consentvault: {describe(exc)}", file=sys.stderr)
+            return EXIT_BROKEN
+        if per_org:  # multi-tenant: every organisation, each under its own token
+            try:
+                out = integrity.anchor_every_org(conn, sink)
+            except integrity.IntegrityRunError as exc:
+                print(f"consentvault: {describe(exc)}", file=sys.stderr)
+                print(json.dumps({"ok": False, "failed_orgs": [o for o, _ in exc.failures], **exc.results},
+                                 sort_keys=True))
+                return EXIT_BROKEN
+            print(json.dumps({"ok": True, **out}, sort_keys=True))
+            return EXIT_OK
         record = anchor(conn, sink)
     print(json.dumps(record, sort_keys=True))
     return EXIT_OK
@@ -77,7 +96,7 @@ def anchor_tenants(worker_conn: psycopg.Connection, app_conn: psycopg.Connection
                     continue
                 sink = sink_for(org)
                 if sink is None:
-                    raise AnchorError("no anchor sink is configured for this organization")
+                    raise AnchorError("no anchor sink is configured for this organization", code="no_anchor_sink")
                 when = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
                 stamp = when.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
                 record = {"seq": head["seq"], "row_hash": head["row_hash"], "anchored_at": stamp,
@@ -95,7 +114,7 @@ def anchor_tenants(worker_conn: psycopg.Connection, app_conn: psycopg.Connection
             results.append({"org_id": str(org), "status": "published", "seq": head["seq"],
                             "row_hash": head["row_hash"], "sink": receipt.sink, "tenant_owned": receipt.tenant_owned})
         except (ConsentVaultError, ProviderError, TenancyError, psycopg.Error) as exc:
-            failures.append((str(org), f"{type(exc).__name__}: {exc}"))
+            failures.append((str(org), f"{describe(exc)}"))
     if failures:
         raise TenantAnchorRunError(failures, results)
     return results

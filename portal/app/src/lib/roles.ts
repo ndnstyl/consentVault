@@ -1,6 +1,6 @@
 import type { Role } from './api/types.ts';
 
-// Role matrix from /Users/oxfloors/debwe/portal/design/roles.md, updated to the contracts of 2026-10-29
+// Role matrix from portal/design/roles.md, updated to the contracts of 2026-10-29
 // (developer exists; compliance viewer reads audit, systems, wording, policies, checklists).
 // The server is the authority; this only decides what to show.
 
@@ -22,25 +22,29 @@ export type RouteId =
   | 'overview' | 'first-event' | 'brands' | 'sources' | 'source-detail' | 'credentials' | 'credential-new'
   | 'wording' | 'wording-new' | 'wording-detail' | 'policies' | 'policy-new' | 'policy-detail' | 'policy-approve'
   | 'checklists' | 'checklist-detail' | 'evidence' | 'exports' | 'export-detail'
-  | 'systems' | 'system-new' | 'system-detail' | 'retention' | 'members' | 'audit' | 'billing' | 'settings' | 'references';
+  | 'systems' | 'system-new' | 'system-detail' | 'retention' | 'members' | 'sso' | 'audit' | 'billing' | 'settings' | 'references'
+  | 'records' | 'setup' | 'confirmations' | 'confirmation-edit';
 
 export const VIEW_ROLES: Record<RouteId, Role[]> = {
   'sign-in': ALL, callback: ALL, invite: ALL, 'choose-org': ALL, plan: A, 'billing-return': A,
   overview: ALL, 'first-event': AD, brands: AD, sources: AD, 'source-detail': AD, credentials: AD, 'credential-new': AD,
   wording: ALL, 'wording-new': A, 'wording-detail': ALL, policies: ALL, 'policy-new': A, 'policy-detail': ALL, 'policy-approve': A,
   checklists: ALL, 'checklist-detail': ALL, evidence: AV, exports: AV, 'export-detail': AV,
-  systems: ALL, 'system-new': AD, 'system-detail': ALL, retention: AV, members: A, audit: AV, billing: A, settings: ALL, references: ALL,
+  systems: ALL, 'system-new': AD, 'system-detail': ALL, retention: AV, members: A, sso: A, audit: AV, billing: A, settings: ALL, references: ALL,
+  records: ALL, setup: AD, confirmations: ALL, 'confirmation-edit': AD,
 };
 
 export type Action =
   | 'brand.create' | 'source.write' | 'credential.issue' | 'credential.issue.gate_read' | 'credential.issue.proof_read' | 'credential.revoke'
   | 'wording.register' | 'policy.write' | 'checklist.write' | 'evidence.erase' | 'export.build'
-  | 'system.write' | 'system.redrive' | 'retention.set' | 'member.manage' | 'billing.manage' | 'offboarding.request' | 'first-event.send';
+  | 'system.write' | 'system.redrive' | 'retention.set' | 'member.manage' | 'billing.manage' | 'offboarding.request' | 'first-event.send'
+  | 'records.search' | 'records.reveal' | 'records.export' | 'records.person' | 'setup.skip' | 'confirmations.account' | 'confirmations.manage' | 'confirmations.replies';
 
 export const ACTION_ROLES: Record<Action, Role[]> = {
   'brand.create': A, 'source.write': AD, 'credential.issue': AD, 'credential.issue.gate_read': A, 'credential.issue.proof_read': A,
   'credential.revoke': AD, 'wording.register': A, 'policy.write': A, 'checklist.write': A, 'evidence.erase': A, 'export.build': AV,
   'system.write': AD, 'system.redrive': AD, 'retention.set': A, 'member.manage': A, 'billing.manage': A, 'offboarding.request': A, 'first-event.send': AD,
+  'records.search': AV, 'records.reveal': AV, 'records.export': AV, 'records.person': AV, 'setup.skip': AD, 'confirmations.account': AD, 'confirmations.manage': A, 'confirmations.replies': AV,
 };
 
 export function canView(role: Role | null, id: RouteId): boolean {
@@ -56,9 +60,11 @@ export interface NavGroup { group: string; items: NavItem[] }
 export const NAV: NavGroup[] = [
   { group: 'Start', items: [
     { id: 'overview', label: 'Overview', href: '/' },
+    { id: 'setup', label: 'Setup', href: '/setup' },
     { id: 'first-event', label: 'First test event', href: '/setup/first-event' },
   ] },
   { group: 'Evidence', items: [
+    { id: 'records', label: 'Records', href: '/records' },
     { id: 'evidence', label: 'Evidence lookup', href: '/evidence' },
     { id: 'exports', label: 'Evidence packages', href: '/exports' },
   ] },
@@ -70,10 +76,12 @@ export const NAV: NavGroup[] = [
     { id: 'policies', label: 'Policies', href: '/policies' },
     { id: 'checklists', label: 'Documentation checklists', href: '/checklists' },
     { id: 'systems', label: 'Connected systems', href: '/systems' },
+    { id: 'confirmations', label: 'Confirmation messages', href: '/confirmations' },
     { id: 'retention', label: 'Retention', href: '/retention' },
   ] },
   { group: 'Organization', items: [
     { id: 'members', label: 'Members', href: '/members' },
+    { id: 'sso', label: 'Company sign-in', href: '/sso' },
     { id: 'audit', label: 'Audit log', href: '/audit' },
     { id: 'billing', label: 'Billing', href: '/billing' },
     { id: 'settings', label: 'Settings', href: '/settings' },

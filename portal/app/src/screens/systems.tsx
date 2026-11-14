@@ -7,7 +7,10 @@ import { Link, useRouter } from '../lib/router.tsx';
 import { canDo } from '../lib/roles.ts';
 import { useSession } from '../lib/session.tsx';
 import { useToast } from '../lib/toast.tsx';
+import { isEd25519, isHmac } from '../lib/signature.ts';
+import type { SignatureKind } from '../lib/signature.ts';
 import { ConfirmDialog } from '../components/Dialog.tsx';
+import type { Embedded } from '../components/ui.tsx';
 import { Banner, Btn, Check, Chip, CopyButton, DataTable, DeliveryChip, ErrorBlock, ErrorSummary, KV, LinkBtn, NotAvailable, PageHead, Radio, SelectField, Skeleton, StateBlock, SuccessBanner, TextField, Time } from '../components/ui.tsx';
 
 function stateChip(s: System) {
@@ -73,7 +76,7 @@ function TestResult({ name, t, publicKey, onAgain, busy }: { name: string; t: Te
     );
 }
 
-export function SystemNew() {
+export function SystemNew({ embedded }: { embedded?: Embedded } = {}) {
   const { api, role, orgName, status } = useSession();
   const { navigate } = useRouter();
   const toast = useToast();
@@ -101,7 +104,7 @@ export function SystemNew() {
   if (made) {
     return (
       <>
-        <PageHead title={`${made.name} connected`} lede="Load the key below into the receiving system, then check the test push." />
+        {!embedded && <PageHead title={`${made.name} connected`} lede="Load the key below into the receiving system, then check the test push." />}
         {tester.error && <ErrorBlock title="The test push did not run" err={tester.error} next="Send another test push from the system page." />}
         {test && <TestResult name={made.name} t={test} publicKey={made.public_key} busy={tester.busy} onAgain={async () => { const t = await tester.run(made.system_id); if (t.ok) setTest(t.value); }} />}
         <div className="card mt4">
@@ -114,13 +117,13 @@ export function SystemNew() {
             </>
           )}
         </div>
-        <div className="btn-row mt5"><Btn variant="primary" disabled={!!made.hmac_secret && !stored} onClick={() => navigate(`/systems/${made.system_id}`)}>Open system</Btn>{made.hmac_secret && !stored && <span className="hint">Open system turns on after the box is ticked.</span>}</div>
+        <div className="btn-row mt5"><Btn variant="primary" disabled={!!made.hmac_secret && !stored} onClick={() => (embedded ? embedded.onDone(`${made.name} connected. Recorded in the audit log.`) : navigate(`/systems/${made.system_id}`))}>{embedded ? 'Done' : 'Open system'}</Btn>{made.hmac_secret && !stored && <span className="hint">Open system turns on after the box is ticked.</span>}</div>
       </>
     );
   }
   return (
     <>
-      <PageHead title="Connect a system" lede="Stops are pushed to this system as signed webhooks." />
+      {!embedded && <PageHead title="Connect a system" lede="Stops are pushed to this system as signed webhooks." />}
       {suspended && <Banner kind="warning" title="New connections are paused">{`Connecting a system is paused while ${orgName} is suspended. Resolve billing to continue.`}</Banner>}
       <form className="card" onSubmit={submit} noValidate>
         <div ref={summary} tabIndex={-1}>
@@ -131,15 +134,15 @@ export function SystemNew() {
         <SelectField label="Kind" name="kind" value={v.kind} onChange={(e) => setV({ ...v, kind: e.target.value })} options={KINDS} />
         <TextField label="Endpoint address (https only)" name="endpoint" type="url" value={v.endpoint} onChange={(e) => setV({ ...v, endpoint: e.target.value })} placeholder="https://dialer.acme.com/consentvault" autoComplete="off" spellCheck={false} error={v.endpoint && !/^https:\/\//.test(v.endpoint.trim()) ? 'The endpoint address must start with https://.' : touched && !v.endpoint ? 'Enter the endpoint address.' : null} />
         <fieldset><legend>Signature</legend>
-          <Radio name="sig" label="Ed25519 (recommended)" hint="You load a public key into the receiver." checked={v.signature === 'ed25519'} onChange={() => setV({ ...v, signature: 'ed25519' })} />
-          <Radio name="sig" label="HMAC shared secret" hint="A secret is shown once after you connect." checked={v.signature === 'hmac'} onChange={() => setV({ ...v, signature: 'hmac' })} />
+          <Radio name="sig" label="Ed25519 (recommended)" hint="You load a public key into the receiver." checked={isEd25519(v.signature as SignatureKind)} onChange={() => setV({ ...v, signature: 'ed25519' })} />
+          <Radio name="sig" label="HMAC shared secret" hint="A secret is shown once after you connect." checked={isHmac(v.signature as SignatureKind)} onChange={() => setV({ ...v, signature: 'hmac' })} />
         </fieldset>
         <fieldset><legend>Contact sent as</legend>
           <Radio name="form" label="Plain contact point" hint="Sends the person's number or email to this system. The choice is recorded in the audit log." checked={v.contact_form === 'plaintext'} onChange={() => setV({ ...v, contact_form: 'plaintext' })} />
           <Radio name="form" label="Fingerprint only" checked={v.contact_form === 'fingerprint'} onChange={() => setV({ ...v, contact_form: 'fingerprint' })} />
         </fieldset>
         <TextField label="Keep retrying for (hours)" name="hours" type="number" min={1} max={168} value={v.hours} onChange={(e) => setV({ ...v, hours: e.target.value })} hint="24 hours is the default." />
-        <div className="actions"><LinkBtn href="/systems" variant="secondary">Cancel</LinkBtn><Btn type="submit" variant="primary" disabled={suspended} busy={create.busy || tester.busy} busyLabel="Connecting">Connect and send a test push</Btn></div>
+        <div className="actions">{!embedded && <LinkBtn href="/systems" variant="secondary">Cancel</LinkBtn>}<Btn type="submit" variant="primary" disabled={suspended} busy={create.busy || tester.busy} busyLabel="Connecting">Connect and send a test push</Btn></div>
       </form>
     </>
   );
@@ -191,7 +194,7 @@ export function SystemDetail({ id }: { id: string }) {
       <div className="card">
         <KV rows={[
           ['Endpoint', <code key="e" className="mono wrap-pre">{s.endpoint}</code>],
-          ['Signature', s.signature === 'ed25519' ? 'Ed25519, key version 1' : 'HMAC shared secret'],
+          ['Signature', isEd25519(s.signature) ? 'Ed25519, key version 1' : 'HMAC shared secret'],
           ['Contact sent as', s.contact_form === 'plaintext' ? 'Plain contact point' : 'Fingerprint only'],
           ['Retry window', `${s.retry_window_hours} hours`],
           ['Last test push', lt ? <span key="t"><Time iso={lt.at} />: {lt.http_status ?? lt.result}{lt.latency_ms !== null ? ` in ${lt.latency_ms} ms` : ''}</span> : 'None yet'],

@@ -1,5 +1,5 @@
 // Mock API state for the portal: one in-memory organization, scenario switches for every screen state.
-// Shapes follow /Users/oxfloors/brain/specs/268-consentvault-cloud/contracts/*.md. Test data only.
+// Shapes follow the cloud contracts. Test data only.
 import type * as T from '../src/lib/api/types.ts';
 
 export interface FailRule { status: number; error: string; detail?: string; once?: boolean; delayMs?: number; fields?: Record<string, unknown>; headers?: Record<string, string> }
@@ -11,21 +11,25 @@ export interface Scenario {
   preselected: boolean;
   signedOut: boolean;
   noSecondFactor: boolean;
-  setup: 'full' | 'new' | 'blank';
+  setup: 'full' | 'new' | 'blank' | 'almost';
   firstEvent: 'none' | 'unsealed' | 'sealed';
   empty: string[];
   nulls: string[];
+  alarms: string[];
+  sso: 'none' | 'pending' | 'verified';
   fail: Record<string, FailRule>;
   delayMs: number;
   policyInForce: boolean;
   offboarding: boolean;
   exportMode: 'normal' | 'large' | 'fail';
   inviteMode: 'ok' | 'expired' | 'used' | 'withdrawn' | 'wrong_account';
+  records: 'full' | 'none';
+  confirmations: 'full' | 'empty' | 'texts_off' | 'awaiting' | 'link_unset' | 'failing';
 }
 
 export const DEFAULT_SCENARIO: Scenario = {
   role: 'admin', orgStatus: 'active', orgs: 'one', preselected: true, signedOut: false, noSecondFactor: false, setup: 'full',
-  firstEvent: 'sealed', empty: [], nulls: [], fail: {}, delayMs: 0, policyInForce: true, offboarding: false, exportMode: 'normal', inviteMode: 'ok',
+  firstEvent: 'sealed', empty: [], nulls: [], alarms: [], sso: 'none', fail: {}, delayMs: 0, policyInForce: true, offboarding: false, exportMode: 'normal', inviteMode: 'ok', records: 'full', confirmations: 'full',
 };
 
 const iso = (d: string) => new Date(d).toISOString();
@@ -60,6 +64,7 @@ export interface Store {
   offboardingRequested: boolean;
   firstEventPolls: number;
   testPushes: Record<string, number>;
+  ext: Record<string, any>;
 }
 
 export function newStore(s: Scenario): Store {
@@ -74,7 +79,7 @@ export function newStore(s: Scenario): Store {
       last_event_at: s.firstEvent === 'none' ? null : iso('2026-10-31T14:42:07Z'), last_event_seq: s.firstEvent === 'none' ? null : 1, last_event_sealed: s.firstEvent === 'none' ? null : s.firstEvent === 'sealed' },
     { source_id: 'src_sf', name: 'Salesforce', kind: 'server', brand_ids: ['brd_acme', 'brd_ahl'], allowed_origins: [], status: 'active', created_at: iso('2026-10-30T15:00:00Z'), last_event_at: null, last_event_seq: null, last_event_sealed: null },
   ] : [];
-  const full = s.setup === 'full';
+  const full = s.setup === 'full' || s.setup === 'almost';
   const credentials: T.Credential[] = s.setup === 'blank' ? [] : [
     ...(full ? [{ credential_id: 'crd_web', name: 'Website form key', kind: 'edge_site_key' as const, scope: 'capture' as const, source_id: 'src_web', algorithm: null, created_by: 'Dana Ruiz', created_at: iso('2026-10-31T14:30:00Z'), revoked_at: null, last_used_at: iso('2026-11-03T13:00:00Z') },
     { credential_id: 'crd_sf', name: 'Salesforce server', kind: 'jwt_public_key' as const, scope: 'capture' as const, source_id: 'src_sf', algorithm: 'ES256', created_by: 'Dana Ruiz', created_at: iso('2026-10-31T14:35:00Z'), revoked_at: null, last_used_at: null }] : []),
@@ -114,11 +119,11 @@ export function newStore(s: Scenario): Store {
     { version: 2, kind: 'pewc', label: 'PEWC elements', status: 'approved', element_count: 5, created_at: iso('2026-10-20T14:00:00Z'), approved_by: 'Dana Ruiz', approved_at: iso('2026-10-30T14:00:00Z'), elements: els() },
     { version: 3, kind: 'pewc', label: 'PEWC elements', status: 'draft', element_count: 5, created_at: iso('2026-11-01T14:00:00Z'), approved_by: null, approved_at: null, elements: els() },
   ] : [];
-  const systems: T.System[] = full ? [
+  const systems: T.System[] = s.setup === 'full' ? [
     { system_id: 'sys_crm', name: 'CRM', kind: 'crm', connector: 'generic_webhook', endpoint: 'https://crm.acme.com/consentvault', signature: 'hmac', contact_form: 'fingerprint', retry_window_hours: 24, status: 'active', public_key: null, created_at: iso('2026-10-30T14:00:00Z'), last_delivery_at: iso('2026-11-03T14:01:00Z'), counts: { pending: 0, dead: 0, acknowledged_24h: 12 }, last_test: { at: iso('2026-10-30T14:05:00Z'), result: 'accepted', http_status: 200, latency_ms: 120 } },
     { system_id: 'sys_dialer', name: 'Dialer', kind: 'dialer', connector: 'generic_webhook', endpoint: 'https://dialer.acme.com/consentvault', signature: 'ed25519', contact_form: 'plaintext', retry_window_hours: 24, status: 'active', public_key: 'MCowBQYDK2VwAyEA9f2c4d5e6a7b8c9d0e1f2a3b4c5d6e7f809', created_at: iso('2026-10-30T14:10:00Z'), last_delivery_at: iso('2026-11-02T19:58:00Z'), counts: { pending: 0, dead: 2, acknowledged_24h: 3 }, last_test: { at: iso('2026-11-03T13:55:00Z'), result: 'accepted', http_status: 200, latency_ms: 340 } },
   ] : [];
-  const deliveries: Record<string, T.Delivery[]> = full ? {
+  const deliveries: Record<string, T.Delivery[]> = s.setup === 'full' ? {
     sys_dialer: [
       { outbox_id: 'obx_1', created_at: iso('2026-11-02T20:10:00Z'), contact_fp_hint: 'fp_7a1c9e2b', channel: 'sms', purpose: 'marketing', version: 9, status: 'dead', attempts: 14, last_attempt_at: iso('2026-11-03T20:10:00Z'), last_http_status: 503, last_error_class: 'http_5xx' },
       { outbox_id: 'obx_2', created_at: iso('2026-11-02T20:12:00Z'), contact_fp_hint: 'fp_c02d41aa', channel: 'voice', purpose: 'marketing', version: 10, status: 'dead', attempts: 14, last_attempt_at: iso('2026-11-03T20:12:00Z'), last_http_status: null, last_error_class: 'timeout' },
@@ -152,7 +157,7 @@ export function newStore(s: Scenario): Store {
     disclosures: s.empty.includes('disclosures') ? [] : disclosures, policies: s.empty.includes('policies') ? [] : policies,
     checklists: s.empty.includes('checklists') ? [] : checklists, systems: s.empty.includes('systems') ? [] : systems, deliveries,
     redrives: {}, members, audit: s.empty.includes('audit') ? [] : audit, retention: s.empty.includes('retention') ? retention.slice(1).slice(0, 0) : retention,
-    exports: [], invites: {}, log: [], failCount: {}, offboardingRequested: false, firstEventPolls: 0, testPushes: {},
+    exports: [], invites: {}, log: [], failCount: {}, offboardingRequested: false, firstEventPolls: 0, testPushes: {}, ext: {},
   };
 }
 

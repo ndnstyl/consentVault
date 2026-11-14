@@ -11,6 +11,7 @@ Objects live under a per-org prefix (``<org_id>/<key>``); names that could escap
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -25,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
+from ..safelog import describe, http_error_response
+from ..urlguard import open_no_redirect
 from ._names import check_object_key, check_org_id
 from .errors import (
     EvidenceExistsError,
@@ -129,24 +132,17 @@ def sigv4_headers(*, method: str, host: str, path: str, query: str = "", headers
 S3Transport = Callable[[str, str, Mapping[str, str], bytes], "tuple[int, Mapping[str, str], bytes]"]
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):  # type: ignore[override]
-        return None
-
-
 def urllib_s3_transport(timeout_s: float = 30.0) -> S3Transport:
     """Real transport: ``(method, url, headers, body) -> (status, lower-cased headers, body)``. Does not follow redirects."""
-    opener = urllib.request.build_opener(_NoRedirect)
-
     def send(method: str, url: str, headers: Mapping[str, str], body: bytes):
         req = urllib.request.Request(url, data=body if body else None, method=method, headers=dict(headers))
         try:
-            with opener.open(req, timeout=timeout_s) as resp:
+            with open_no_redirect(req, timeout=timeout_s) as resp:
                 return resp.status, {k.lower(): v for k, v in resp.headers.items()}, resp.read()
         except urllib.error.HTTPError as exc:
-            return exc.code, {k.lower(): v for k, v in exc.headers.items()}, exc.read()
+            return http_error_response(exc)
         except OSError as exc:
-            raise ProviderTransportError(f"S3 {method} {url} unreachable: {exc}") from exc
+            raise ProviderTransportError(f"S3 {method} {url} unreachable: {describe(exc)}") from exc
 
     return send
 
@@ -160,9 +156,15 @@ class S3ObjectLockEvidenceStore(EvidenceStore):
 
     enforces_retention = True
 
-    def __init__(self, *, endpoint: str, bucket: str, region: str, access_key: str, secret_key: str,
-                 transport: Optional[S3Transport] = None, session_token: Optional[str] = None,
-                 clock: Clock = _utcnow, min_retention: Optional[datetime] = None):
+    def __init__(self, *, endpoint: str, bucket: str, region: str, access_key: Optional[str] = None,
+                 secret_key: Optional[str] = None, transport: Optional[S3Transport] = None,
+                 session_token: Optional[str] = None, clock: Clock = _utcnow, min_retention: Optional[datetime] = None,
+                 credentials=None, prefix: Optional[str] = None):
+        """Static keys (``access_key``/``secret_key``), or ``credentials``: an object whose ``get()`` returns the
+        current keys (the task role's, ``providers.rds_iam.ContainerCredentials``), read for every request. ``prefix``
+        puts every object and listing under ``<prefix>/`` (a bucket shared by writers IAM keeps apart by prefix)."""
+        if prefix is not None:
+            check_object_key(prefix, ProviderConfigError)
         u = urllib.parse.urlsplit(endpoint)
         if u.scheme not in ("https", "http") or not u.hostname:
             raise ProviderConfigError("the S3 endpoint must be an http(s) URL")
@@ -170,8 +172,15 @@ class S3ObjectLockEvidenceStore(EvidenceStore):
             raise ProviderConfigError("plain http is allowed only for a loopback S3 endpoint")
         if not re.match(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", bucket or ""):
             raise ProviderConfigError(f"{bucket!r} is not a valid bucket name")
-        if not (access_key and secret_key and region):
-            raise ProviderConfigError("access key, secret key and region are required")
+        if credentials is not None and (access_key or secret_key or session_token):
+            raise ProviderConfigError("give static keys or a credential source, never both")
+        if credentials is not None and not callable(getattr(credentials, "get", None)):
+            raise ProviderConfigError("the credential source must offer get()")
+        if not region or (credentials is None and not (access_key and secret_key)):
+            raise ProviderConfigError("a region and either an access key and secret key or a credential source are "
+                                      "required")
+        self._creds = credentials
+        self._prefix = f"{prefix}/" if prefix else ""
         self._scheme, self._host = u.scheme, u.netloc
         self._bucket, self._region = bucket, region
         self._ak, self._sk, self._token = access_key, secret_key, session_token
@@ -181,16 +190,62 @@ class S3ObjectLockEvidenceStore(EvidenceStore):
     def _object_path(self, org_id: str, key: str) -> str:
         check_org_id(org_id, InvalidEvidenceKeyError)
         check_object_key(key, InvalidEvidenceKeyError)
-        return "/" + urllib.parse.quote(f"{self._bucket}/{org_id}/{key}", safe="/-_.~")
+        return "/" + urllib.parse.quote(f"{self._bucket}/{self._prefix}{org_id}/{key}", safe="/-_.~")
 
-    def _request(self, method: str, path: str, headers: Mapping[str, str], body: bytes = b""):
+    def _request(self, method: str, path: str, headers: Mapping[str, str], body: bytes = b"", query: str = ""):
+        ak, sk, tok = self._ak, self._sk, self._token
+        if self._creds is not None:
+            c = self._creds.get()
+            ak, sk, tok = c.access_key, c.secret_key, c.session_token
         signed = sigv4_headers(
-            method=method, host=self._host, path=path, headers=headers, payload_sha256=_sha256_hex(body),
-            access_key=self._ak, secret_key=self._sk, region=self._region,
-            amz_date=self._clock().astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ"), session_token=self._token)
+            method=method, host=self._host, path=path, query=query, headers=headers, payload_sha256=_sha256_hex(body),
+            access_key=ak, secret_key=sk, region=self._region,
+            amz_date=self._clock().astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ"), session_token=tok)
         send_headers = {k: v for k, v in signed.items() if k != "host"}
-        status, resp_headers, resp_body = self._send(method, f"{self._scheme}://{self._host}{path}", send_headers, body)
+        url = f"{self._scheme}://{self._host}{path}" + (f"?{query}" if query else "")
+        status, resp_headers, resp_body = self._send(method, url, send_headers, body)
         return status, {k.lower(): v for k, v in resp_headers.items()}, resp_body
+
+    MAX_LIST_PAGES = 10_000  # 1,000 keys a page: ten million objects for one organisation before the listing refuses
+
+    def inventory(self, org_id: str, since: datetime) -> list[str]:
+        """The object keys of ``org_id`` written after ``since`` (ListObjectsV2 under the organisation's prefix, every
+        page, by each object's LastModified): what the restore reconcile re-checks in the cloud. A page that cannot be read,
+        or a listing longer than ``MAX_LIST_PAGES``, raises; a partial listing is never returned."""
+        import xml.etree.ElementTree as ET
+
+        check_org_id(org_id, InvalidEvidenceKeyError)
+        after = _aware(since, "since")
+        ns = "{http://s3.amazonaws.com/doc/2006-03-01/}"
+        prefix, out, token = f"{self._prefix}{org_id}/", [], None
+        path = "/" + urllib.parse.quote(self._bucket, safe="-_.~")
+        for _ in range(self.MAX_LIST_PAGES):
+            params = {"list-type": "2", "prefix": prefix, **({"continuation-token": token} if token else {})}
+            query = "&".join(f"{urllib.parse.quote(k, safe='-_.~')}={urllib.parse.quote(v, safe='-_.~')}"
+                             for k, v in sorted(params.items()))
+            status, _, body = self._request("GET", path, {}, query=query)
+            if status != 200:
+                raise self._fail("LIST", status, body)
+            try:
+                root = ET.fromstring(body)
+            except ET.ParseError as exc:
+                raise EvidenceStoreError(f"S3 LIST answered a page that is not XML: {describe(exc)}") from exc
+            for item in root.iter(f"{ns}Contents"):
+                key, when = item.findtext(f"{ns}Key") or "", item.findtext(f"{ns}LastModified") or ""
+                if not key.startswith(prefix):
+                    raise EvidenceStoreError("S3 LIST answered a key outside the organisation's prefix")
+                try:
+                    modified = datetime.fromisoformat(when.replace("Z", "+00:00"))
+                except ValueError as exc:
+                    raise EvidenceStoreError(f"S3 LIST answered an unreadable LastModified {when!r}") from exc
+                if _aware(modified, "LastModified") > after:
+                    out.append(key[len(prefix):])
+            if (root.findtext(f"{ns}IsTruncated") or "false").lower() != "true":
+                return sorted(out)
+            token = root.findtext(f"{ns}NextContinuationToken")
+            if not token:
+                raise EvidenceStoreError("S3 LIST said the listing continues but gave no continuation token")
+        raise EvidenceStoreError(f"the listing of {org_id} is longer than {self.MAX_LIST_PAGES} pages; it was not used")
 
     @staticmethod
     def _fail(op: str, status: int, body: bytes) -> EvidenceStoreError:
@@ -206,7 +261,10 @@ class S3ObjectLockEvidenceStore(EvidenceStore):
         if until <= self._clock():
             raise RetentionError("retain_until is not in the future")
         path, digest = self._object_path(org_id, key), _sha256_hex(bytes(data))
+        # S3 refuses an Object Lock write without an integrity header; the SHA-256 one is also checked by S3 on arrival.
         status, hdrs, body = self._request("PUT", path, {
+            "content-md5": base64.b64encode(hashlib.md5(bytes(data)).digest()).decode("ascii"),
+            "x-amz-checksum-sha256": base64.b64encode(hashlib.sha256(bytes(data)).digest()).decode("ascii"),
             "if-none-match": "*",
             "x-amz-object-lock-mode": "COMPLIANCE",
             "x-amz-object-lock-retain-until-date": _iso_z(until),
@@ -273,7 +331,7 @@ class LocalAppendOnlyEvidenceStore(EvidenceStore):
         try:
             self._root.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            raise ProviderConfigError(f"cannot prepare the evidence directory {self._root}: {exc}") from exc
+            raise ProviderConfigError(f"cannot prepare the evidence directory {self._root}: {describe(exc)}") from exc
 
     def _paths(self, org_id: str, key: str) -> tuple[Path, Path]:
         check_org_id(org_id, InvalidEvidenceKeyError)
@@ -315,7 +373,7 @@ class LocalAppendOnlyEvidenceStore(EvidenceStore):
         except EvidenceStoreError:
             raise
         except OSError as exc:
-            raise EvidenceStoreError(f"cannot write evidence object {org_id}/{key}: {exc}") from exc
+            raise EvidenceStoreError(f"cannot write evidence object {org_id}/{key}: {describe(exc)}") from exc
         return EvidenceRecord(org_id, key, digest, len(data), until)
 
     def _meta(self, org_id: str, key: str) -> dict:
@@ -327,7 +385,7 @@ class LocalAppendOnlyEvidenceStore(EvidenceStore):
         except FileNotFoundError as exc:
             raise EvidenceIntegrityError(f"object {org_id}/{key} has no metadata record") from exc
         except (OSError, json.JSONDecodeError) as exc:
-            raise EvidenceIntegrityError(f"metadata for {org_id}/{key} is unreadable: {exc}") from exc
+            raise EvidenceIntegrityError(f"metadata for {org_id}/{key} is unreadable: {describe(exc)}") from exc
 
     def get(self, org_id: str, key: str) -> bytes:
         meta = self._meta(org_id, key)
@@ -335,7 +393,7 @@ class LocalAppendOnlyEvidenceStore(EvidenceStore):
         try:
             data = obj.read_bytes()
         except OSError as exc:
-            raise EvidenceStoreError(f"cannot read evidence object {org_id}/{key}: {exc}") from exc
+            raise EvidenceStoreError(f"cannot read evidence object {org_id}/{key}: {describe(exc)}") from exc
         if _sha256_hex(data) != meta.get("sha256"):
             raise EvidenceIntegrityError(f"object {org_id}/{key} does not match the sha256 recorded at write time")
         return data

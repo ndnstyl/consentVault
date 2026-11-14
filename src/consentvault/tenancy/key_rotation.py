@@ -38,12 +38,14 @@ from typing import Any, Callable, Optional
 
 import psycopg
 
+from ..safelog import describe
 from ..providers.errors import KeyProviderError as CustodyKeyError
 from ..providers.keys import wrapped_version
 from .admin_base import ApiError, iso, need_text, to_uuid
 from .erasure import LifecycleError, audit_org, audit_platform, operator_org
 from .errors import KeyProviderError
 from .holds import SEALED_PREFIX
+from .keys_adapter import DISPLAY_LOADER_SCOPE as DISPLAY_KEY_SCOPE
 from .keys_protocol import WrappedKey
 from .tokens import TokenKey
 
@@ -56,11 +58,16 @@ OFFBOARDING_CANCEL_REASON = "organization offboarding"
 DEFAULT_BATCH = 500
 JOB_OPERATOR = "key-rotation-job"
 MAX_PASSES = 3  # contact keys written under the old version while a pass ran are picked up by the next pass
-CENSUS_KINDS = ("contact_key", "fingerprint_secret", "credential", "connected_system", "final_export", "hold_reason")
+CENSUS_KINDS = ("contact_key", "fingerprint_secret", "display_key", "credential", "connected_system", "sending_account", "export_key", "final_export", "hold_reason", "connector_secret")
 
 
 class KeyRotationError(LifecycleError):
-    """A rotation step failed. The rotation is recorded as blocked with the cause and an operator alarm is raised."""
+    """A rotation step failed. The rotation is recorded as blocked with the cause and an operator alarm is raised. ``org_ids``
+    names the organisations it concerns, as a field, so a report never has to look for them in the message."""
+
+    def __init__(self, *args, org_ids=(), **kw) -> None:
+        super().__init__(*args, **kw)
+        self.org_ids = tuple(str(o) for o in org_ids)
 
 
 # ---- reading the state ---------------------------------------------------------------------------------------------------
@@ -186,12 +193,12 @@ def start_rotation(conn: psycopg.Connection, *, token_key: TokenKey, custody, op
                 new, ref = held, custody.version_ref(str(org), held)
             else:
                 raise KeyRotationError(f"the key provider's active version {held} does not follow the recorded version "
-                                       f"{current} of organization {org}; nothing was changed")
+                                       f"{current} of organization {org}; nothing was changed", org_ids=(org,))
         except CustodyKeyError as exc:
             raise ApiError("key_unavailable", f"the organization key could not be rotated ({type(exc).__name__}); "
                            "nothing was recorded") from exc
         if new != current + 1:
-            raise KeyRotationError(f"the key provider rotated organization {org} to version {new}, expected {current + 1}")
+            raise KeyRotationError(f"the key provider rotated organization {org} to version {new}, expected {current + 1}", org_ids=(org,))
         conn.execute("INSERT INTO consentvault.org_key (org_id, version, kms_key_ref) VALUES"
                      " ((SELECT consentvault.current_org()), %s, %s)", (new, ref))
         conn.execute("UPDATE consentvault.org_key SET status = 'retired' WHERE org_id = (SELECT consentvault.current_org())"
@@ -256,7 +263,7 @@ def _rewrap_secrets(conn, *, token_key, custody, crypto, org, rot: dict, operato
     """Every other value the organisation key wraps, moved to the new version in one transaction."""
     old = rot["from_version"]
     moved = 0
-    with operator_org(conn, token_key, org):
+    with operator_org(conn, token_key, org, scopes=("admin", DISPLAY_KEY_SCOPE)):  # the display key row opens only to its own scope
         def secret(kind: str, ref, blob) -> None:
             nonlocal moved
             if blob is None or wrapped_version(bytes(blob)) != old:
@@ -268,12 +275,26 @@ def _rewrap_secrets(conn, *, token_key, custody, crypto, org, rot: dict, operato
         for r in conn.execute("SELECT wrapped FROM consentvault.org_fingerprint_secret WHERE org_id ="
                               " (SELECT consentvault.current_org())").fetchall():
             secret("fingerprint_secret", None, r["wrapped"])
+        for r in conn.execute("SELECT wrapped FROM consentvault.org_display_key WHERE org_id ="
+                              " (SELECT consentvault.current_org())").fetchall():
+            secret("display_key", None, r["wrapped"])
+        for r in conn.execute("SELECT export_id, wrapped FROM consentvault.record_export_key WHERE org_id ="
+                              " (SELECT consentvault.current_org()) AND wrapped IS NOT NULL").fetchall():
+            secret("export_key", r["export_id"], r["wrapped"])
         for r in conn.execute("SELECT credential_id, secret_ct FROM consentvault.credential WHERE org_id ="
                               " (SELECT consentvault.current_org()) AND secret_ct IS NOT NULL").fetchall():
             secret("credential", r["credential_id"], r["secret_ct"])
         for r in conn.execute("SELECT system_id, credentials_ct FROM consentvault.connected_system WHERE org_id ="
                               " (SELECT consentvault.current_org()) AND credentials_ct IS NOT NULL").fetchall():
             secret("connected_system", r["system_id"], r["credentials_ct"])
+        for r in conn.execute("SELECT account_id, credentials_ct, auth_token_ct FROM consentvault.sending_account WHERE org_id ="
+                              " (SELECT consentvault.current_org())").fetchall():
+            secret("sending_credentials", r["account_id"], r["credentials_ct"])
+            secret("sending_auth_token", r["account_id"], r["auth_token_ct"])
+        # the Twenty connector's envelope keys (API key, webhook secret) and the organisation's connector hash key
+        for r in conn.execute("SELECT secret_id, wrapped FROM consentvault.connector_secret WHERE org_id ="
+                              " (SELECT consentvault.current_org())").fetchall():
+            secret("connector_secret", r["secret_id"], r["wrapped"])
         for r in conn.execute("SELECT hold_id, reason, release_reason FROM consentvault.legal_hold WHERE org_id ="
                               " (SELECT consentvault.current_org())").fetchall():
             reason = _rewrap_sealed(crypto, org, r["reason"], rot["to_version"])
@@ -321,7 +342,7 @@ def _block(conn, *, token_key, org, rot: dict, why: str, alarm: str, error_class
                                  ref_id=rot["rotation_id"] if hold is None else hold, request_id=request_id)
         except AlarmWriteError as exc:
             raise KeyRotationError(f"the rotation of {org} is blocked ({why}) and its alarm could not be written: "
-                                   f"{exc}") from exc
+                                   f"{describe(exc)}", org_ids=(org,)) from exc
 
 
 def _destroy_version(conn, *, custody, org, version: int, rotation_id, operator_id: str, request_id: str,
@@ -334,7 +355,7 @@ def _destroy_version(conn, *, custody, org, version: int, rotation_id, operator_
         custody.destroy_version(str(org), version)
     except CustodyKeyError as exc:
         raise KeyRotationError(f"the key provider did not destroy version {version} of {org}: "
-                               f"{type(exc).__name__}: {exc}") from exc
+                               f"{describe(exc)}", org_ids=(org,)) from exc
     audit_org(conn, actor_kind="system", actor_id=operator_id, action="org_key.version_destroyed",
               target_kind="org_key", target_id=rotation_id, reason=note, request_id=request_id)
     audit_platform(conn, operator_id=operator_id, action="org_key.version_destroyed", target_kind="org_key",
@@ -485,7 +506,7 @@ def run_rotation(conn: psycopg.Connection, *, token_key: TokenKey, custody, cryp
         why = f"rewrap_failed: {type(exc).__name__}"
         _block(conn, token_key=token_key, org=org, rot=rot, why=why, alarm=ALARM_FAILED, error_class="KeyRotationError",
                operator_id=operator_id, request_id=request_id)
-        raise KeyRotationError(f"the key rotation of organization {org} is blocked ({why}): {exc}") from exc
+        raise KeyRotationError(f"the key rotation of organization {org} is blocked ({why}): {describe(exc)}", org_ids=(org,)) from exc
     with operator_org(conn, token_key, org):
         now = conn.execute("SELECT * FROM consentvault.key_rotation WHERE org_id = (SELECT consentvault.current_org())"
                            " AND rotation_id = %s", (rot["rotation_id"],)).fetchone()
@@ -505,10 +526,10 @@ def _sweep(conn, *, token_key, custody, ledger, operator_id: str, request_id: st
                 raise_operator_alarm(conn, name=ALARM_FAILED, error_class="KeyRotationError", ref_kind="org_key",
                                      request_id=request_id)
         except AlarmWriteError as aexc:
-            raise KeyRotationError(f"a retained key version of {org} could not be destroyed ({exc}) and its alarm "
-                                   f"could not be written: {aexc}") from exc
-        raise KeyRotationError(f"a retained key version of {org} could not be destroyed: {type(exc).__name__}: {exc}"
-                               ) from exc
+            raise KeyRotationError(f"a retained key version of {org} could not be destroyed ({describe(exc)}) and its alarm "
+                                   f"could not be written: {describe(aexc)}", org_ids=(org,)) from exc
+        raise KeyRotationError(f"a retained key version of {org} could not be destroyed: {describe(exc)}",
+                               org_ids=(org,)) from exc
 
 
 def run_rotation_job(connect: Callable[[], psycopg.Connection], *, token_key: TokenKey, custody, crypto, ledger,
@@ -523,6 +544,7 @@ def run_rotation_job(connect: Callable[[], psycopg.Connection], *, token_key: To
         orgs = [r["org_id"] for r in conn.execute("SELECT consentvault.restore_org_ids() AS org_id").fetchall()]
     out: list[dict[str, Any]] = []
     failed: list[str] = []
+    failed_orgs: list[str] = []
     for org in orgs:
         with connect() as conn:
             try:
@@ -532,11 +554,12 @@ def run_rotation_job(connect: Callable[[], psycopg.Connection], *, token_key: To
                 _sweep(conn, token_key=token_key, custody=custody, ledger=ledger, operator_id=operator_id,
                        request_id=request_id, org=org)
             except KeyRotationError as exc:  # loud-failure-exempt: recorded blocked and alarmed by run_rotation; re-raised below once every org ran
-                failed.append(f"{org}: {exc}")
-                out.append({"org_id": str(org), "status": "blocked", "error": str(exc)})
+                failed.append(f"{org}: {describe(exc)}")
+                failed_orgs.append(str(org))
+                out.append({"org_id": str(org), "status": "blocked", "error": describe(exc)})
                 continue
         if state is not None:
             out.append(state)
     if failed:
-        raise KeyRotationError(f"{len(failed)} of {len(orgs)} key rotations failed: " + "; ".join(failed))
+        raise KeyRotationError(f"{len(failed)} of {len(orgs)} key rotations failed: " + "; ".join(failed), org_ids=failed_orgs)
     return out

@@ -119,7 +119,7 @@ def test_get_org_shapes_by_role_and_never_invents_a_value(vault):
     assert full["key"] == {"status": "active", "version": 1, "destroy_after": None}
     assert full["trial"]["started_at"] and full["plan"] is None and "plan" in full["partial"]
     small = dev.ok("GET", "/v1/org")
-    assert small == {"org_id": org["org_id"], "name": "Acme", "status": "trial", "region": None, "role": "developer"}
+    assert small == {"org_id": org["org_id"], "name": "Acme", "status": "trial", "region": None, "default_region": "US", "role": "developer"}
 
 
 def test_health_counts_only_and_null_when_unknown(vault):

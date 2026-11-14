@@ -172,3 +172,36 @@ def test_a_forged_operator_header_is_refused_and_only_a_verified_operator_sessio
     assert s == 201, raw
     with wired.t.superuser() as su:
         assert su.execute("SELECT count(*) AS n FROM consentvault.organization").fetchone()["n"] == before + 1
+
+
+def _member_token(w, org, role):
+    with w.t.superuser() as su:
+        mid = su.execute("INSERT INTO consentvault.member (org_id, idp_issuer, idp_subject, role) VALUES (%s, %s, %s, %s)"
+                         " RETURNING member_id", (org.org_id, "https://idp.example.com", f"u-{role}-{uuid.uuid4().hex[:6]}",
+                                                  role)).fetchone()["member_id"]
+    return mint_org_token(w.t.key, org.org_id, ROLE_SCOPES[role], credential_id=MEMBER_CREDENTIAL_PREFIX + str(mid))
+
+
+def test_the_portal_reads_proof_as_admin_or_viewer_for_its_own_organisation_only(wired):
+    # contracts/proof-export.md: POST /v1/proof is for A and V in the portal as well as M(proof_read); a developer never reads it
+    assert wired.cloud.grant(wired.cloud.a, X)[0] == 201
+    for role in ("admin", "compliance_viewer"):
+        tok = wired.portal_token(wired.t.a) if role == "admin" else _member_token(wired, wired.t.a, role)
+        s, raw, _ = wired.call("POST", "/v1/proof", {"contact": X}, token=tok)
+        assert s == 200 and _j(raw)["found"] is True and _j(raw)["timeline"]["items"], (role, raw)
+    with wired.t.superuser() as su:  # the read is tied to the person: the audit row names the member, never the contact
+        member = str(su.execute("SELECT member_id FROM consentvault.member WHERE org_id = %s AND role = 'admin' LIMIT 1",
+                                (wired.t.a.org_id,)).fetchone()["member_id"])
+        rows = su.execute("SELECT actor_kind, actor_id, target_kind, target_id, reason FROM consentvault.audit_event"
+                          " WHERE org_id = %s AND action = 'proof.read'", (wired.t.a.org_id,)).fetchall()
+    assert len(rows) == 2 and {r["actor_kind"] for r in rows} == {"member"}, rows
+    assert member in {r["actor_id"] for r in rows}, "the admin's own read names the admin"
+    assert X not in str(rows) and all(r["target_kind"] == "contact" and len(r["target_id"]) == 8 for r in rows)
+    s, raw, _ = wired.call("POST", "/v1/proof", {"contact": X}, token=_member_token(wired, wired.t.a, "developer"))
+    assert s == 403 and _j(raw)["error"] == "role_not_allowed", raw
+    s, raw, _ = wired.call("POST", "/v1/proof", {"contact": X}, token=wired.portal_token(wired.t.b))
+    assert s == 200 and _j(raw)["found"] is False, "another organisation's admin finds nothing of A's contact"
+    s, raw, _ = wired.call("POST", "/v1/proof", {"contact": X})
+    assert s == 401
+    s, raw, _ = wired.call("POST", "/v1/proof", {"contact": X}, token=wired.cloud.token(wired.cloud.a, "proof_read"))
+    assert s == 200 and _j(raw)["found"] is True, "the machine credential path is unchanged"

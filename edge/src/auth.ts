@@ -75,6 +75,17 @@ async function login(request: Request, env: AuthEnv, deps: AuthDeps): Promise<Re
   return redirect(to.toString(), [setCookie(LOGIN_COOKIE, state, LOGIN_SECONDS)]);
 }
 
+// Internal marks on a callback answer, read and stripped by the portal before the response leaves the Worker: the vault itself
+// was unreachable (the only failure that may ask for a wake), and the hash of the identity provider's subject for a per-person cap.
+export const VAULT_UNREACHABLE_HEADER = "x-cv-vault-unreachable";
+export const SUBJECT_HASH_HEADER = "x-cv-subject-hash";
+const VAULT_DOWN_STATUSES = new Set([502, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]);
+async function vaultUnreachable(res: Response, sub: string | undefined, down: boolean): Promise<Response> {
+  if (!down) return res;
+  res.headers.set(VAULT_UNREACHABLE_HEADER, "1");
+  if (sub) res.headers.set(SUBJECT_HASH_HEADER, await sha256Hex(sub));
+  return res;
+}
 async function callback(request: Request, env: AuthEnv, deps: AuthDeps): Promise<Response | null> {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
@@ -127,16 +138,18 @@ async function callback(request: Request, env: AuthEnv, deps: AuthDeps): Promise
   // Diagnostic (2026-11-09 sign-in loop): what the provider reported, never a token or an address.
   console.log(JSON.stringify({ signin_method: method || null, amr, answer_fields: Object.keys(tokens).filter((k) => !/token/i.test(k)).sort() }));
   let check: Response;
+  let vaultCalled = false;
   try {
     const assertion = claims.sub ? await signAssertion(env, token, claims.sub, amr, method, deps.now(), who, sso) : null;
+    vaultCalled = true;
     check = await deps.vault("/v1/session?limit=1", token, assertion ? { [ASSERTION_HEADER]: assertion } : undefined);
   } catch (e) {
     if (e instanceof MisconfiguredError) return page(500, "Sign-in is not configured", e.message, [spent]);
-    return page(502, "Sign-in is unavailable", "The service could not be reached.", [spent]);
+    return vaultUnreachable(page(502, "Sign-in is unavailable", "The service could not be reached.", [spent]), claims.sub, vaultCalled);
   }
   // A missing second factor still gets a session: the portal's callback page explains it and offers a way forward.
   if (!check.ok && !(check.status === 403 && (await check.clone().text()).includes("second_factor_required"))) {
-    return page(check.status === 401 ? 401 : 502, "Sign-in was not accepted", "The service did not accept this sign-in.", [spent]);
+    return vaultUnreachable(page(check.status === 401 ? 401 : 502, "Sign-in was not accepted", "The service did not accept this sign-in.", [spent]), claims.sub, VAULT_DOWN_STATUSES.has(check.status));
   }
 
   const sid = randomToken(32);

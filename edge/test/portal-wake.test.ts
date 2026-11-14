@@ -168,40 +168,38 @@ test("an /auth/ request while parked reaches the sign-in code instead of the sta
   assert.equal(wakes(m.calls), 0);
 });
 
-async function completeSignIn(vaultSession: "ok" | "parked") {
-  const m = mk({ origin: "down-530" });
-  const idt = jwt({ sub: "user_1", sid: "provider_sess_1", exp: nowSec() + 300 });
+async function signIn(m: ReturnType<typeof mk>, o: { idp?: "ok" | "refused" | "down"; sub?: string; vaultSession?: "ok" | "origin" } = {}) {
+  const idt = jwt({ sub: o.sub ?? "user_1", sid: "provider_sess_1", exp: nowSec() + 300 });
   const inner = m.deps.fetch;
   m.deps.fetch = (async (u: string, init?: RequestInit) => {
     const url = String(u);
-    if (url.startsWith("https://idp.example/")) return new Response(JSON.stringify({ id_token: idt, access_token: "a", refresh_token: "r" }), { status: 200 });
-    if (vaultSession === "ok" && new URL(url).pathname === "/v1/session") { m.calls.push("origin /v1/session"); return new Response(JSON.stringify({ items: [] }), { status: 200 }); }
+    if (url.startsWith("https://idp.example/")) {
+      if (o.idp === "down") throw new TypeError("idp unreachable");
+      if (o.idp === "refused") return new Response("{}", { status: 400 });
+      return new Response(JSON.stringify({ id_token: idt, access_token: "a", refresh_token: "r" }), { status: 200 });
+    }
+    if (o.vaultSession === "ok" && new URL(url).pathname === "/v1/session") { m.calls.push("origin /v1/session"); return new Response(JSON.stringify({ items: [] }), { status: 200 }); }
     return inner(u as never, init as never);
   }) as unknown as typeof fetch;
   const start = await handlePortal(nav("/auth/login?return=%2Fbrands", {}), m.env, m.deps);
   const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
   const loginCookie = cookieNamed(start, LOGIN_COOKIE)!.split(";")[0];
-  const res = await handlePortal(nav(`/auth/callback?code=abc&state=${state}`, { cookie: loginCookie }), m.env, m.deps);
-  return { m, res };
+  return handlePortal(nav(`/auth/callback?code=abc&state=${state}`, { cookie: loginCookie }), m.env, m.deps);
 }
 
-test("a completed sign-in while parked asks for exactly one wake and lands on the starting page", async () => {
-  const { m, res } = await completeSignIn("ok");
+test("a completed sign-in with the vault up creates the session, asks for no wake and makes no extra health call", async () => {
+  const m = mk({ origin: "up" });
+  const res = await signIn(m, { vaultSession: "ok" });
   assert.equal(res.status, 302);
-  const sessionCookie = cookieNamed(res, SESSION_COOKIE);
-  assert.ok(sessionCookie, "the session was created");
-  assert.equal(wakes(m.calls), 1);
-  assert.ok(await m.kv.get("cv:wake:requested"), "the wake went through the counted path and left its marker");
-  const day = [...m.kv.data.keys()].find((k) => k.startsWith("cv:wake:day:"));
-  assert.equal(m.kv.data.get(day!), "1");
-  const next = await handlePortal(nav("/brands", { cookie: sessionCookie!.split(";")[0] }), m.env, m.deps);
-  assert.equal(next.status, 503);
-  assert.match(await next.text(), /ConsentVault is starting/);
-  assert.equal(wakes(m.calls), 1, "once per cold period");
+  assert.ok(cookieNamed(res, SESSION_COOKIE), "the session was created");
+  assert.equal(wakes(m.calls), 0);
+  assert.ok(!m.calls.includes("origin /v1/health"), "the vault check just succeeded, so no health probe");
+  assert.equal(res.headers.get("x-cv-vault-unreachable"), null);
 });
 
-test("a sign-in that cannot finish because the vault is parked says so, names the cause, and asks for the wake", async () => {
-  const { m, res } = await completeSignIn("parked");
+test("a sign-in the parked vault kept from finishing says so, asks for one wake, and leaks no internal header", async () => {
+  const m = mk({ origin: "down-530" });
+  const res = await signIn(m);
   assert.equal(res.status, 503);
   assert.equal(cookieNamed(res, SESSION_COOKIE), undefined);
   const html = await res.text();
@@ -209,6 +207,31 @@ test("a sign-in that cannot finish because the vault is parked says so, names th
   assert.match(html, /href="\/auth\/login"/);
   assert.doesNotMatch(html, /http-equiv="refresh"/);
   assert.equal(wakes(m.calls), 1);
+  assert.equal(res.headers.get("x-cv-vault-unreachable"), null);
+  assert.equal(res.headers.get("x-cv-subject-hash"), null);
+});
+
+test("a refused sign-in code never wakes the vault", async () => {
+  const m = mk({ origin: "down-530" });
+  const res = await signIn(m, { idp: "refused" });
+  assert.equal(res.status, 401);
+  assert.equal(wakes(m.calls), 0);
+});
+
+test("an unreachable identity provider never wakes the vault", async () => {
+  const m = mk({ origin: "down-530" });
+  const res = await signIn(m, { idp: "down" });
+  assert.equal(res.status, 502);
+  assert.equal(wakes(m.calls), 0);
+});
+
+test("one identity-provider subject can ask for at most 2 wakes a day, so one person cannot use up the shared cap", async () => {
+  const m = mk({ origin: "down-530" });
+  for (let i = 0; i < 4; i++) { await m.kv.delete("cv:wake:requested"); await signIn(m, { sub: "user_stranger" }); }
+  assert.equal(wakes(m.calls), 2);
+  await m.kv.delete("cv:wake:requested");
+  await signIn(m, { sub: "user_other" });
+  assert.equal(wakes(m.calls), 3, "a different person still has their own allowance");
 });
 
 test("an expired session does not wake the vault", async () => {

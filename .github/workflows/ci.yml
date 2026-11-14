@@ -2,8 +2,12 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, demo-live]   # demo-live is the branch the cloud service is built from
   pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

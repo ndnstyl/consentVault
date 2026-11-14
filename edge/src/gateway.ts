@@ -31,16 +31,13 @@ export interface GatewayEnv {
   // Workers rate-limit bindings for the confirmation doors (wrangler [[ratelimits]]); see confirmationDoor below.
   INBOUND_LIMITER?: RateLimiter;
   PAGE_LIMITER?: RateLimiter;
-  // Key-value store the fallback door keeps each post in until the vault has answered it (drainInboundSpool, on the cron).
-  INBOUND_SPOOL?: SpoolKV;
+  // D1 database the fallback door stores each post in until the vault has answered it with a 2xx (drainInboundSpool, on the cron).
+  INBOUND_SPOOL?: D1Like;
 }
 
-/** The Workers KV operations the inbound spool uses. */
-export interface SpoolKV {
-  get(key: string): Promise<string | null>;
-  put(key: string, value: string): Promise<void>;
-  delete(key: string): Promise<void>;
-  list(options: { prefix: string; limit?: number }): Promise<{ keys: { name: string }[] }>;
+/** The few D1 calls the inbound store makes (prepare, bind, run or all). */
+export interface D1Like {
+  prepare(sql: string): { bind(...values: unknown[]): { run(): Promise<unknown>; all(): Promise<{ results?: Record<string, unknown>[] }> } };
 }
 
 /** The Workers rate-limit binding's shape: one call per request, { success: false } over the limit. */
@@ -55,7 +52,6 @@ export interface GatewayDeps {
   // route a verdict blocks. Undefined allows.
   waf?: (request: Request) => Promise<{ status: number; code: string; message: string } | undefined>;
   alarm?: (name: string, detail: string) => void;
-  sleep?: (ms: number) => Promise<void>; // the drain's pause between its two empty listings (tests pass one that returns at once)
 }
 
 const DEFAULT_MAX_BODY = 256 * 1024;
@@ -82,25 +78,25 @@ const INBOUND_RE = /^\/v1\/confirmations\/inbound\/([A-Za-z0-9_-]{20,128})$/;
 // The number's fallback address: Twilio calls it once when the primary fails. Every post here is kept in INBOUND_SPOOL before
 // the vault is asked, and answered 200 once kept, so a STOP sent while the vault is down is delivered when it is back.
 const FALLBACK_RE = /^\/v1\/confirmations\/inbound-fallback\/([A-Za-z0-9_-]{20,128})$/;
-const SPOOL_PREFIX = "inbound:";
-// Set while anything is kept, so the per-minute drain makes one read, and lists nothing, while the spool is empty.
-const SPOOL_MARKER = "meta:pending";
-// The edge cannot check Twilio's signature (the auth token lives only in the vault), so what it keeps is capped: per number
-// (inbound key) and in all; past a cap a post is only forwarded. KV list returns at most 1000 keys per call.
+// The edge cannot check Twilio's signature (the auth token lives only in the vault), so what it stores is capped: open posts per
+// number (inbound key) and in all; past a cap a post is only forwarded.
 export const SPOOL_PER_KEY = 200;
 export const SPOOL_TOTAL = 1000;
-// The flag is removed only when two listings a moment apart both read empty AND it was last set longer ago than this: KV
-// listings can lag a fresh write by up to a minute, and a post can be kept while the drain runs.
-const FLAG_SETTLE_MS = 5 * 60_000;
-const SECOND_LISTING_DELAY_MS = 2_000;
-// KV is eventually consistent across locations (about 60 s), so a drain elsewhere can remove the flag while a post sits unseen.
-// Every tenth minute the drain therefore lists everything whatever the flag says: 144 sweep listings a day, plus one listing a
-// minute only while something is kept (Workers KV free plan: 1,000 list operations a day, as published by Cloudflare).
-export function isSweepMinute(ms: number): boolean {
-  return new Date(ms).getUTCMinutes() % 10 === 0;
-}
-// A kept post older than this is an alarm: it should have reached the vault within a few runs.
+// A stored post older than this is an alarm: it should have reached the vault within a few runs.
 const STALE_AFTER_MS = 10 * 60_000;
+// Drained rows are kept a week for reading back, then removed.
+const KEEP_DRAINED_MS = 7 * 24 * 3600_000;
+// The store (edge/migrations/0001_inbound_spool.sql). D1 is strongly consistent through its primary: the drain reads the open
+// rows every minute; there is no flag and no listing.
+export const SPOOL_SQL = {
+  countKey: "SELECT count(*) AS n FROM inbound_spool WHERE number_key = ? AND drained_at IS NULL",
+  countAll: "SELECT count(*) AS n FROM inbound_spool WHERE drained_at IS NULL",
+  insert: "INSERT INTO inbound_spool (id, number_key, received_at, path, body_b64, headers_json) VALUES (?, ?, ?, ?, ?, ?)",
+  pending: "SELECT id, number_key, received_at, path, body_b64, headers_json FROM inbound_spool WHERE drained_at IS NULL ORDER BY received_at LIMIT 1000",
+  markDrained: "UPDATE inbound_spool SET drained_at = ?, attempts = attempts + 1, last_status = ? WHERE id = ?",
+  markAttempt: "UPDATE inbound_spool SET attempts = attempts + 1, last_status = ? WHERE id = ?",
+  purge: "DELETE FROM inbound_spool WHERE drained_at IS NOT NULL AND drained_at < ?",
+} as const;
 const FALLBACK_MAX_BODY = 16 * 1024; // the vault refuses more (confirm/inbound.py MAX_BODY_BYTES), so the edge keeps no more
 // The provider headers a kept post carries back to the vault (the signature over the address and the body is the credential).
 const SPOOL_HEADERS = ["content-type", "x-twilio-signature", "i-twilio-idempotency-token", "user-agent"];
@@ -310,17 +306,13 @@ function unb64(text: string): ArrayBuffer {
   return out.buffer;
 }
 
-interface Kept { path: string; headers: Record<string, string>; body_b64: string; kept_at: string }
-
-// Only the vault's 2xx ends a kept post (taken, or a replay it already holds). Anything else (a refusal, 404, a redirect, 5xx or
-// no answer) keeps the post, which may be a STOP, and raises an alarm: a person decides, nothing is dropped by the edge.
+// Only the vault's 2xx ends a stored post (taken, or a replay it already holds). Anything else (a refusal, 404, a redirect, 5xx
+// or no answer) keeps the post, which may be a STOP, and raises an alarm: a person decides, nothing is dropped by the edge.
 const taken = (status: number) => status >= 200 && status < 300;
 
-async function spoolHasRoom(spool: SpoolKV, inboundKey: string): Promise<boolean> {
-  const mine = await spool.list({ prefix: `${SPOOL_PREFIX}${inboundKey}:`, limit: SPOOL_PER_KEY });
-  if (mine.keys.length >= SPOOL_PER_KEY) return false;
-  const all = await spool.list({ prefix: SPOOL_PREFIX, limit: SPOOL_TOTAL });
-  return all.keys.length < SPOOL_TOTAL;
+async function count(db: D1Like, sql: string, ...args: unknown[]): Promise<number> {
+  const out = await db.prepare(sql).bind(...args).all();
+  return Number(out.results?.[0]?.n ?? 0);
 }
 
 async function fallbackDoor(request: Request, url: URL, env: GatewayEnv, deps: GatewayDeps, inboundKey: string): Promise<Response> {
@@ -331,23 +323,29 @@ async function fallbackDoor(request: Request, url: URL, env: GatewayEnv, deps: G
     const v = request.headers.get(h);
     if (v !== null) keptHeaders[h] = v;
   }
-  const now = new Date((deps.now ?? Date.now)());
-  const spoolKey = `${SPOOL_PREFIX}${inboundKey}:${now.toISOString()}:${crypto.randomUUID()}`;
+  const now = new Date((deps.now ?? Date.now)()).toISOString();
+  const id = crypto.randomUUID();
+  const db = env.INBOUND_SPOOL;
   let kept = false;
-  if (!env.INBOUND_SPOOL) {
-    alarm("confirmations.inbound_spool_unbound", "the INBOUND_SPOOL binding is not set; a fallback post is only forwarded, never kept");
+  if (!db) {
+    alarm("confirmations.inbound_spool_unbound", "the INBOUND_SPOOL binding is not set; a fallback post is only forwarded, never stored");
   } else {
+    let room = true;
     try {
-      if (!(await spoolHasRoom(env.INBOUND_SPOOL, inboundKey))) {
-        alarm("confirmations.inbound_spool_full", `the inbound spool is at its cap (${SPOOL_PER_KEY} per number, ${SPOOL_TOTAL} in all); this post is only forwarded`);
-      } else {
-        const record: Kept = { path: url.pathname, headers: keptHeaders, body_b64: b64(body), kept_at: now.toISOString() };
-        await env.INBOUND_SPOOL.put(spoolKey, JSON.stringify(record));
-        await env.INBOUND_SPOOL.put(SPOOL_MARKER, now.toISOString());
-        kept = true;
-      }
+      room = (await count(db, SPOOL_SQL.countKey, inboundKey)) < SPOOL_PER_KEY && (await count(db, SPOOL_SQL.countAll)) < SPOOL_TOTAL;
     } catch (e) {
-      alarm("confirmations.inbound_spool_unwritable", `a fallback post could not be kept (${(e as Error).name})`);
+      // the cap could not be read: the post is stored anyway (a STOP is kept rather than refused)
+      alarm("confirmations.inbound_spool_unreadable", `the inbound store's open count could not be read (${(e as Error).message.slice(0, 80)})`);
+    }
+    if (!room) {
+      alarm("confirmations.inbound_spool_full", `the inbound store is at its cap (${SPOOL_PER_KEY} per number, ${SPOOL_TOTAL} in all); this post is only forwarded`);
+    } else {
+      try {
+        await db.prepare(SPOOL_SQL.insert).bind(id, inboundKey, now, url.pathname, b64(body), JSON.stringify(keptHeaders)).run();
+        kept = true;
+      } catch (e) {
+        alarm("confirmations.inbound_spool_unwritable", `a fallback post could not be stored (${(e as Error).message.slice(0, 80)})`);
+      }
     }
   }
   let res: Response | null = null;
@@ -357,74 +355,87 @@ async function fallbackDoor(request: Request, url: URL, env: GatewayEnv, deps: G
     res = null;
   }
   if (res && taken(res.status)) {
-    if (kept) await env.INBOUND_SPOOL!.delete(spoolKey);
+    if (kept) {
+      try {
+        await db!.prepare(SPOOL_SQL.markDrained).bind(now, res.status, id).run();
+      } catch (e) {
+        alarm("confirmations.inbound_spool_unwritable", `a delivered post could not be marked drained; the drain sends it again (${(e as Error).message.slice(0, 80)})`);
+      }
+    }
     return new Response(res.body, { status: res.status, headers: scrub(res.headers) });
   }
   if (kept) {
-    if (res && res.status < 500) alarm("confirmations.inbound_spool_refused", `the vault answered a fallback post ${res.status}; it is kept for a person`);
-    else alarm("confirmations.inbound_spooled", "the vault did not take a fallback post; it is kept at the edge and delivered by the drain");
+    if (res && res.status < 500) alarm("confirmations.inbound_spool_refused", `the vault answered a fallback post ${res.status}; it is stored for a person`);
+    else alarm("confirmations.inbound_spooled", "the vault did not take a fallback post; it is stored at the edge and delivered by the drain");
     if (res) await res.body?.cancel();
     return new Response(JSON.stringify({ received: true, kept: true }), { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
   }
   if (res) return new Response(res.body, { status: res.status, headers: scrub(res.headers) });
-  return err(503, "store_unavailable", "the post could be neither kept nor delivered; nothing was recorded");
+  return err(503, "store_unavailable", "the post could be neither stored nor delivered; nothing was recorded");
 }
 
-/** The cron's drain: every kept post goes to the vault's fallback door again, oldest first; only a 2xx removes it. */
-export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps, opts: { sweep?: boolean } = {}): Promise<{ delivered: number; kept: number }> {
+/** The cron's drain, every minute: each open row goes to the vault's fallback door again, oldest first; only a 2xx marks it
+ * drained. Every store error is a named alarm; nothing here throws. */
+export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps): Promise<{ delivered: number; kept: number }> {
   const alarm = alarmOf(deps);
-  if (!env.INBOUND_SPOOL) {
+  const db = env.INBOUND_SPOOL;
+  if (!db) {
     alarm("confirmations.inbound_spool_unbound", "the INBOUND_SPOOL binding is not set; nothing to drain");
     return { delivered: 0, kept: 0 };
   }
-  if (!opts.sweep && (await env.INBOUND_SPOOL.get(SPOOL_MARKER)) === null) return { delivered: 0, kept: 0 };
   const nowMs = (deps.now ?? Date.now)();
-  let stale = 0;
+  const nowIso = new Date(nowMs).toISOString();
+  let rows: Record<string, unknown>[];
+  try {
+    rows = (await db.prepare(SPOOL_SQL.pending).bind().all()).results ?? [];
+  } catch (e) {
+    alarm("confirmations.inbound_spool_unreadable", `the drain could not read the inbound store (${(e as Error).message.slice(0, 80)})`);
+    return { delivered: 0, kept: 0 };
+  }
   let delivered = 0;
   let kept = 0;
   let refused = 0;
-  const { keys } = await env.INBOUND_SPOOL.list({ prefix: SPOOL_PREFIX, limit: SPOOL_TOTAL });
-  for (const { name } of keys) {
-    const raw = await env.INBOUND_SPOOL.get(name);
-    if (raw === null) continue; // already delivered by another run
-    let rec: Kept;
+  let stale = 0;
+  for (const row of rows) {
+    if (nowMs - Date.parse(String(row.received_at)) > STALE_AFTER_MS) stale++;
+    let headers: Record<string, string>;
+    let body: ArrayBuffer;
     try {
-      rec = JSON.parse(raw) as Kept;
+      headers = JSON.parse(String(row.headers_json)) as Record<string, string>;
+      body = unb64(String(row.body_b64));
     } catch {
-      alarm("confirmations.inbound_spool_unreadable", `a kept post ${name} is not readable; it is left for a person`);
+      alarm("confirmations.inbound_spool_unreadable", `stored post ${String(row.id)} is not readable; it is left for a person`);
       kept++;
       continue;
     }
-    if (nowMs - Date.parse(rec.kept_at) > STALE_AFTER_MS) stale++;
     let status = 0;
     try {
-      const res = await deps.fetch(clean(env.ORIGIN_URL) + rec.path, { method: "POST", headers: towardVault(new Headers(rec.headers), env), body: unb64(rec.body_b64) });
+      const res = await deps.fetch(clean(env.ORIGIN_URL) + String(row.path), { method: "POST", headers: towardVault(new Headers(headers), env), body });
       status = res.status;
       await res.body?.cancel();
     } catch {
-      status = 0;
+      status = 0; // no answer: kept, and no write spent on the attempt
     }
-    if (taken(status)) {
-      await env.INBOUND_SPOOL.delete(name);
-      delivered++;
-    } else {
-      kept++;
-      if (status > 0 && status < 500) refused++;
+    try {
+      if (taken(status)) {
+        await db.prepare(SPOOL_SQL.markDrained).bind(nowIso, status, String(row.id)).run();
+        delivered++;
+        continue;
+      }
+      if (status > 0) await db.prepare(SPOOL_SQL.markAttempt).bind(status, String(row.id)).run();
+    } catch (e) {
+      alarm("confirmations.inbound_spool_unwritable", `stored post ${String(row.id)} could not be marked (${(e as Error).message.slice(0, 80)}); it is sent again next run`);
     }
+    kept++;
+    if (status > 0 && status < 500) refused++;
   }
-  if (stale) alarm("confirmations.inbound_spool_stale", `${stale} kept inbound post(s) are older than 10 minutes`);
-  if (refused) alarm("confirmations.inbound_spool_refused", `${refused} kept inbound post(s) were answered with a refusal by the vault; kept for a person`);
-  if (kept > refused) alarm("confirmations.inbound_spool_waiting", `${kept - refused} kept inbound post(s) still wait for the vault`);
-  if (kept === 0) {
-    const flag = await env.INBOUND_SPOOL.get(SPOOL_MARKER);
-    const age = flag === null ? Infinity : (deps.now ?? Date.now)() - Date.parse(flag);
-    if (flag !== null && age > FLAG_SETTLE_MS) {
-      await (deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms))))(SECOND_LISTING_DELAY_MS);
-      const again = await env.INBOUND_SPOOL.list({ prefix: SPOOL_PREFIX, limit: 1 });
-      const still = await env.INBOUND_SPOOL.get(SPOOL_MARKER);
-      // A post kept meanwhile re-sets the flag (a newer time) or shows in the listing: the flag then stays for the next run.
-      if (again.keys.length === 0 && still === flag) await env.INBOUND_SPOOL.delete(SPOOL_MARKER);
-    }
+  if (stale) alarm("confirmations.inbound_spool_stale", `${stale} stored inbound post(s) are older than 10 minutes`);
+  if (refused) alarm("confirmations.inbound_spool_refused", `${refused} stored inbound post(s) were answered with a refusal by the vault; kept for a person`);
+  if (kept > refused) alarm("confirmations.inbound_spool_waiting", `${kept - refused} stored inbound post(s) still wait for the vault`);
+  try {
+    await db.prepare(SPOOL_SQL.purge).bind(new Date(nowMs - KEEP_DRAINED_MS).toISOString()).run();
+  } catch (e) {
+    alarm("confirmations.inbound_spool_unwritable", `drained rows could not be purged (${(e as Error).message.slice(0, 80)})`);
   }
   return { delivered, kept };
 }
@@ -583,8 +594,8 @@ export default {
   async fetch(request: Request, env: GatewayEnv): Promise<Response> {
     return handleGateway(request, env, { fetch: (...a) => fetch(...a) });
   },
-  // Every minute (wrangler [triggers] crons): deliver what the fallback door kept while the vault was away.
-  async scheduled(event: { scheduledTime?: number }, env: GatewayEnv): Promise<void> {
-    await drainInboundSpool(env, { fetch: (...a) => fetch(...a) }, { sweep: isSweepMinute(event.scheduledTime ?? Date.now()) });
+  // Every minute (wrangler [triggers] crons): deliver what the fallback door stored while the vault was away.
+  async scheduled(_event: unknown, env: GatewayEnv): Promise<void> {
+    await drainInboundSpool(env, { fetch: (...a) => fetch(...a) });
   },
 };

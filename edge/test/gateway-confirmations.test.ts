@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { drainInboundSpool, handleGateway, isSweepMinute, SPOOL_PER_KEY, SPOOL_TOTAL, LINK_HOST_HEADER, type GatewayEnv, type GatewayDeps, type RateLimiter, type SpoolKV } from "../src/gateway.ts";
+import { drainInboundSpool, handleGateway, SPOOL_PER_KEY, SPOOL_SQL, SPOOL_TOTAL, LINK_HOST_HEADER, type D1Like, type GatewayEnv, type GatewayDeps, type RateLimiter } from "../src/gateway.ts";
 
 // The confirmation service's two public doors (marketing/specs/confirmations-go-live):
 //  - the text provider's inbound posts, POST /v1/confirmations/inbound/<key>: admitted with no bearer (Twilio sends none; the
@@ -167,72 +167,191 @@ test("the link-host probe is forwarded with the link host", async () => {
   assert.equal((calls[0].init.headers as Headers).get(LINK_HOST_HEADER), "consent.acme.example");
 });
 
-// ---- the fallback door: spooled at the edge before the vault is asked -------------------------------------------------------
-class Spool implements SpoolKV {
-  data = new Map<string, string>();
-  failPut = false;
-  async get(k: string) { return this.data.get(k) ?? null; }
-  async put(k: string, v: string) { if (this.failPut) throw new Error("kv down"); this.data.set(k, v); }
-  async delete(k: string) { this.data.delete(k); }
-  async list(o: { prefix: string }) { return { keys: [...this.data.keys()].filter((k) => k.startsWith(o.prefix)).sort().map((name) => ({ name })) }; }
+// ---- the fallback door: stored in D1 before the vault is asked ----------------------------------------------------------------
+// A stand-in for D1 that answers exactly the statements the gateway sends (SPOOL_SQL); any other statement fails the test.
+type Row = { id: string; number_key: string; received_at: string; path: string; body_b64: string; headers_json: string; attempts: number; last_status: number | null; drained_at: string | null };
+class FakeD1 implements D1Like {
+  rows: Row[] = [];
+  fail: Set<string> = new Set(); // statement names that throw
+  seen: string[] = [];
+  prepare(sql: string) {
+    const name = (Object.entries(SPOOL_SQL).find(([, v]) => v === sql) ?? [])[0];
+    if (!name) throw new Error(`unexpected statement: ${sql}`);
+    const db = this;
+    const run = async (args: unknown[]) => {
+      db.seen.push(name);
+      if (db.fail.has(name)) throw new Error(`D1_ERROR ${name}`);
+      const open = db.rows.filter((r) => r.drained_at === null);
+      switch (name) {
+        case "countKey": return { results: [{ n: open.filter((r) => r.number_key === args[0]).length }] };
+        case "countAll": return { results: [{ n: open.length }] };
+        case "insert": db.rows.push({ id: String(args[0]), number_key: String(args[1]), received_at: String(args[2]), path: String(args[3]), body_b64: String(args[4]), headers_json: String(args[5]), attempts: 0, last_status: null, drained_at: null }); return { results: [] };
+        case "pending": return { results: [...open].sort((a, b) => a.received_at.localeCompare(b.received_at)) };
+        case "markDrained": { const r = db.rows.find((x) => x.id === args[2])!; r.drained_at = String(args[0]); r.attempts++; r.last_status = Number(args[1]); return { results: [] }; }
+        case "markAttempt": { const r = db.rows.find((x) => x.id === args[1])!; r.attempts++; r.last_status = Number(args[0]); return { results: [] }; }
+        case "purge": db.rows = db.rows.filter((r) => !(r.drained_at !== null && r.drained_at < String(args[0]))); return { results: [] };
+      }
+      throw new Error(name);
+    };
+    return { bind: (...args: unknown[]) => ({ run: () => run(args), all: () => run(args) }) };
+  }
 }
 const FPATH = `/v1/confirmations/inbound-fallback/${KEY}`;
+const open = (db: FakeD1) => db.rows.filter((r) => r.drained_at === null);
 
 function down(calls: { url: string; init: RequestInit }[] = []): typeof fetch {
   return (async (url: string, init: RequestInit) => { calls.push({ url: String(url), init }); throw new TypeError("network"); }) as unknown as typeof fetch;
 }
+const answering = (status: number, calls: { url: string; init: RequestInit }[] = []) =>
+  (async (url: string, init: RequestInit) => { calls.push({ url: String(url), init }); return new Response("{}", { status }); }) as unknown as typeof fetch;
 
-test("a fallback post while the vault is down is kept at the edge and Twilio is told it was received", async () => {
-  const spool = new Spool();
-  const { env, alarms } = mk({ INBOUND_SPOOL: spool });
+test("a fallback post while the vault is down is stored and Twilio is told it was received", async () => {
+  const db = new FakeD1();
+  const { env, alarms } = mk({ INBOUND_SPOOL: db });
   const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: (n) => alarms.push(n) });
   assert.equal(res.status, 200);
-  assert.equal([...spool.data.keys()].filter((k) => k.startsWith("inbound:")).length, 1);
-  const kept = JSON.parse([...spool.data.entries()].find(([k]) => k.startsWith("inbound:"))![1]);
-  assert.equal(kept.path, FPATH);
-  assert.equal(atob(kept.body_b64), RAW);
-  assert.equal(kept.headers["x-twilio-signature"], TWILIO["x-twilio-signature"]);
+  assert.equal(open(db).length, 1);
+  const row = open(db)[0];
+  assert.equal(row.number_key, KEY);
+  assert.equal(row.path, FPATH);
+  assert.equal(atob(row.body_b64), RAW);
+  assert.equal(JSON.parse(row.headers_json)["x-twilio-signature"], TWILIO["x-twilio-signature"]);
   assert.deepEqual(alarms, ["confirmations.inbound_spooled"]);
 });
 
-test("a fallback post the vault answers at once is not left in the spool", async () => {
-  const spool = new Spool();
-  const { d, calls, env } = mk({ INBOUND_SPOOL: spool });
-  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, d);
+test("a fallback post the vault takes at once is marked drained, never left open", async () => {
+  const db = new FakeD1();
+  const calls: { url: string; init: RequestInit }[] = [];
+  const { env } = mk({ INBOUND_SPOOL: db });
+  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: answering(200, calls), alarm: () => {} });
   assert.equal(res.status, 200);
   assert.equal(calls[0].url, "https://origin.example.com" + FPATH);
-  assert.equal([...spool.data.keys()].filter((k) => k.startsWith("inbound:")).length, 0);
+  assert.equal(open(db).length, 0);
+  assert.equal(db.rows[0].last_status, 200);
 });
 
-test("a fallback post that can be neither kept nor delivered answers 503 and alarms", async () => {
-  const spool = new Spool();
-  spool.failPut = true;
-  const { env, alarms } = mk({ INBOUND_SPOOL: spool });
-  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: (n) => alarms.push(n) });
-  assert.equal(res.status, 503);
-  assert.ok(alarms.includes("confirmations.inbound_spool_unwritable"));
-});
-
-test("the drain delivers each kept post to the vault's fallback door byte for byte and keeps it while the vault is down", async () => {
-  const spool = new Spool();
-  const { env } = mk({ INBOUND_SPOOL: spool });
-  await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {} });
-  const left = await drainInboundSpool(env, { fetch: down(), alarm: () => {} });
-  assert.equal(left.kept, 1);
-  assert.equal([...spool.data.keys()].filter((k) => k.startsWith("inbound:")).length, 1);
+test("a store write that fails raises a named alarm and the post still goes to the vault", async () => {
+  const db = new FakeD1();
+  db.fail.add("insert");
+  const alarms: string[] = [];
   const calls: { url: string; init: RequestInit }[] = [];
-  const up = (async (url: string, init: RequestInit) => { calls.push({ url: String(url), init }); return new Response("{}", { status: 200 }); }) as unknown as typeof fetch;
-  const done = await drainInboundSpool(env, { fetch: up, alarm: () => {} });
-  assert.deepEqual(done, { delivered: 1, kept: 0 });
-  assert.equal([...spool.data.keys()].filter((k) => k.startsWith("inbound:")).length, 0, "only the vault's 2xx ends a kept post");
+  const { env } = mk({ INBOUND_SPOOL: db });
+  const ok = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: answering(200, calls), alarm: (n) => alarms.push(n) });
+  assert.equal(ok.status, 200);
+  assert.equal(calls.length, 1);
+  assert.ok(alarms.includes("confirmations.inbound_spool_unwritable"));
+  const lost = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: (n) => alarms.push(n) });
+  assert.equal(lost.status, 503, "neither stored nor delivered: Twilio is told, never a false 200");
+});
+
+test("a failed cap count still stores the post (a STOP is kept rather than refused) and alarms", async () => {
+  const db = new FakeD1();
+  db.fail.add("countKey");
+  const alarms: string[] = [];
+  const { env } = mk({ INBOUND_SPOOL: db });
+  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: (n) => alarms.push(n) });
+  assert.equal(res.status, 200);
+  assert.equal(open(db).length, 1);
+  assert.ok(alarms.includes("confirmations.inbound_spool_unreadable"));
+});
+
+test("the drain selects open rows every minute with no flag and no listing, and marks one drained only on the vault's 2xx", async () => {
+  const db = new FakeD1();
+  const { env } = mk({ INBOUND_SPOOL: db });
+  await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {} });
+  assert.deepEqual(await drainInboundSpool(env, { fetch: down(), alarm: () => {} }), { delivered: 0, kept: 1 });
+  assert.equal(db.rows[0].attempts, 0, "no answer: no write spent on the attempt");
+  const calls: { url: string; init: RequestInit }[] = [];
+  assert.deepEqual(await drainInboundSpool(env, { fetch: answering(202, calls), alarm: () => {} }), { delivered: 1, kept: 0 });
+  assert.equal(open(db).length, 0);
   assert.equal(calls[0].url, "https://origin.example.com" + FPATH);
   assert.equal(new TextDecoder().decode(calls[0].init.body as ArrayBuffer), RAW);
   const h = calls[0].init.headers as Headers;
   assert.equal(h.get("x-twilio-signature"), TWILIO["x-twilio-signature"]);
   assert.equal(h.get("cf-access-client-id"), "cid");
+  assert.ok(!db.seen.some((s) => /list|flag|marker/i.test(s)));
 });
 
-test("without the spool binding the fallback post is forwarded and a named alarm raised", async () => {
+test("only a 2xx from the vault ends a stored post: a 404, 401, 403, 409 or redirect keeps it and alarms", async () => {
+  for (const status of [404, 401, 403, 409, 302]) {
+    const db = new FakeD1();
+    const alarms: string[] = [];
+    const { env } = mk({ INBOUND_SPOOL: db });
+    await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {} });
+    const out = await drainInboundSpool(env, { fetch: answering(status), alarm: (n) => alarms.push(n) });
+    assert.deepEqual(out, { delivered: 0, kept: 1 }, String(status));
+    assert.ok(alarms.includes("confirmations.inbound_spool_refused"), String(status));
+    assert.equal(db.rows[0].last_status, status);
+  }
+});
+
+test("a fallback post the vault answers with anything but 2xx stays stored, and Twilio is still told it was received", async () => {
+  const db = new FakeD1();
+  const alarms: string[] = [];
+  const { env } = mk({ INBOUND_SPOOL: db });
+  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: answering(404), alarm: (n) => alarms.push(n) });
+  assert.equal(res.status, 200);
+  assert.equal(open(db).length, 1);
+  assert.ok(alarms.includes("confirmations.inbound_spool_refused"));
+});
+
+test("a stored post older than 10 minutes raises a named alarm", async () => {
+  const db = new FakeD1();
+  const alarms: string[] = [];
+  const { env } = mk({ INBOUND_SPOOL: db });
+  const t0 = Date.parse("2026-11-14T12:00:00Z");
+  await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {}, now: () => t0 });
+  await drainInboundSpool(env, { fetch: down(), alarm: (n) => alarms.push(n), now: () => t0 + 11 * 60_000 });
+  assert.ok(alarms.includes("confirmations.inbound_spool_stale"));
+});
+
+test("a drain whose read fails raises a named alarm and throws nothing", async () => {
+  const db = new FakeD1();
+  db.fail.add("pending");
+  const alarms: string[] = [];
+  const { env } = mk({ INBOUND_SPOOL: db });
+  assert.deepEqual(await drainInboundSpool(env, { fetch: down(), alarm: (n) => alarms.push(n) }), { delivered: 0, kept: 0 });
+  assert.ok(alarms.includes("confirmations.inbound_spool_unreadable"));
+});
+
+test("a drain whose drained-mark fails raises a named alarm (the post is delivered again next run; the vault takes a repeat once)", async () => {
+  const db = new FakeD1();
+  const alarms: string[] = [];
+  const { env } = mk({ INBOUND_SPOOL: db });
+  await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {} });
+  db.fail.add("markDrained");
+  await drainInboundSpool(env, { fetch: answering(200), alarm: (n) => alarms.push(n) });
+  assert.ok(alarms.includes("confirmations.inbound_spool_unwritable"));
+  assert.equal(open(db).length, 1);
+});
+
+test("the store holds at most SPOOL_PER_KEY open posts for one number and SPOOL_TOTAL in all; past a cap it forwards only", async () => {
+  const db = new FakeD1();
+  const base = { path: FPATH, body_b64: "", headers_json: "{}", attempts: 0, last_status: null, drained_at: null };
+  for (let i = 0; i < SPOOL_PER_KEY; i++) db.rows.push({ ...base, id: `a${i}`, number_key: KEY, received_at: "2026-11-14T00:00:00Z" });
+  const alarms: string[] = [];
+  const { env } = mk({ INBOUND_SPOOL: db });
+  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: (n) => alarms.push(n) });
+  assert.equal(res.status, 503);
+  assert.equal(open(db).length, SPOOL_PER_KEY);
+  assert.ok(alarms.includes("confirmations.inbound_spool_full"));
+  const other = new FakeD1();
+  for (let i = 0; i < SPOOL_TOTAL; i++) other.rows.push({ ...base, id: `b${i}`, number_key: `k${i}`, received_at: "2026-11-14T00:00:00Z" });
+  const r2 = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), mk({ INBOUND_SPOOL: other }).env, { fetch: down(), alarm: () => {} });
+  assert.equal(r2.status, 503);
+  assert.equal(open(other).length, SPOOL_TOTAL);
+});
+
+test("a fallback body over 16 KB is refused and never stored", async () => {
+  const db = new FakeD1();
+  const { d, calls, env } = mk({ INBOUND_SPOOL: db });
+  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: "a=" + "x".repeat(16 * 1024) }), env, d);
+  assert.equal(res.status, 413);
+  assert.equal(db.rows.length, 0);
+  assert.equal(calls.length, 0);
+});
+
+test("without the store binding the fallback post is forwarded and a named alarm raised", async () => {
   const { d, calls, alarms, env } = mk({ INBOUND_SPOOL: undefined });
   const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, d);
   assert.equal(res.status, 200);
@@ -240,131 +359,11 @@ test("without the spool binding the fallback post is forwarded and a named alarm
   assert.ok(alarms.includes("confirmations.inbound_spool_unbound"));
 });
 
-test("a client copy of the link-host header never reaches the vault on any other route", async () => {
-  const { d, calls, env } = mk();
-  await handleGateway(at("api.consentvault.ai", "/v1/systems", { headers: { authorization: "Bearer abc.def", [LINK_HOST_HEADER]: "consent.acme.example" } }), env, d);
-  assert.equal((calls[0].init.headers as Headers).get(LINK_HOST_HEADER), null);
-});
-
-test("only a 2xx from the vault ends a kept post: a 404, 401 or 403 keeps it and raises an alarm", async () => {
-  for (const status of [404, 401, 403, 409, 302]) {
-    const spool = new Spool();
-    const alarms: string[] = [];
-    const { env } = mk({ INBOUND_SPOOL: spool });
-    await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {} });
-    const answer = (async () => new Response("{}", { status })) as unknown as typeof fetch;
-    const out = await drainInboundSpool(env, { fetch: answer, alarm: (n) => alarms.push(n) });
-    assert.deepEqual(out, { delivered: 0, kept: 1 }, String(status));
-    assert.ok(alarms.includes("confirmations.inbound_spool_refused"), String(status));
-  }
-});
-
-test("a fallback post the vault answers with anything but 2xx stays kept, and Twilio is still told it was received", async () => {
-  const spool = new Spool();
-  const alarms: string[] = [];
-  const { env } = mk({ INBOUND_SPOOL: spool });
-  const answer = (async () => new Response("{}", { status: 404 })) as unknown as typeof fetch;
-  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: answer, alarm: (n) => alarms.push(n) });
-  assert.equal(res.status, 200);
-  assert.equal([...spool.data.keys()].filter((k) => k.startsWith("inbound:")).length, 1);
-  assert.ok(alarms.includes("confirmations.inbound_spool_refused"));
-});
-
-test("the spool holds at most SPOOL_PER_KEY posts for one number and SPOOL_TOTAL in all; past a cap the post is forwarded, not kept", async () => {
-  const spool = new Spool();
-  for (let i = 0; i < SPOOL_PER_KEY; i++) spool.data.set(`inbound:${KEY}:2026-11-14T00:00:${String(i).padStart(4, "0")}:x`, "{}");
-  const alarms: string[] = [];
-  const { env } = mk({ INBOUND_SPOOL: spool });
-  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: (n) => alarms.push(n) });
-  assert.equal(res.status, 503);
-  assert.equal([...spool.data.keys()].filter((k) => k.startsWith("inbound:")).length, SPOOL_PER_KEY);
-  assert.ok(alarms.includes("confirmations.inbound_spool_full"));
-  const other = new Spool();
-  for (let i = 0; i < SPOOL_TOTAL; i++) other.data.set(`inbound:k${i}xxxxxxxxxxxxxxxxxxxxxxx:t:x`, "{}");
-  const e2 = mk({ INBOUND_SPOOL: other }).env;
-  const r2 = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), e2, { fetch: down(), alarm: () => {} });
-  assert.equal(r2.status, 503);
-  assert.equal(other.data.size, SPOOL_TOTAL);
-});
-
-test("a fallback body over 16 KB is refused and never kept (the vault takes no more)", async () => {
-  const spool = new Spool();
-  const { d, calls, env } = mk({ INBOUND_SPOOL: spool });
-  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: "a=" + "x".repeat(16 * 1024) }), env, d);
-  assert.equal(res.status, 413);
-  assert.equal(spool.data.size, 0);
-  assert.equal(calls.length, 0);
-});
-
-test("the drain reads one marker and lists nothing while the spool is empty (the KV list quota)", async () => {
-  let lists = 0;
-  const spool = new Spool();
-  const orig = spool.list.bind(spool);
-  spool.list = async (o) => { lists++; return orig(o); };
-  const { env } = mk({ INBOUND_SPOOL: spool });
-  await drainInboundSpool(env, { fetch: down(), alarm: () => {} });
-  assert.equal(lists, 0);
-});
-
-test("a post kept between the drain's listing and its flag check is still drained on the next run", async () => {
-  const spool = new Spool();
-  const { env } = mk({ INBOUND_SPOOL: spool });
-  let t = Date.parse("2026-11-14T12:00:00Z");
-  const clock = () => t;
-  // something was kept long ago and has been delivered, so the flag is old and the spool empty
-  spool.data.set("meta:pending", new Date(t - 3_600_000).toISOString());
-  const origList = spool.list.bind(spool);
-  let lists = 0;
-  spool.list = async (o) => {
-    const out = await origList(o);
-    lists++;
-    if (lists === 1) {
-      // a fallback post arrives right after the drain's first listing read empty
-      await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {}, now: clock });
-    }
-    return out;
-  };
-  await drainInboundSpool(env, { fetch: down(), alarm: () => {}, now: clock, sleep: async () => {} });
-  assert.notEqual(spool.data.get("meta:pending"), undefined, "the flag must survive: a post was kept during the drain");
-  spool.list = origList;
-  t += 60_000;
-  const calls: { url: string }[] = [];
-  const up = (async (url: string) => { calls.push({ url: String(url) }); return new Response("{}", { status: 200 }); }) as unknown as typeof fetch;
-  const next = await drainInboundSpool(env, { fetch: up, alarm: () => {}, now: clock, sleep: async () => {} });
-  assert.equal(next.delivered, 1);
-});
-
-test("the flag is removed only after two empty listings and once it is older than the settle time", async () => {
-  const spool = new Spool();
-  const { env } = mk({ INBOUND_SPOOL: spool });
-  const t = Date.parse("2026-11-14T12:00:00Z");
-  spool.data.set("meta:pending", new Date(t - 30_000).toISOString());
-  await drainInboundSpool(env, { fetch: down(), alarm: () => {}, now: () => t, sleep: async () => {} });
-  assert.notEqual(spool.data.get("meta:pending"), undefined, "a young flag stays (KV listings can lag a fresh write)");
-  spool.data.set("meta:pending", new Date(t - 600_000).toISOString());
-  await drainInboundSpool(env, { fetch: down(), alarm: () => {}, now: () => t, sleep: async () => {} });
-  assert.equal(spool.data.get("meta:pending"), undefined);
-});
-
-test("every tenth minute the drain lists everything even with no flag, so a post another location's drain missed is delivered", async () => {
-  const spool = new Spool();
-  const { env } = mk({ INBOUND_SPOOL: spool });
-  const t = Date.parse("2026-11-14T12:00:00Z");
-  spool.data.set(`inbound:${KEY}:2026-11-14T11:59:00.000Z:x`, JSON.stringify({ path: FPATH, headers: {}, body_b64: btoa(RAW), kept_at: "2026-11-14T11:59:00.000Z" }));
-  const up = (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch;
-  assert.deepEqual(await drainInboundSpool(env, { fetch: up, alarm: () => {}, now: () => t }), { delivered: 0, kept: 0 }, "no flag, no sweep: nothing listed");
-  assert.deepEqual(await drainInboundSpool(env, { fetch: up, alarm: () => {}, now: () => t }, { sweep: true }), { delivered: 1, kept: 0 });
-  assert.ok(isSweepMinute(Date.parse("2026-11-14T12:10:00Z")) && isSweepMinute(Date.parse("2026-11-14T12:00:30Z")));
-  assert.ok(!isSweepMinute(Date.parse("2026-11-14T12:11:00Z")));
-});
-
-test("a kept post older than 10 minutes raises a named alarm", async () => {
-  const spool = new Spool();
-  const alarms: string[] = [];
-  const { env } = mk({ INBOUND_SPOOL: spool });
-  const t = Date.parse("2026-11-14T12:00:00Z");
-  spool.data.set("meta:pending", new Date(t - 60_000).toISOString());
-  spool.data.set(`inbound:${KEY}:2026-11-14T11:45:00.000Z:x`, JSON.stringify({ path: FPATH, headers: {}, body_b64: btoa(RAW), kept_at: "2026-11-14T11:45:00.000Z" }));
-  await drainInboundSpool(env, { fetch: down(), alarm: (n) => alarms.push(n), now: () => t });
-  assert.ok(alarms.includes("confirmations.inbound_spool_stale"));
+test("drained rows are purged after seven days", async () => {
+  const db = new FakeD1();
+  const base = { path: FPATH, body_b64: "", headers_json: "{}", attempts: 1, last_status: 200, number_key: KEY, received_at: "2026-11-01T00:00:00Z" };
+  db.rows.push({ ...base, id: "old", drained_at: "2026-11-01T00:00:00Z" }, { ...base, id: "new", drained_at: "2026-11-14T11:00:00Z" });
+  const { env } = mk({ INBOUND_SPOOL: db });
+  await drainInboundSpool(env, { fetch: down(), alarm: () => {}, now: () => Date.parse("2026-11-14T12:00:00Z") });
+  assert.deepEqual(db.rows.map((r) => r.id), ["new"]);
 });

@@ -28,6 +28,14 @@ export interface GatewayEnv {
   PROVIDER_MFA_REQUIRED?: string;
   // One Durable Object per session owns the session record and is its only writer (see session-gate.ts); optional.
   SESSION_GATE?: GateNamespace;
+  // Workers rate-limit bindings for the confirmation doors (wrangler [[ratelimits]]); see confirmationDoor below.
+  INBOUND_LIMITER?: RateLimiter;
+  PAGE_LIMITER?: RateLimiter;
+}
+
+/** The Workers rate-limit binding's shape: one call per request, { success: false } over the limit. */
+export interface RateLimiter {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
 }
 
 export interface GatewayDeps {
@@ -45,7 +53,9 @@ const CAPTURE_PREFIXES = ["/v1/events", "/v1/capture"];
 export const GATEWAY_FACTS_HEADER = "x-consentvault-gateway-facts";
 const isCapturePath = (p: string) => CAPTURE_PREFIXES.some((x) => p === x || p.startsWith(x + "/"));
 const BEARER_RE = /^Bearer [A-Za-z0-9._~+\/-]+=*$/;
-const DROP_REQUEST_HEADERS = ["cf-access-client-id", "cf-access-client-secret", "cf-access-jwt-assertion", "host", "connection", "x-forwarded-for", "cookie"];
+// The link host of a confirmation page, set only by this Worker from the request's own host name (confirm/wiring.py reads it).
+export const LINK_HOST_HEADER = "x-consentvault-link-host";
+const DROP_REQUEST_HEADERS = ["cf-access-client-id", "cf-access-client-secret", "cf-access-jwt-assertion", "host", "connection", "x-forwarded-for", "cookie", LINK_HOST_HEADER];
 const ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 const DOWNLOAD_RE = /^\/v1\/exports\/[0-9a-fA-F-]{36}\/download$/; // the signed one-time link is the credential
 const INVITE_VIEW_RE = /^\/v1\/invites\/[^/:]+$/; // the public view of an invitation, read before the person has joined
@@ -55,6 +65,13 @@ const TWENTY_WEBHOOK_RE = /^\/v1\/connectors\/twenty\/[A-Za-z0-9_-]{1,128}\/webh
 // Stripe's live webhook: the Stripe-Signature over the raw body is the credential, so no bearer; this one exact path and method.
 const STRIPE_WEBHOOK_PATH = "/v1/billing/webhook";
 const TWENTY_WEBHOOK_MAX_BODY = 256 * 1024;
+// The text provider's inbound posts (confirmations.md section 9): Twilio sends no bearer; the X-Twilio-Signature over the address
+// the vault stored is the credential, checked by the vault. The key is the random per-account part of that address.
+const INBOUND_RE = /^\/v1\/confirmations\/inbound\/([A-Za-z0-9_-]{20,128})$/;
+const INBOUND_MAX_BODY = 64 * 1024; // the vault itself answers 413 over 16 KB and counts it with the signature failures
+// The person's pages on an organisation's own link host (confirmations.md sections 6 and 7; the product's own token pattern).
+const PAGE_RE = /^\/c\/(r|stop)\/[A-Za-z0-9_-]{8,128}$/;
+const PAGE_MAX_BODY = 8 * 1024;
 const TENANT_LEAD_SECONDS = 20;
 const REFRESH_LEAD_SECONDS = 30;
 
@@ -180,6 +197,48 @@ async function forwardCapture(request: Request, env: GatewayEnv, deps: GatewayDe
 
 const TOKEN_ENDPOINT_PATH = "/v1/oauth/token";
 
+function tooMany(): Response {
+  return new Response(JSON.stringify({ error: "rate_limited", message: "too many requests; try again shortly" }), {
+    status: 429, headers: { "content-type": "application/json", "cache-control": "no-store", "retry-after": "10" },
+  });
+}
+
+// The two confirmation doors. Nothing here reads or judges the request: the vault checks the provider's signature and finds a
+// page token only on its organisation's verified host. No cookie, no Authorization and no session store are ever involved.
+async function confirmationDoor(request: Request, url: URL, env: GatewayEnv, deps: GatewayDeps, kind: "inbound" | "page", key: string): Promise<Response> {
+  const alarm = deps.alarm ?? ((n, d) => console.error(`consentvault gateway alarm ${n}: ${d}`));
+  const limiter = kind === "inbound" ? env.INBOUND_LIMITER : env.PAGE_LIMITER;
+  if (!limiter) {
+    // A missing binding forwards: a stop the person texted must reach the vault, and Twilio does not resend a refused one.
+    alarm(`confirmations.${kind === "inbound" ? "inbound" : "page"}_rate_limit_unbound`, `the ${kind === "inbound" ? "INBOUND_LIMITER" : "PAGE_LIMITER"} binding is not set; the door is not rate limited`);
+  } else if (!(await limiter.limit({ key })).success) {
+    return tooMany();
+  }
+  const max = kind === "inbound" ? INBOUND_MAX_BODY : PAGE_MAX_BODY;
+  const declared = request.headers.get("content-length");
+  if (declared !== null && Number(declared) > max) throw new Refusal(413, "too_large", `body exceeds ${max} bytes`);
+  let body: ArrayBuffer | undefined;
+  if (request.method === "POST") {
+    body = await request.arrayBuffer();
+    if (body.byteLength > max) throw new Refusal(413, "too_large", `body exceeds ${max} bytes`);
+  }
+  const headers = new Headers(request.headers);
+  for (const h of DROP_REQUEST_HEADERS) headers.delete(h);
+  headers.delete("authorization");
+  headers.delete("x-cv-org");
+  headers.delete(ASSERTION_HEADER);
+  headers.set("cf-access-client-id", env.ACCESS_CLIENT_ID);
+  headers.set("cf-access-client-secret", env.ACCESS_CLIENT_SECRET);
+  if (kind === "page") headers.set(LINK_HOST_HEADER, url.hostname.toLowerCase());
+  let res: Response;
+  try {
+    res = await deps.fetch(clean(env.ORIGIN_URL) + url.pathname + url.search, { method: request.method, headers, body });
+  } catch (e) {
+    throw new Refusal(502, "origin_unreachable", `origin unreachable: ${(e as Error).name}`);
+  }
+  return new Response(res.body, { status: res.status, headers: scrub(res.headers) });
+}
+
 export async function handleGateway(request: Request, env: GatewayEnv, deps: GatewayDeps): Promise<Response> {
   try {
     const url = new URL(request.url);
@@ -194,6 +253,13 @@ export async function handleGateway(request: Request, env: GatewayEnv, deps: Gat
     }
     for (const k of ["ORIGIN_URL", "ACCESS_CLIENT_ID", "ACCESS_CLIENT_SECRET"] as const) {
       if (!env[k]) throw new Refusal(500, "misconfigured", `gateway setting ${k} is not set`);
+    }
+    const inbound = INBOUND_RE.exec(url.pathname);
+    if (inbound && request.method === "POST") return await confirmationDoor(request, url, env, deps, "inbound", `inbound:${inbound[1]}`);
+    const page = PAGE_RE.exec(url.pathname);
+    if (page) {
+      if (!(request.method === "GET" || (request.method === "POST" && page[1] === "stop"))) throw new Refusal(405, "method_not_allowed", "method not allowed");
+      return await confirmationDoor(request, url, env, deps, "page", `page:${request.headers.get("cf-connecting-ip") || "unknown"}`);
     }
     if (!url.pathname.startsWith("/v1/")) throw new Refusal(404, "not_found", "no such route");
     if (!ALLOWED_METHODS.includes(request.method)) throw new Refusal(405, "method_not_allowed", "method not allowed");

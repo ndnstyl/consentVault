@@ -297,5 +297,14 @@ def test_no_request_line_or_query_string_reaches_a_log():
             lines = [ln for ln in text.splitlines() if "console." in ln]
             assert lines and all("consentvault" in ln and "alarm" in ln for ln in lines), f
             assert not any("request.url" in ln or "url." in ln for ln in lines), f
+        elif f.name == "auth.ts":
+            # the portal sign-in route writes named alarms (each begins "consentvault portal") and one diagnostic of what the
+            # identity provider answered: the sign-in method, the authentication methods and the NAMES of the answer's fields
+            # that are not tokens. Never a request line, a header, a body, a query string, a token or an address.
+            lines = [ln for ln in text.splitlines() if "console." in ln]
+            assert lines, f
+            for ln in lines:
+                assert "consentvault portal" in ln or "signin_method" in ln, (f, ln)
+                assert not any(w in ln for w in ("request.url", "url.", "url)", "search", "headers", "body", "email", "code")), (f, ln)
         else:
             assert "console." not in text, f

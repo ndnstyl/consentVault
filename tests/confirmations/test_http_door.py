@@ -96,3 +96,27 @@ def test_a_stop_to_a_number_not_on_the_account_alarms_at_once(world, stack, arme
     assert r.status == 403
     alarm = stack.alarms(world.a.boss).get("inbound_signature_failures")
     assert alarm is not None and "stop_number_mismatch" in str(alarm["detail"])
+
+
+# ---- the sender's number list kept from a live read (migration 0111 grants the write of the sealed sender) ---------------------
+def _stored_numbers(world, stack, org):
+    (row,) = world.sql(org, "SELECT org_id, account_id, sender_ct FROM consentvault.sending_account"
+                            " WHERE org_id = %s AND channel = 'sms' AND status <> 'disconnected'", (org.org_id,))
+    return sorted(stack.service._sender_spec(org.org_id, row).get("numbers") or [])
+
+
+def test_the_stored_sender_numbers_follow_the_providers_list_only_after_a_correctly_signed_post(world, stack, armed):
+    o = world.a
+    added = "+15555550177"
+    before = _stored_numbers(world, stack, o)
+    assert added not in before
+    stack.twilio.numbers = stack.twilio.numbers + (added,)   # the messaging service gained a number at the provider
+    params = {**_params("hello"), "To": added}
+    url = INBOUND_BASE + armed.twilio_key
+    assert _post(stack, armed.twilio_key, params, None).status == 401   # unsigned: nothing is read live, nothing is kept
+    assert _stored_numbers(world, stack, o) == before
+    assert _post(stack, armed.twilio_key, params, stack.twilio.sign("https://evil.example/" + armed.twilio_key, params)).status == 401
+    assert _stored_numbers(world, stack, o) == before   # wrongly signed: the same
+    assert _post(stack, armed.twilio_key, params, stack.twilio.sign(url, params)).status == 200
+    assert _stored_numbers(world, stack, o) == sorted(stack.twilio.numbers)   # correctly signed: the list is read live and kept
+    assert added in _stored_numbers(world, stack, o)

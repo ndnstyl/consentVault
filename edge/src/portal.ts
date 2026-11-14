@@ -125,7 +125,11 @@ async function wakeOnce(env: PortalEnv, deps: GatewayDeps, nowMs: number, subjec
   } catch (e) { console.error(`consentvault portal WAKE_COUNTER_UNWRITABLE: ${(e as Error).name}; no wake was asked`); return failed("the daily wake counter could not be written"); }
   const woke = await callWake(env, deps.fetch, nowMs);
   if (!woke.ok) {
-    console.error(`consentvault portal WAKE_FAILED: ${woke.reason}`);
+    const status = /^wake function answered http (\d{3})/.exec(woke.reason);  // the status only: the response text never reaches a log
+    const why = status ? "the wake function answered http " + status[1]
+      : woke.reason.startsWith("wake function unreachable") ? "the wake function was unreachable"
+      : (/^(CV_WAKE_[A-Z]+) is not set/.exec(woke.reason)?.[1] ?? "the wake answer") + " is not set up";
+    console.error(`consentvault portal WAKE_FAILED: ${why}`);
     return failed(woke.reason);
   }
   if (person) { try { await env.SESSIONS.put(person, String(personUsed + 1), { expirationTtl: 2 * 86400 }); } catch (e) { console.error(`consentvault portal WAKE_SUBJECT_COUNTER_UNWRITABLE: ${(e as Error).name}`); } }

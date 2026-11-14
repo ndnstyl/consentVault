@@ -280,8 +280,10 @@ def test_the_machine_credential_that_created_an_export_reads_its_status_and_link
 
 
 def test_no_request_line_or_query_string_reaches_a_log():
-    """The download link is the credential and rides in the query string: the vault logs no request line and the
-    edge logs nothing at all (contracts/README.md, proxies: scrub the query string)."""
+    """The download link is the credential and rides in the query string: the vault logs no request line, and the edge writes
+    only named alarms (the gateway's, and the portal's sign-in and wake routes), each carrying a fixed name, a count or a
+    class name, never a request line, a header, a body, a query string, a token, an address or a response's text
+    (contracts/README.md, proxies: scrub the query string)."""
     import inspect
     from pathlib import Path as _P
 
@@ -298,13 +300,17 @@ def test_no_request_line_or_query_string_reaches_a_log():
             assert lines and all("consentvault" in ln and "alarm" in ln for ln in lines), f
             assert not any("request.url" in ln or "url." in ln for ln in lines), f
         elif f.name in ("auth.ts", "portal.ts"):
-            # the portal sign-in and wake routes write named alarms (each begins "consentvault portal") and one diagnostic of what the
-            # identity provider answered: the sign-in method, the authentication methods and the NAMES of the answer's fields
-            # that are not tokens. Never a request line, a header, a body, a query string, a token or an address.
+            # named alarms only: each begins "consentvault portal", and what a line may interpolate is a short list of values
+            # that are an error's class name, a count, a cap or a phrase chosen from fixed words. Any other interpolated value
+            # (a response's text, a reason carried up from a call, a field of the request) is refused.
+            import re
+            allowed = {"(e as Error).name", "personUsed", "used", "WAKE_SUBJECT_DAILY_CAP", "WAKE_DAILY_CAP", "why"}
             lines = [ln for ln in text.splitlines() if "console." in ln]
             assert lines, f
             for ln in lines:
-                assert "consentvault portal" in ln or "signin_method" in ln, (f, ln)
+                assert "consentvault portal" in ln, (f, ln)
+                for expr in re.findall(r"\$\{([^}]*)\}", ln):
+                    assert expr in allowed, (f, expr, ln)
                 assert not any(w in ln for w in ("request.url", "url.", "url)", "search", "headers", "body", "email", "code")), (f, ln)
         else:
             assert "console." not in text, f

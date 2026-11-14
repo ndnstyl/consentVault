@@ -65,9 +65,10 @@ def test_half_configured_refuses_the_server_start_before_any_other_setting_is_re
 # ---- the service ---------------------------------------------------------------------------------------------------------
 def test_the_service_is_built_with_the_settings_and_the_one_clock():
     clock = lambda: 1.0  # noqa: E731
-    svc = wiring.build_service(BOTH, connect=lambda: None, token_key=TokenKey("k1", b"x" * 32), custody=object(), clock=clock)
+    svc = wiring.build_service(BOTH, connect=lambda: None, token_key=TokenKey("k1", b"x" * 32), custody=object(), clock=clock,
+                               egress=object())
     assert svc._api_base == BASE and svc._edge_cname == CNAME and svc._clock is clock
-    assert wiring.build_service({}, connect=lambda: None, token_key=None, custody=None, clock=clock) is None
+    assert wiring.build_service({}, connect=lambda: None, token_key=None, custody=None, clock=clock, egress=None) is None
 
 
 def test_the_server_hands_one_service_and_one_clock_to_the_admin_app_and_the_routes():

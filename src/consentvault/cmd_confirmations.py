@@ -10,7 +10,8 @@
 
 Settings: the two confirmation settings (``confirm.wiring``; a job refuses without them), the database (the runtime login:
 the service mints its own short tenant token per organisation and runs under row security), the tenant token key
-(``CONSENTVAULT_TOKEN_KEY_ID`` and ``CONSENTVAULT_TOKEN_KEY_FILE``) and the key provider. A pass that fails exits 2 naming
+(``CONSENTVAULT_TOKEN_KEY_ID`` and ``CONSENTVAULT_TOKEN_KEY_FILE``), the key provider, and the egress Worker
+(``CONSENTVAULT_EGRESS_URL`` and ``CONSENTVAULT_EGRESS_SECRET_FILE``: the link host's DNS and page probe go through it). A pass that fails exits 2 naming
 only the error's class, so the job runner sends no heartbeat and the missed-heartbeat alarm fires.
 """
 
@@ -41,8 +42,13 @@ def build_job_service(cfg, env: Mapping[str, str]):
         raise ConfigError(f"the confirmation jobs need {wiring.ENV_API_BASE} and {wiring.ENV_EDGE_CNAME}; nothing was run")
     custody = load_key_provider(cfg.key_provider, env=env)
     token_key = _token_key(env)
+    from .cmd_sync import ENV_EGRESS_SECRET_FILE, ENV_EGRESS_URL, _need, _read
+    from .sync.connectors.webhook import EgressTransport
+
+    egress = EgressTransport(_need(env, ENV_EGRESS_URL), _read(env, ENV_EGRESS_SECRET_FILE))
     connect = db.connect_factory(cfg)
-    return wiring.build_service(env, connect=connect, token_key=token_key, custody=custody, clock=dbclock.epoch_clock(connect))
+    return wiring.build_service(env, connect=connect, token_key=token_key, custody=custody, clock=dbclock.epoch_clock(connect),
+                                egress=egress)
 
 
 def _runner(command: str):

@@ -28,6 +28,7 @@ from urllib.parse import urlsplit
 
 from ..errors import ConfigError
 from .core import Reply
+from .egress import PROBE_PATH, PROBE_SERVICE, EgressDns
 from .public import PATH as PUBLIC_PATH
 from .public import _page
 
@@ -38,6 +39,12 @@ LINK_HOST_HEADER = "X-ConsentVault-Link-Host"
 _LABEL = r"(?!-)[a-z0-9-]{1,63}(?<!-)"
 _HOST = re.compile(rf"^{_LABEL}(\.{_LABEL})+$")
 INBOUND_PATH = re.compile(r"^/v1/confirmations/inbound/([A-Za-z0-9_-]{1,128})$")
+# The number's fallback address (Twilio calls it once when the primary fails). Twilio signs over the address it calls, so the
+# vault checks this door's signature over the fallback form of the STORED address (inbound.signed_address).
+FALLBACK_PATH = re.compile(r"^/v1/confirmations/inbound-fallback/([A-Za-z0-9_-]{1,128})$")
+# Connection overrides on the primary address: retry on every failure, three times. Twilio leaves the fragment out of the
+# signature ("When you validate signatures from Twilio webhooks, omit the fragment"), so the stored address still matches.
+TWILIO_RETRY_FRAGMENT = "#rp=all&rc=3"
 
 
 def _host_ok(host: str) -> bool:
@@ -63,17 +70,21 @@ def confirmation_settings(env: Mapping[str, str]) -> Optional[tuple[str, str]]:
     return f"https://{parts.hostname.lower()}", cname
 
 
-def build_service(env: Mapping[str, str], *, connect, token_key, custody, clock: Callable[[], float]):
+def build_service(env: Mapping[str, str], *, connect, token_key, custody, clock: Callable[[], float], egress):
     """The ``ConfirmationService`` for these settings, or None when they are off. The clock is the caller's one clock: the
-    server hands the same callable to the admin app."""
+    server hands the same callable to the admin app. ``egress`` is the egress Worker's transport: the link host's DNS and its
+    page probe go through it (the private network resolves no outside name but the egress Worker's)."""
     settings = confirmation_settings(env)
     if settings is None:
         return None
+    if egress is None:
+        raise ConfigError("the confirmation service needs the egress transport (CONSENTVAULT_EGRESS_URL and its secret) for the"
+                          " link host's DNS and page checks; nothing was started")
     from .service import ConfirmationService
 
     api_base, edge_cname = settings
-    return ConfirmationService(connect=connect, token_key=token_key, custody=custody, clock=clock, api_base=api_base,
-                               edge_cname=edge_cname)
+    return ConfirmationService(connect=connect, token_key=token_key, custody=custody, dns=EgressDns(egress), clock=clock,
+                               api_base=api_base, edge_cname=edge_cname)
 
 
 def _header(headers: Mapping[str, str], name: str) -> str:
@@ -92,20 +103,27 @@ class ConfirmationDoor:
         self._api_base = api_base.rstrip("/")
 
     def handles(self, method: str, path: str) -> bool:
-        if method == "POST" and INBOUND_PATH.match(path or ""):
+        if method == "POST" and (INBOUND_PATH.match(path or "") or FALLBACK_PATH.match(path or "")):
             return True
+        if path == PROBE_PATH:
+            return method == "GET"
         m = PUBLIC_PATH.match(path or "")
         return m is not None and (method == "GET" or (method == "POST" and m.group(1) == "stop"))
 
     def handle(self, method: str, path: str, *, body: bytes = b"", headers: Optional[Mapping[str, str]] = None, **_) -> Reply:
         headers = dict(headers or {})
-        m = INBOUND_PATH.match(path or "")
-        if method == "POST" and m:
-            # The address the provider was given; the service checks the signature over the address STORED on the account.
-            res = self._service.handle_inbound(m.group(1), headers=headers, body=body or b"", url=self._api_base + path)
+        m, f = INBOUND_PATH.match(path or ""), FALLBACK_PATH.match(path or "")
+        if method == "POST" and (m or f):
+            # The address the provider was given; the service checks the signature over the address STORED on the account
+            # (its fallback form on the fallback door).
+            kw = {"fallback": True} if f else {}
+            res = self._service.handle_inbound((m or f).group(1), headers=headers, body=body or b"", url=self._api_base + path, **kw)
             return res if res.payload is not None or res.raw is not None else Reply(res.status, {}, headers=res.headers)
         host = _header(headers, LINK_HOST_HEADER).strip().lower()
         if not host:
             # Never read Host: behind the tunnel it is localhost, and a page is found only on its organisation's own host.
             return _page("Not found", "<p>Not found.</p>", 404)
+        if path == PROBE_PATH:
+            # The link-host probe (confirm.egress): proves this host is served all the way to the vault. Names only the host.
+            return Reply(200, {"service": PROBE_SERVICE, "host": host})
         return self._service.handle_public(method, path, host=host, headers=headers, body=body or b"")

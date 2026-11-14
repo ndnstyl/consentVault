@@ -467,8 +467,13 @@ class ConfigMixin:
         return self._link_host_obj(self._link_host_row(ctx.conn))
 
     def _dns_matches(self, row: dict) -> bool:
-        return (self._dns.lookup(row["host"], "CNAME") == self._edge_cname
-                and self._dns.lookup(row["host"], "TXT") == row["txt_value"])
+        """The CNAME and TXT records, then (where the resolver can, as the cloud's egress resolver does) a page load that must
+        come back from the vault on that host: a host whose DNS is right but that nothing serves would send dead links."""
+        if not (self._dns.lookup(row["host"], "CNAME") == self._edge_cname
+                and self._dns.lookup(row["host"], "TXT") == row["txt_value"]):
+            return False
+        probe = getattr(self._dns, "page_answers", None)  # the cloud wires confirm.egress.EgressDns; the self-host resolver has none
+        return True if probe is None else bool(probe(row["host"]))
 
     # ---- texting registration ------------------------------------------------------------------------------------------------
     def mark_registration(self, ctx: Ctx, body: Any) -> dict:

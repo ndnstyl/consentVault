@@ -4,18 +4,26 @@
 request and records nothing as a reply:
 
 0. a body over 16 KB answers 413 before the signature is computed;
-1. the signature is checked over the ``inbound_url`` STORED on the sending account, never over a URL rebuilt from the request;
-2. the number must be the account's own: ``To`` on a reply, ``From`` on a delivery report;
+1. the signature is checked over the ``inbound_url`` STORED on the sending account (on the fallback door, over its fallback form,
+   ``signed_address``), never over a URL rebuilt from the request. Size and signature are checked before anything is stored:
+   an unsigned body is never written;
+2. the number must be the account's own: ``To`` on a reply, ``From`` on a delivery report. A number not in the list kept at
+   connect is read from the provider once, live (a number added to a Messaging Service later is taken); a STOP to a number
+   that is still not the account's raises the signature-failure alarm at once;
 3. a provider message id is accepted once per organization (a repeat answers 200 and changes nothing).
 
 Everything a reply causes (the seen-message row, the stop or START event, the reply row, our answer queued) is written in ONE
-transaction, so a failure answers 503, the provider retries, and the retry is not taken for a replay. Our answers are sent
-after that transaction commits, so a provider fault never undoes a stop.
+transaction, so a failure answers 503 and the retry is not taken for a replay. Twilio does NOT retry a messaging webhook by
+default (one retry, on a connect timeout only), so the number is pointed at the primary address with the connection overrides
+``#rp=all&rc=3`` (retry on any failure; Twilio leaves the fragment out of the signature) and at the fallback address, which the
+edge spools durably before the vault sees it (edge gateway.ts, the inbound spool). Our answers are sent after that transaction
+commits, so a provider fault never undoes a stop.
 """
 
 from __future__ import annotations
 
 import base64
+import json
 import hashlib
 import hmac
 import urllib.parse
@@ -42,6 +50,20 @@ START_WORDS = ("start", "unstop", "yes")
 RECORD_ERRORS = (psycopg.Error, LedgerError, ConsentVaultError, TenancyError, *KEY_ERRORS)
 
 
+PRIMARY_SEGMENT = "/v1/confirmations/inbound/"
+FALLBACK_SEGMENT = "/v1/confirmations/inbound-fallback/"
+
+
+def signed_address(stored: str, fallback: bool) -> str:
+    """The address the provider signed: the stored inbound address, or its fallback form (the same key under the fallback
+    path), derived from the stored address only."""
+    if not fallback:
+        return stored
+    if stored.count(PRIMARY_SEGMENT) != 1:
+        raise ValueError("the stored inbound address is not an inbound address")
+    return stored.replace(PRIMARY_SEGMENT, FALLBACK_SEGMENT, 1)
+
+
 def twilio_signature(auth_token: str, url: str, pairs: list[tuple[str, str]]) -> str:
     """Twilio's request signature: base64 HMAC-SHA1, keyed with the account auth token, over the full URL followed by the POST
     parameters sorted by name and concatenated as name then value."""
@@ -60,8 +82,9 @@ class _NotLifted(Exception):
 
 
 class InboundMixin:
-    def handle_inbound(self, inbound_key: str, headers: dict, body: bytes, url: str) -> Reply:
-        """``url`` is the URL as the request arrived; it is NOT used for the signature (section 9, check 1)."""
+    def handle_inbound(self, inbound_key: str, headers: dict, body: bytes, url: str, fallback: bool = False) -> Reply:
+        """``url`` is the URL as the request arrived; it is NOT used for the signature (section 9, check 1). ``fallback``: the
+        post came to the fallback door, so its signature is over the fallback form of the stored address."""
         conn = self._connect()
         try:
             hit = conn.execute("SELECT org_id, account_id FROM consentvault.confirmation_inbound_lookup(%s)",
@@ -75,10 +98,14 @@ class InboundMixin:
         org, account_id = hit["org_id"], hit["account_id"]
         pending: list[uuid.UUID] = []
         try:
-            with self.tx(org) as raw_conn:  # the text, as received, is committed on its own first: a later failure never takes it back
+            with self.tx(org) as check_conn:  # size and signature first, the failure counted and committed: nothing unsigned is stored
+                checked = self._checked(check_conn, org, account_id, headers, body or b"", self._when(check_conn), fallback)
+            if isinstance(checked, Reply):
+                return checked
+            with self.tx(org) as raw_conn:  # the signed text, as received, is committed on its own: a later failure never takes it back
                 stored = self._store_raw(raw_conn, org, account_id, headers, body or b"")
             with self.tx(org) as conn:
-                answer = self._inbound(conn, org, account_id, headers, body or b"", self._when(conn), pending, stored)
+                answer = self._inbound(conn, org, account_id, headers, body or b"", self._when(conn), pending, stored, fallback)
         except RECORD_ERRORS as exc:
             log.error("an inbound text could not be recorded; answering 503 so the provider retries", error=type(exc).__name__)
             return Reply(503, {"error": "service_unavailable"})
@@ -119,7 +146,9 @@ class InboundMixin:
                          facts=(Fact("vault", "account_id", str(account_id)),))
         return RawPostWriter(crypto=self.crypto).write(conn, lambda c: c.transaction(), req)
 
-    def _inbound(self, conn, org, account_id, headers: dict, body: bytes, now: datetime, pending: list, stored=None) -> Reply:
+    def _checked(self, conn, org, account_id, headers: dict, body: bytes, now: datetime, fallback: bool = False):
+        """Checks 0 and 1 (and the account's own state): the account row and the parsed pairs, or the Reply that ends the
+        request. A failure is counted in this transaction."""
         acct = conn.execute("SELECT org_id, account_id, status, provider, sender_ct, inbound_url, provider_replies, inbound_verified_at,"
                             " disconnected_at FROM consentvault.sending_account WHERE org_id = %s AND account_id = %s",
                             (org, account_id)).fetchone()
@@ -135,13 +164,21 @@ class InboundMixin:
         got = {k.lower(): v for k, v in (headers or {}).items()}.get("x-twilio-signature", "")
         try:
             pairs = urllib.parse.parse_qsl(body.decode("utf-8"), keep_blank_values=True)
-            expected = twilio_signature(token, acct["inbound_url"], pairs)
+            expected = twilio_signature(token, signed_address(acct["inbound_url"], fallback), pairs)
             valid = hmac.compare_digest(got.encode("ascii"), expected.encode("ascii"))
-        except (UnicodeError, AttributeError):
+        except (UnicodeError, AttributeError, ValueError):
             valid = False
         if not valid:
             self._failure(conn, org, account_id, "signature", now)
             return Reply(401, {"error": "unauthenticated"})
+        return acct, pairs
+
+    def _inbound(self, conn, org, account_id, headers: dict, body: bytes, now: datetime, pending: list, stored=None,
+                 fallback: bool = False) -> Reply:
+        checked = self._checked(conn, org, account_id, headers, body, now, fallback)
+        if isinstance(checked, Reply):
+            return checked
+        acct, pairs = checked
         params = dict(pairs)
         is_report = "MessageStatus" in params
         if not is_report and stored is not None and params.get("MessageSid"):
@@ -151,12 +188,39 @@ class InboundMixin:
             number = normalize_phone(ours, "US")
         except NormalizationError:
             number = None
-        if number is None or number not in (self._sender_spec(org, acct).get("numbers") or []):
+        numbers = self._sender_spec(org, acct).get("numbers") or []
+        if number is not None and number not in numbers:
+            numbers = self._live_numbers(conn, org, acct) or numbers
+        if number is None or number not in numbers:
             self._failure(conn, org, account_id, "number_mismatch", now)
+            if not is_report and read_text(params.get("Body", ""))[2] == "stop":
+                # A person's STOP that cannot be taken: the first one is an alarm, not the fifth
+                self._alarm_raise(conn, "inbound_signature_failures", {"account_id": str(account_id), "cause": "stop_number_mismatch"}, now)
             return Reply(403, {"error": "inbound_number_mismatch"})
         if is_report:
             return self._delivery_report(conn, org, params, now)
         return self._inbound_text(conn, org, acct, params, now, pending, stored, body)
+
+    def _live_numbers(self, conn, org, acct) -> Optional[list]:
+        """The sender's numbers read from the provider now, kept on the account when they changed; None when it cannot say."""
+        try:
+            spec = self._sender_spec(org, acct)
+            creds = {**self._open_credentials(conn, org, acct), "sender": spec}
+            info = self._providers[acct["provider"]].read_sender(creds)
+        except (ProviderError, TimeoutError, KeyError, *KEY_ERRORS) as exc:  # loud-failure-exempt: the post is still refused 403 and counted; the class is logged
+            log.warning("the sender's numbers could not be read live; the stored list stands", error=type(exc).__name__)
+            return None
+        fresh = []
+        for n in info.get("numbers") or []:
+            try:
+                fresh.append(normalize_phone(n, "US"))
+            except NormalizationError:  # loud-failure-exempt: a number the provider lists that is not a phone number is not ours to take
+                continue
+        if fresh and sorted(fresh) != sorted(spec.get("numbers") or []):
+            conn.execute("UPDATE consentvault.sending_account SET sender_ct = %s WHERE org_id = %s AND account_id = %s",
+                         (self._seal(org, str(acct["account_id"]), "sender_ct", json.dumps({**spec, "numbers": fresh}, sort_keys=True)),
+                          org, acct["account_id"]))
+        return fresh
 
     def _record_provider_authentication(self, org, stored, params: dict) -> None:
         """The provider's signature checked out: record that beside the stored reply, committed on its own, for every validly

@@ -472,7 +472,11 @@
         "vault",
         "sync",
         "job:twenty-reconcile",
-        "job:projection-rebuild"
+        "job:projection-rebuild",
+        "job:confirmations-send",
+        "job:confirmations-alarms",
+        "job:confirmations-link-hosts",
+        "job:confirmations-purge"
       ],
       "read_by": "product",
       "deployments": [
@@ -490,7 +494,11 @@
         "vault",
         "sync",
         "job:twenty-reconcile",
-        "job:projection-rebuild"
+        "job:projection-rebuild",
+        "job:confirmations-send",
+        "job:confirmations-alarms",
+        "job:confirmations-link-hosts",
+        "job:confirmations-purge"
       ],
       "read_by": "product",
       "deployments": [

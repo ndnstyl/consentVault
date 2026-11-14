@@ -144,7 +144,8 @@ def build_cloud(cfg, env: Mapping[str, str]):
     owner_connect = lambda: db.connect(cfg.require_operator_dsn())  # noqa: E731
     crypto = TenantCrypto(CustodyKeyAdapter.from_database(custody, owner_connect, token_key))  # fingerprint secret and display key come from the database
     clock = dbclock.epoch_clock(connect)  # ONE clock (confirmations.md section 13): the admin app and the confirmation service
-    confirmations = wiring.build_service(env, connect=connect, token_key=token_key, custody=custody, clock=clock)
+    egress = EgressTransport(_need(env, ENV_EGRESS_URL), _read(env, ENV_EGRESS_SECRET_FILE))  # sync pushes, the link host's DNS and probe
+    confirmations = wiring.build_service(env, connect=connect, token_key=token_key, custody=custody, clock=clock, egress=egress)
     admin_app = build_admin_app(cfg, identity=identity, token_key=token_key, connect=connect, owner_connect=owner_connect,
                                 custody=custody, mailer=mailer, evidence_store=store, crypto=crypto, clock=clock,
                                 confirmations=confirmations)
@@ -158,7 +159,7 @@ def build_cloud(cfg, env: Mapping[str, str]):
         signer=signer, notifier=notifier, stripe=stripe, webhook_secret=_read(env, "CONSENTVAULT_STRIPE_WEBHOOK_SECRET_FILE"),
         link_secret=bytes.fromhex(_read(env, "CONSENTVAULT_LINK_SECRET_FILE")),
         mint_token=lambda o, sc: mint_org_token(token_key, o, sc, credential_id=None),
-        transport=EgressTransport(_need(env, ENV_EGRESS_URL), _read(env, ENV_EGRESS_SECRET_FILE)), region=cfg.default_region,
+        transport=egress, region=cfg.default_region,
         confirmations=confirmations, confirmations_api_base=confirm_settings[0] if confirm_settings else None)
     return api.CloudApiSettings(
         dsn=cfg.require_dsn(), token_key=token_key, access_tokens=access, receipts=receipts, crypto=crypto,

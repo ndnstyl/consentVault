@@ -130,6 +130,8 @@ export function causeFor(code: string): string {
 
 /** "<plain cause> (<status> <name>)" for the Cause line of the error formula (copy-rules.md section 4). */
 export function causeLine(status: number, code: string, override?: string): string {
+  // The parked-server wake-up is not a fault: never show its status or code on any line that reaches a client.
+  if (code === 'vault_starting') return 'ConsentVault is starting. This takes about two minutes.';
   const known = override !== undefined || CAUSES[code] !== undefined;
   if (!known) return `The service answered ${status > 0 ? `${status} ` : ''}${code}`;
   const plain = override ?? CAUSES[code];

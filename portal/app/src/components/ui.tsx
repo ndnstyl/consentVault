@@ -146,9 +146,11 @@ export function StateBlock({ kind, title, children, cause, next, actions, icon, 
 }
 
 /** The cloud servers are parked and the edge has asked for them: say so and ask again every 15 seconds until the vault answers. */
-export function StartingBlock({ onRetry }: { onRetry: () => void }) {
+export function StartingBlock({ onRetry }: { onRetry?: () => void }) {
+  // A screen that gave no reload (its Try again button owns the load) still recovers: the page reloads itself and every screen re-asks the vault.
   useEffect(() => {
-    const t = setInterval(onRetry, 15000);
+    const retry = onRetry ?? (() => window.location.reload());
+    const t = setInterval(retry, 15000);
     return () => clearInterval(t);
   }, [onRetry]);
   return (
@@ -162,7 +164,7 @@ export function StartingBlock({ onRetry }: { onRetry: () => void }) {
 
 /** Error formula (copy-rules.md section 4): what did not happen, cause with status and name, one next step. */
 export function ErrorBlock({ title, err, next, actions, override, headingLevel, onRetry }: { title: string; err: ApiError; next: React.ReactNode; actions?: React.ReactNode; override?: string; headingLevel?: 2 | 3; onRetry?: () => void }) {
-  if (err.code === 'vault_starting' && onRetry) return <StartingBlock onRetry={onRetry} />;
+  if (err.code === 'vault_starting') return <StartingBlock onRetry={onRetry} />;
   return <StateBlock kind="error" title={title} cause={causeLine(err.status, err.code, override)} next={next} actions={actions} headingLevel={headingLevel} />;
 }
 

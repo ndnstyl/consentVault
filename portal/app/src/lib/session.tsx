@@ -33,7 +33,7 @@ export interface SessionCtx {
   elsewhere: { orgName: string } | null;
   sessionEnding: boolean;
   reload: () => void;
-  refreshOrg: () => Promise<void>;
+  refreshOrg: () => Promise<ApiError | null>;
   selectOrg: (orgId: string) => Promise<ApiError | null>;
   signOut: () => void;
   signInFresh: (method?: 'passkey' | 'sso') => void;
@@ -135,7 +135,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     return () => window.clearTimeout(t);
   }, [phase, preOrg, nonce]);
 
-  const refreshOrg = useCallback(async () => { try { setOrg(await api.session.org()); } catch { /* the page that asked shows its own error */ } }, [api]);
+  const refreshOrg = useCallback(async (): Promise<ApiError | null> => { try { setOrg(await api.session.org()); return null; } catch (e) { return e instanceof ApiError ? e : new ApiError(0, 'unreachable', e instanceof Error ? e.message : 'The service could not be reached.', null); } }, [api]);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
   const selectOrg = useCallback(async (orgId: string) => {

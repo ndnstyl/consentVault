@@ -428,18 +428,27 @@ export function References() {
 void ORG_STATUS_LABEL; void SuccessBanner; void useEffect; void useRef;
 
 // ---- Company sign-in (admin) ----
+/** Save, then read the setting back. "Saved" is said only when the read-back worked; if it failed, the failure is returned to be shown instead. */
+export async function saveThenRead(save: () => Promise<{ ok: boolean }>, refreshOrg: () => Promise<ApiError | null>, done: string): Promise<{ saved: string | null; readFailed: ApiError | null }> {
+  const r = await save();
+  if (!r.ok) return { saved: null, readFailed: null };
+  const readFailed = await refreshOrg();
+  return readFailed ? { saved: null, readFailed } : { saved: done, readFailed: null };
+}
 export function CompanySignIn() {
   // the session already holds the organization, sso setting included: nothing is fetched again, so nothing flashes a placeholder
   const { api, orgName, org, refreshOrg } = useSession();
   const [saved, setSaved] = useState<string | null>(null);
   const save = useAction((req: boolean) => api.sso.set(req));
+  const [readErr, setReadErr] = useState<ApiError | null>(null);
   if (!org) return <><PageHead title="Company sign-in" /><Skeleton what="company sign-in" /></>;
   const sso = 'sso' in org ? org.sso : undefined;
-  const run = async (req: boolean, done: string) => { const r = await save.run(req); if (r.ok) { setSaved(done); await refreshOrg(); } };
+  const run = async (req: boolean, done: string) => { setReadErr(null); const o = await saveThenRead(() => save.run(req), refreshOrg, done); setSaved(o.saved); setReadErr(o.readFailed); };
   return (
     <>
       <PageHead title="Company sign-in" lede={`Let ${orgName} sign in with its company account (Okta, Microsoft Entra or Google Workspace), and choose whether it is required.`} />
       {saved && <SuccessBanner>{saved}</SuccessBanner>}
+      {readErr && <ErrorBlock title="The change was sent, but the current setting could not be read back" err={readErr} onRetry={() => { void refreshOrg().then((e) => setReadErr(e)); }} next="Reload the page to see the current setting before you change it again." actions={<Btn onClick={() => { void refreshOrg().then((e) => setReadErr(e)); }}>Read it again</Btn>} />}
       <div className="card">
         {save.error && <ErrorBlock title="That was not saved" err={save.error} next="Nothing was changed." headingLevel={3} />}
         {!sso?.connected && (

@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { readFileSync } from 'node:fs';
 
 const { SessionContext } = await import('../src/lib/session.tsx');
 const { RouterContext } = await import('../src/lib/router.tsx');
@@ -27,6 +28,16 @@ test('Evidence: the first click on Download says "Download started", never "used
   const t = panel({ clicks: 1 });
   assert.match(t, /Download started/);
   assert.doesNotMatch(t, /used or expired/);
+});
+test('Evidence: once Download is clicked, no Download package button or ready banner is offered beside "Download started"', () => {
+  for (const over of [{ clicks: 1 }, { clicks: 1, spent: true, d: { ...READY, download_url: null } }]) {
+    const html = render(h(DownloadPanel, { d: READY, spent: false, clicks: 0, linkUntil: null, suspended: false, linkBusy: false, onDownloadClick: noop, onNewLink: noop, ...over }));
+    assert.match(text(html), /Download started/);
+    assert.doesNotMatch(html, /Download package/);
+    assert.doesNotMatch(text(html), /Package ready/);
+    assert.match(text(html), /Get a new link/);
+  }
+  assert.match(panel({ clicks: 0 }), /Download package/);
 });
 test('Evidence: after the first download the list refreshes to spent and the screen still says started', () => {
   const t = panel({ clicks: 1, spent: true, d: { ...READY, download_url: null, downloaded_at: '2026-11-14T15:01:00Z' } });
@@ -111,4 +122,24 @@ test('Company sign-in: with the organization in hand there is no loading placeho
 });
 test('Company sign-in: with nothing in hand yet it shows the shared skeleton', () => {
   assert.match(text(render(h(CompanySignIn), session({ org: null }))), /Loading company sign-in/);
+});
+
+// ---- review warning: the company sign-in re-read after a save
+const { ApiError } = await import('../src/lib/api/client.ts');
+const { saveThenRead } = await import('../src/screens/org.tsx');
+test('Company sign-in: a saved setting that cannot be read back is an error naming the failure, never "saved"', async () => {
+  const failure = new ApiError(503, 'service_unavailable', '', null);
+  const o = await saveThenRead(async () => ({ ok: true }), async () => failure, 'Company sign-in is now required for everyone.');
+  assert.equal(o.saved, null);
+  assert.equal(o.readFailed, failure);
+});
+test('Company sign-in: a clean save and read-back says saved; a refused save says neither', async () => {
+  const done = 'Company sign-in is now required for everyone.';
+  assert.deepEqual(await saveThenRead(async () => ({ ok: true }), async () => null, done), { saved: done, readFailed: null });
+  assert.deepEqual(await saveThenRead(async () => ({ ok: false }), async () => { throw new Error('must not read'); }, done), { saved: null, readFailed: null });
+});
+test('Session: refreshOrg reports a failed read instead of swallowing it', () => {
+  const src = readFileSync(new URL('../src/lib/session.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /catch \{ \/\* the page that asked shows its own error \*\/ \}/);
+  assert.match(src, /refreshOrg: \(\) => Promise<ApiError \| null>/);
 });

@@ -344,7 +344,7 @@ export function DownloadPanel({ d, spent, clicks, linkUntil, suspended, linkBusy
   const newLink = <Btn variant="secondary" disabled={suspended} busy={linkBusy} busyLabel="Getting link" onClick={onNewLink}>Get a new link</Btn>;
   return (
     <>
-      {d.status === 'ready' && !spent && (
+      {d.status === 'ready' && !spent && clicks === 0 && (
         <SuccessBanner title="Package ready" action={<a className="btn btn-primary" href={d.download_url ?? '#'} download onClick={onDownloadClick}>Download package</a>}>
           {linkUntil ? `This download link works once, until ${fmtDateTime(linkUntil)}.` : 'The download link works once and lasts 15 minutes.'}
         </SuccessBanner>

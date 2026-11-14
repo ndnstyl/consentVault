@@ -203,8 +203,20 @@ const open = (db: FakeD1) => db.rows.filter((r) => r.drained_at === null && !r.r
 function down(calls: { url: string; init: RequestInit }[] = []): typeof fetch {
   return (async (url: string, init: RequestInit) => { calls.push({ url: String(url), init }); throw new TypeError("network"); }) as unknown as typeof fetch;
 }
-const answering = (status: number, calls: { url: string; init: RequestInit }[] = []) =>
-  (async (url: string, init: RequestInit) => { calls.push({ url: String(url), init }); return new Response("{}", { status }); }) as unknown as typeof fetch;
+const answering = (status: number, calls: { url: string; init: RequestInit }[] = [], body = "{}") =>
+  (async (url: string, init: RequestInit) => { calls.push({ url: String(url), init }); return new Response(body, { status }); }) as unknown as typeof fetch;
+// The vault's own named refusals at the inbound door (product confirm/inbound.py): the only answers that close a stored post.
+const REFUSALS: [number, string][] = [[401, '{"error": "unauthenticated"}'], [403, '{"error": "inbound_number_mismatch"}'], [413, '{"error": "inbound_too_large"}']];
+// Answers that are faults, not refusals: the row stays open and alarms.
+const FAULTS: [string, number, string][] = [
+  ["Access refusing the edge (403, a Cloudflare page)", 403, "<html>Forbidden</html>"],
+  ["too many requests", 429, '{"error": "rate_limited"}'],
+  ["no such route during a rollout or with confirmations off", 404, '{"error": "not_found", "detail": "no such endpoint"}'],
+  ["the auth token could not be opened", 404, '{"error": "not_found"}'],
+  ["a 401 that is not the signature refusal", 401, '{"error": "bearer_missing"}'],
+  ["a redirect", 302, ""],
+  ["a 403 with no body", 403, ""],
+];
 
 test("a fallback post while the vault is down is stored and Twilio is told it was received", async () => {
   const db = new FakeD1();
@@ -273,13 +285,13 @@ test("the drain selects open rows every minute with no flag and no listing, and 
   assert.ok(!db.seen.some((s) => /list|flag|marker/i.test(s)));
 });
 
-test("a post the vault refuses (4xx, a redirect) is alarmed, then closed as refused with its status: kept for the record, off the cap", async () => {
-  for (const status of [404, 401, 403, 409, 302]) {
+test("a post the vault refuses by name (unsigned 401, wrong number 403, too large 413) is alarmed, then closed as refused with its status", async () => {
+  for (const [status, body] of REFUSALS) {
     const db = new FakeD1();
     const alarms: string[] = [];
     const { env } = mk({ INBOUND_SPOOL: db });
     await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {} });
-    const out = await drainInboundSpool(env, { fetch: answering(status), alarm: (n) => alarms.push(n) });
+    const out = await drainInboundSpool(env, { fetch: answering(status, [], body), alarm: (n) => alarms.push(n) });
     assert.deepEqual(out, { delivered: 0, kept: 0 }, String(status));
     assert.ok(alarms.includes("confirmations.inbound_spool_refused"), String(status));
     assert.equal(db.rows.length, 1, "the refused row is kept");
@@ -288,6 +300,31 @@ test("a post the vault refuses (4xx, a redirect) is alarmed, then closed as refu
     assert.equal(open(db).length, 0);
   }
 });
+
+for (const [what, status, body] of FAULTS) {
+  test(`a fault is not a refusal: ${what} keeps the row open and alarms`, async () => {
+    const db = new FakeD1();
+    const alarms: string[] = [];
+    const { env } = mk({ INBOUND_SPOOL: db });
+    await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: () => {} });
+    const out = await drainInboundSpool(env, { fetch: answering(status, [], body), alarm: (n) => alarms.push(n) });
+    assert.deepEqual(out, { delivered: 0, kept: 1 });
+    assert.equal(open(db).length, 1);
+    assert.ok(!db.rows[0].refused_at);
+    assert.ok(alarms.includes("confirmations.inbound_spool_vault_fault"), alarms.join(","));
+    assert.ok(!alarms.includes("confirmations.inbound_spool_refused"));
+  });
+
+  test(`at the fallback door too: ${what} keeps the row open`, async () => {
+    const db = new FakeD1();
+    const alarms: string[] = [];
+    const { env } = mk({ INBOUND_SPOOL: db });
+    const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: answering(status, [], body), alarm: (n) => alarms.push(n) });
+    assert.equal(res.status, 200, "stored: Twilio is told it was received");
+    assert.equal(open(db).length, 1);
+    assert.ok(alarms.includes("confirmations.inbound_spool_vault_fault"));
+  });
+}
 
 test("a 5xx or no answer keeps the row open", async () => {
   for (const f of [answering(503), down()]) {
@@ -313,11 +350,11 @@ test("a fallback post the vault answers with anything but 2xx stays stored, and 
   const db = new FakeD1();
   const alarms: string[] = [];
   const { env } = mk({ INBOUND_SPOOL: db });
-  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: answering(404), alarm: (n) => alarms.push(n) });
+  const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: answering(401, [], '{"error": "unauthenticated"}'), alarm: (n) => alarms.push(n) });
   assert.equal(res.status, 200);
   assert.ok(alarms.includes("confirmations.inbound_spool_refused"));
   assert.equal(open(db).length, 0, "closed as refused, off the cap");
-  assert.equal(db.rows[0].last_status, 404);
+  assert.equal(db.rows[0].last_status, 401);
   assert.ok(db.rows[0].refused_at);
 });
 

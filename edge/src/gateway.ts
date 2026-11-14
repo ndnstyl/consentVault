@@ -93,8 +93,8 @@ export const SPOOL_SQL = {
   countAll: "SELECT count(*) AS n FROM inbound_spool WHERE drained_at IS NULL AND refused_at IS NULL",
   insert: "INSERT INTO inbound_spool (id, number_key, received_at, path, body_b64, headers_json) VALUES (?, ?, ?, ?, ?, ?)",
   pending: "SELECT id, number_key, received_at, path, body_b64, headers_json FROM inbound_spool WHERE drained_at IS NULL AND refused_at IS NULL ORDER BY received_at LIMIT 1000",
-  // A post the vault refuses (a 4xx or a redirect: a bad signature, a number not the account's) is closed as refused after its
-  // alarm, kept for the record with the status, and no longer counts toward the cap; a 5xx or no answer keeps it open.
+  // A post the vault refuses BY NAME (VAULT_REFUSALS) is closed as refused after its alarm, kept for the record with the status,
+  // and no longer counts toward the cap; any other answer keeps it open.
   markRefused: "UPDATE inbound_spool SET refused_at = ?, attempts = attempts + 1, last_status = ? WHERE id = ?",
   markDrained: "UPDATE inbound_spool SET drained_at = ?, attempts = attempts + 1, last_status = ? WHERE id = ?",
   markAttempt: "UPDATE inbound_spool SET attempts = attempts + 1, last_status = ? WHERE id = ?",
@@ -313,6 +313,24 @@ function unb64(text: string): ArrayBuffer {
 // or no answer) keeps the post, which may be a STOP, and raises an alarm: a person decides, nothing is dropped by the edge.
 const taken = (status: number) => status >= 200 && status < 300;
 
+// The vault's own named refusals at the inbound door (product confirm/inbound.py): an unsigned or wrongly signed post, a number
+// that is not the account's, a body over 16 KB. Only these close a stored post as refused. Any other non-2xx (Access refusing
+// the edge, 429, a 404 during a rollout or with confirmations off or when the auth token cannot be opened, a redirect, 5xx) is
+// a fault: the post stays open and alarms.
+const VAULT_REFUSALS: Record<number, string> = { 401: "unauthenticated", 403: "inbound_number_mismatch", 413: "inbound_too_large" };
+
+async function vaultRefused(res: Response): Promise<boolean> {
+  const want = VAULT_REFUSALS[res.status];
+  const text = await res.text().catch(() => "");
+  if (!want) return false;
+  try {
+    const body = JSON.parse(text) as { error?: unknown } | null;
+    return !!body && typeof body === "object" && body.error === want;
+  } catch {
+    return false;
+  }
+}
+
 async function count(db: D1Like, sql: string, ...args: unknown[]): Promise<number> {
   const out = await db.prepare(sql).bind(...args).all();
   return Number(out.results?.[0]?.n ?? 0);
@@ -368,15 +386,16 @@ async function fallbackDoor(request: Request, url: URL, env: GatewayEnv, deps: G
     return new Response(res.body, { status: res.status, headers: scrub(res.headers) });
   }
   if (kept) {
-    if (res && res.status < 500) {
+    if (res && (await vaultRefused(res))) {
       alarm("confirmations.inbound_spool_refused", `the vault refused a fallback post with ${res.status}; it is closed as refused and kept for the record`);
       try {
         await db!.prepare(SPOOL_SQL.markRefused).bind(now, res.status, id).run();
       } catch (e) {
         alarm("confirmations.inbound_spool_unwritable", `a refused post could not be closed; it stays open (${(e as Error).message.slice(0, 80)})`);
       }
+    } else if (res && res.status < 500) {
+      alarm("confirmations.inbound_spool_vault_fault", `the vault's door answered a fallback post ${res.status} without a named refusal; it stays stored`);
     } else alarm("confirmations.inbound_spooled", "the vault did not take a fallback post; it is stored at the edge and delivered by the drain");
-    if (res) await res.body?.cancel();
     return new Response(JSON.stringify({ received: true, kept: true }), { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
   }
   if (res) return new Response(res.body, { status: res.status, headers: scrub(res.headers) });
@@ -404,6 +423,7 @@ export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps): Pro
   let delivered = 0;
   let kept = 0;
   let refused = 0;
+  let faults = 0;
   let stale = 0;
   for (const row of rows) {
     if (nowMs - Date.parse(String(row.received_at)) > STALE_AFTER_MS) stale++;
@@ -418,10 +438,12 @@ export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps): Pro
       continue;
     }
     let status = 0;
+    let refusedByName = false;
     try {
       const res = await deps.fetch(clean(env.ORIGIN_URL) + String(row.path), { method: "POST", headers: towardVault(new Headers(headers), env), body });
       status = res.status;
-      await res.body?.cancel();
+      if (taken(status)) await res.body?.cancel();
+      else refusedByName = await vaultRefused(res);
     } catch {
       status = 0; // no answer: kept, and no write spent on the attempt
     }
@@ -431,11 +453,12 @@ export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps): Pro
         delivered++;
         continue;
       }
-      if (status > 0 && status < 500) {
+      if (refusedByName) {
         refused++;
         await db.prepare(SPOOL_SQL.markRefused).bind(nowIso, status, String(row.id)).run();
         continue;
       }
+      if (status > 0 && status < 500) faults++;
       if (status > 0) await db.prepare(SPOOL_SQL.markAttempt).bind(status, String(row.id)).run();
     } catch (e) {
       alarm("confirmations.inbound_spool_unwritable", `stored post ${String(row.id)} could not be marked (${(e as Error).message.slice(0, 80)}); it is sent again next run`);
@@ -444,6 +467,7 @@ export async function drainInboundSpool(env: GatewayEnv, deps: GatewayDeps): Pro
   }
   if (stale) alarm("confirmations.inbound_spool_stale", `${stale} stored inbound post(s) are older than 10 minutes`);
   if (refused) alarm("confirmations.inbound_spool_refused", `${refused} stored inbound post(s) were refused by the vault; closed as refused and kept for the record`);
+  if (faults) alarm("confirmations.inbound_spool_vault_fault", `${faults} stored inbound post(s) were answered without a named refusal (Access, a rate limit, a missing route); they stay open`);
   if (kept) alarm("confirmations.inbound_spool_waiting", `${kept} stored inbound post(s) still wait for the vault`);
   try {
     await db.prepare(SPOOL_SQL.purge).bind(new Date(nowMs - KEEP_DRAINED_MS).toISOString()).run();

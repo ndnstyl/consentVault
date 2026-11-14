@@ -29,6 +29,28 @@ const prLabel = (l: Labels | null, p: string) => l?.purposes?.find((x) => x.purp
 const brLabel = (l: Labels | null, b: string) => l?.brands?.find((x) => x.brand_id === b)?.display_name ?? null;
 
 // ---------- 10 Wording list ----------
+export const WORDING_DATES_HINT = 'In use from is the start date given when the wording was registered. Added to ConsentVault on is the day it was recorded here. Versions are numbered in the order they were added, so a later version can be in use from an earlier date.';
+
+export function WordingTable({ rows, l }: { rows: Disclosure[]; l: Labels | null }) {
+  const byHash = (h: string | null) => (h ? rows.find((r) => r.sha256 === h) : undefined);
+  return (
+    <>
+    <DataTable caption="Registered wording versions" rows={rows} rowKey={(r) => r.sha256}
+            columns={[
+              { key: 'v', header: 'Version', render: (r) => <Link href={`/wording/${r.sha256}`}>{wordingName(r)}</Link>, primary: true },
+              { key: 'b', header: 'Brands', render: (r) => (l?.brands ? r.brand_ids.map((b) => brLabel(l, b) ?? b).join(', ') : <NotAvailable />) },
+              { key: 'c', header: 'Channels', render: (r) => (l?.channels ? r.channels.map((c) => chLabel(l, c)).join(', ') : <NotAvailable />) },
+              { key: 'p', header: 'Purposes', render: (r) => (l?.purposes ? r.purposes.map((p) => prLabel(l, p)).join(', ') : <NotAvailable />) },
+              { key: 'f', header: 'In use from', render: (r) => <Time iso={r.effective_from} date /> },
+      { key: 'g', header: 'Added to ConsentVault on', render: (r) => <Time iso={r.registered_at} date /> },
+              { key: 'h', header: 'Fingerprint', render: (r) => <code className="mono">{shortId(r.sha256)}</code> },
+              { key: 'r', header: 'Replaces', render: (r) => (r.supersedes_sha256 ? (byHash(r.supersedes_sha256) ? wordingName(byHash(r.supersedes_sha256)!) : null) ?? <code className="mono">{shortId(r.supersedes_sha256)}</code> : <span className="hint">None recorded</span>) },
+            ]} />
+    <p className="hint mt4">{WORDING_DATES_HINT}</p>
+    </>
+  );
+}
+
 export function Wording() {
   const { api, role } = useSession();
   const res = useResource(() => allPages((c) => api.disclosures.list({ cursor: c })), [api]);
@@ -50,16 +72,7 @@ export function Wording() {
       {rows.length > 0 && (
         <>
           {labelsFailed && <Banner kind="warning" title="Some names did not load">Brand, channel or purpose names that did not load show as Not available. Versions and fingerprints are current.</Banner>}
-          <DataTable caption="Registered wording versions" rows={rows} rowKey={(r) => r.sha256}
-            columns={[
-              { key: 'v', header: 'Version', render: (r) => <Link href={`/wording/${r.sha256}`}>{wordingName(r)}</Link>, primary: true },
-              { key: 'b', header: 'Brands', render: (r) => (l?.brands ? r.brand_ids.map((b) => brLabel(l, b) ?? b).join(', ') : <NotAvailable />) },
-              { key: 'c', header: 'Channels', render: (r) => (l?.channels ? r.channels.map((c) => chLabel(l, c)).join(', ') : <NotAvailable />) },
-              { key: 'p', header: 'Purposes', render: (r) => (l?.purposes ? r.purposes.map((p) => prLabel(l, p)).join(', ') : <NotAvailable />) },
-              { key: 'f', header: 'Shown from', render: (r) => <Time iso={r.effective_from} date /> },
-              { key: 'h', header: 'Fingerprint', render: (r) => <code className="mono">{shortId(r.sha256)}</code> },
-              { key: 'r', header: 'Replaces', render: (r) => (r.supersedes_sha256 ? (byHash(r.supersedes_sha256) ? wordingName(byHash(r.supersedes_sha256)!) : null) ?? <code className="mono">{shortId(r.supersedes_sha256)}</code> : <span className="hint">None recorded</span>) },
-            ]} />
+          <WordingTable rows={rows} l={l} />
         </>
       )}
     </>
@@ -136,6 +149,24 @@ export function WordingNew({ embedded }: { embedded?: Embedded } = {}) {
 }
 
 // ---------- 10 Wording detail ----------
+export function WordingFacts({ d, by, l, link }: { d: Disclosure; by: string | null; l: Labels | null; link: (h: string | null) => React.ReactNode }) {
+  return (
+    <>
+    <KV rows={[
+          ['Fingerprint (sha256)', <span key="f" className="gap-row"><code className="mono">{d.sha256}</code><CopyButton text={d.sha256} ariaLabel="Copy fingerprint" /></span>],
+          ['In use from', <Time key="s" iso={d.effective_from} date />],
+          ['Added to ConsentVault on', <span key="r"><Time iso={d.registered_at} date /> by {by ?? <NotAvailable />}</span>],
+          ['Replaces', link(d.supersedes_sha256) ?? 'None recorded'],
+          ['Replaced by', link(d.superseded_by_sha256) ?? 'Nothing yet'],
+          ['Brands', l?.brands ? d.brand_ids.map((b) => brLabel(l, b) ?? b).join(', ') : NA],
+          ['Channels', l?.channels ? d.channels.map((c) => chLabel(l, c)).join(', ') : NA],
+          ['Purposes', l?.purposes ? d.purposes.map((p) => prLabel(l, p)).join(', ') : NA],
+        ]} />
+    <p className="hint mt4">{WORDING_DATES_HINT}</p>
+    </>
+  );
+}
+
 export function WordingDetail({ sha }: { sha: string }) {
   const { api, role, orgName } = useSession();
   const { search } = useRouter();
@@ -159,16 +190,7 @@ export function WordingDetail({ sha }: { sha: string }) {
       <PageHead title={`Wording ${wordingName(d)}`} />
       {search.get('registered') && <SuccessBanner>{`Version ${wordingName(d)} registered. Send this fingerprint with each grant: ${shortId(d.sha256)}.`}</SuccessBanner>}
       <div className="card">
-        <KV rows={[
-          ['Fingerprint (sha256)', <span key="f" className="gap-row"><code className="mono">{d.sha256}</code><CopyButton text={d.sha256} ariaLabel="Copy fingerprint" /></span>],
-          ['Registered', <span key="r"><Time iso={d.registered_at} date /> by {by ?? <NotAvailable />}</span>],
-          ['Shown from', <Time key="s" iso={d.effective_from} date />],
-          ['Replaces', link(d.supersedes_sha256) ?? 'None recorded'],
-          ['Replaced by', link(d.superseded_by_sha256) ?? 'Nothing yet'],
-          ['Brands', l?.brands ? d.brand_ids.map((b) => brLabel(l, b) ?? b).join(', ') : NA],
-          ['Channels', l?.channels ? d.channels.map((c) => chLabel(l, c)).join(', ') : NA],
-          ['Purposes', l?.purposes ? d.purposes.map((p) => prLabel(l, p)).join(', ') : NA],
-        ]} />
+        <WordingFacts d={d} by={by} l={l} link={link} />
       </div>
       <h2 className="sec mt5">Exact text</h2>
       <pre className="code wrap-pre" data-copy-exempt="" tabIndex={0} role="region" aria-label="Exact registered text">{d.body ?? ''}</pre>

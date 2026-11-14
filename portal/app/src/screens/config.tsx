@@ -9,7 +9,7 @@ import { useSession } from '../lib/session.tsx';
 import { useToast } from '../lib/toast.tsx';
 import { Dialog, ConfirmDialog } from '../components/Dialog.tsx';
 import type { Embedded } from '../components/ui.tsx';
-import { Banner, Btn, Check, Chip, CopyButton, DataTable, ErrorBlock, ErrorSummary, KV, LinkBtn, NotAvailable, PageHead, Radio, SelectField, Skeleton, StateBlock, SuccessBanner, TextArea, TextField, Time } from '../components/ui.tsx';
+import { Banner, Btn, Check, Chip, CopyButton, DataTable, ErrorBlock, ErrorSummary, Icon, KV, LinkBtn, NotAvailable, PageHead, Radio, SelectField, Skeleton, StateBlock, SuccessBanner, TextArea, TextField, Time } from '../components/ui.tsx';
 
 // ---------- 07 Brands ----------
 export function Brands() {
@@ -307,14 +307,24 @@ function SecretReveal({ issued, onDone }: { issued: CredentialIssued; onDone: ()
   );
 }
 
+/** The credential kind a source sends with: a website form uses a site key, a server uses its public key. Anything else: no default. */
+export function defaultKindFor(source: Pick<Source, 'kind'> | undefined): CredentialKind | '' {
+  return source?.kind === 'site_key' ? 'edge_site_key' : source?.kind === 'server' ? 'jwt_public_key' : '';
+}
+
 export function CredentialNew({ embedded }: { embedded?: Embedded } = {}) {
-  const { api, role, orgName, status } = useSession();
-  const { search, navigate } = useRouter();
+  const { api } = useSession();
   const res = useResource(async () => {
     const sources = await allPages((c) => api.sources.list({ cursor: c }));
     return { sources };
   }, [api]);
-  const [draft, setDraft] = useDraft('credential-new', { scope: 'capture', kind: 'edge_site_key', source: search.get('source') ?? '', name: '', algorithm: 'ES256' });
+  return <CredentialNewView res={res} embedded={embedded} />;
+}
+
+export function CredentialNewView({ res, embedded }: { res: ReturnType<typeof useResource<{ sources: Source[] }>>; embedded?: Embedded }) {
+  const { api, role, orgName, status } = useSession();
+  const { search, navigate } = useRouter();
+  const [draft, setDraft] = useDraft('credential-new', { scope: 'capture', kind: '', source: search.get('source') ?? '', name: '', algorithm: 'ES256' });
   const [step, setStep] = useState(1);
   const [key, setKey] = useState('');
   const [touched, setTouched] = useState(false);
@@ -327,19 +337,21 @@ export function CredentialNew({ embedded }: { embedded?: Embedded } = {}) {
   const suspended = status === 'suspended';
   const d = res.status === 'ok' ? res.data : null;
   const scope = draft.scope as CredentialScope;
-  const kind = draft.kind as CredentialKind;
   const sources = (d?.sources ?? []).filter((s) => s.status === 'active');
   const needsSource = scope === 'capture';
+  // the kind follows the source that is selected (or the one the form will pre-select) until the person picks one; with no source, or a kind it does not know, nothing is chosen
+  const chosenSource = needsSource ? sources.find((s) => s.source_id === draft.source) ?? (draft.source ? undefined : sources[0]) : undefined;
+  const kind = (draft.kind || defaultKindFor(chosenSource)) as CredentialKind | '';
   useEffect(() => {
     if (d && needsSource && !draft.source && sources[0]) setDraft({ source: sources[0].source_id });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [d]);
   const kindsFor = scope === 'capture' ? (['edge_site_key', 'jwt_public_key', 'hmac_fallback'] as CredentialKind[]) : (['jwt_public_key', 'hmac_fallback'] as CredentialKind[]);
-  useEffect(() => { if (!kindsFor.includes(kind)) setDraft({ kind: 'jwt_public_key' }); // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (draft.kind && !kindsFor.includes(draft.kind as CredentialKind)) setDraft({ kind: '' }); // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope]);
   const nameErr = touched && !draft.name.trim() ? 'Enter a name.' : null;
   const finish = async () => {
-    const body: Parameters<typeof api.credentials.issue>[0] = { name: draft.name.trim(), kind, scope, ...(needsSource ? { source_id: draft.source } : {}), ...(kind === 'jwt_public_key' ? { public_key: key, algorithm: draft.algorithm } : {}) };
+    const body: Parameters<typeof api.credentials.issue>[0] = { name: draft.name.trim(), kind: kind as CredentialKind, scope, ...(needsSource ? { source_id: draft.source } : {}), ...(kind === 'jwt_public_key' ? { public_key: key, algorithm: draft.algorithm } : {}) };
     const r = await issue.run(body);
     if (!r.ok) return;
     setKey('');
@@ -357,7 +369,7 @@ export function CredentialNew({ embedded }: { embedded?: Embedded } = {}) {
   };
   const next1 = () => {
     setTouched(true);
-    if (!draft.name.trim() || (needsSource && !draft.source)) return;
+    if (!draft.name.trim() || !kind || (needsSource && !draft.source)) return;
     if (kind === 'jwt_public_key') setStep(2); else void finish();
   };
   const next2 = () => {
@@ -392,6 +404,7 @@ export function CredentialNew({ embedded }: { embedded?: Embedded } = {}) {
             {kindsFor.includes('edge_site_key') && <Radio name="kind" label="Site key for a website form" checked={kind === 'edge_site_key'} onChange={() => setDraft({ kind: 'edge_site_key' })} />}
             <Radio name="kind" label="Public key for a server (you keep the private key)" checked={kind === 'jwt_public_key'} onChange={() => setDraft({ kind: 'jwt_public_key' })} />
             <Radio name="kind" label="Signed webhook secret, for systems that cannot use keys" checked={kind === 'hmac_fallback'} onChange={() => setDraft({ kind: 'hmac_fallback' })} />
+            {touched && !kind && <p className="field-error" role="alert"><Icon name="i-err" /><span>Choose a kind.</span></p>}
           </fieldset>
           {needsSource && (sources.length === 0
             ? <Banner kind="warning" title="Add a capture source first">A capture credential belongs to one source. <Link href="/sources">Open capture sources</Link></Banner>

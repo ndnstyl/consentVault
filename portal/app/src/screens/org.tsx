@@ -429,14 +429,13 @@ void ORG_STATUS_LABEL; void SuccessBanner; void useEffect; void useRef;
 
 // ---- Company sign-in (admin) ----
 export function CompanySignIn() {
-  const { api, orgName } = useSession();
-  const res = useResource(() => api.session.org(), [api]);
+  // the session already holds the organization, sso setting included: nothing is fetched again, so nothing flashes a placeholder
+  const { api, orgName, org, refreshOrg } = useSession();
   const [saved, setSaved] = useState<string | null>(null);
   const save = useAction((req: boolean) => api.sso.set(req));
-  if (res.status === 'loading') return <><PageHead title="Company sign-in" /><Skeleton what="company sign-in" /></>;
-  if (res.status === 'error') return <><PageHead title="Company sign-in" /><ErrorBlock title="Company sign-in did not load" err={res.error} onRetry={res.reload} next="Try again." actions={<Btn onClick={res.reload}>Try again</Btn>} /></>;
-  const sso = 'sso' in res.data ? res.data.sso : undefined;
-  const run = async (req: boolean, done: string) => { const r = await save.run(req); if (r.ok) { setSaved(done); res.refresh(); } };
+  if (!org) return <><PageHead title="Company sign-in" /><Skeleton what="company sign-in" /></>;
+  const sso = 'sso' in org ? org.sso : undefined;
+  const run = async (req: boolean, done: string) => { const r = await save.run(req); if (r.ok) { setSaved(done); await refreshOrg(); } };
   return (
     <>
       <PageHead title="Company sign-in" lede={`Let ${orgName} sign in with its company account (Okta, Microsoft Entra or Google Workspace), and choose whether it is required.`} />

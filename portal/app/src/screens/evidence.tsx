@@ -10,6 +10,7 @@ import { checkContact, fmtDateTime, maskContact, prettyContact } from '../lib/fo
 import { eventOrigin, purposeWords } from '../lib/labels.ts';
 import { useToast } from '../lib/toast.tsx';
 import { ConfirmDialog } from '../components/Dialog.tsx';
+import type { Col } from '../components/ui.tsx';
 import { Banner, Btn, Chip, CopyButton, DataTable, DeliveryChip, ErrorBlock, EvidenceChip, Icon, KV, LinkBtn, NotAvailable, PageHead, SealChip, Skeleton, StateBlock, SuccessBanner, TextField, Time } from '../components/ui.tsx';
 
 function ContactInput({ onSubmit, busy, label = 'Look up records', busyLabel = 'Looking up', error, hint }: { onSubmit: (contact: string) => void; busy: boolean; label?: string; busyLabel?: string; error?: React.ReactNode; hint?: string }) {
@@ -306,13 +307,53 @@ export function Exports() {
       {res.status === 'ok' && rows.length === 0 && <StateBlock kind="empty" title="No packages built yet">Enter a contact point above, or start from Evidence lookup.</StateBlock>}
       {rows.length > 0 && (
         <DataTable caption="Evidence packages" rows={rows} rowKey={(r) => r.export_id}
-          columns={[
+          columns={EXPORT_COLUMNS}
+          actions={(r) => <LinkBtn href={`/exports/${r.export_id}`} size="sm" variant="secondary">{r.status === 'ready' ? 'Open package' : 'Open'}</LinkBtn>} />
+      )}
+    </>
+  );
+}
+
+export const EXPORT_COLUMNS: Col<ExportItem>[] = [
             { key: 'c', header: 'Contact', render: (r) => <span className="mono">{r.contact_fp_hint}</span>, primary: true },
             { key: 's', header: 'Started', render: (r) => <Time iso={r.created_at} /> },
             { key: 't', header: 'Status', render: (r) => <><ExportStatus e={r} />{r.status === 'building' && r.progress && <span className="hint">{` ${r.progress.done.toLocaleString('en-US')} of ${r.progress.total.toLocaleString('en-US')}`}</span>}</> },
-            { key: 'x', header: 'Link expires', render: (r) => (r.downloaded_at ? <span>Downloaded <Time iso={r.downloaded_at} /></span> : r.expires_at ? <Time iso={r.expires_at} /> : <span className="hint">Not applicable</span>) },
-          ]}
-          actions={(r) => <LinkBtn href={`/exports/${r.export_id}`} size="sm" variant="secondary">{r.status === 'ready' ? 'Open package' : 'Open'}</LinkBtn>} />
+            { key: 'x', header: 'Kept until', render: (r) => <>{r.expires_at ? <Time iso={r.expires_at} /> : <span className="hint">Not applicable</span>}{r.downloaded_at && <span className="hint">{' Downloaded '}<Time iso={r.downloaded_at} /></span>}</> },
+];
+
+export function PackageFacts({ d }: { d: ExportDetail }) {
+  return (
+    <KV rows={[
+            ['Package sha256', d.sha256 ? <span key="s" className="gap-row"><code className="mono">{d.sha256}</code><CopyButton text={d.sha256} ariaLabel="Copy package sha256" /></span> : <NotAvailable key="s" />],
+            ['Signed by', d.signature ? <span key="g">Platform key <code className="mono">{d.signature}</code></span> : <NotAvailable key="g" />],
+            ['Package kept until', <Time key="e" iso={d.expires_at} />],
+            ['Download link', 'Works once, for 15 minutes'],
+          ]} />
+  );
+}
+
+/** What the download area says: nothing yet, "started" after the first click, "used" only on a second attempt or a link that was already spent when the page opened. */
+export function downloadNotice(clicks: number, spent: boolean): 'none' | 'started' | 'used' {
+  if (clicks >= 2) return 'used';
+  if (clicks === 1) return 'started';
+  return spent ? 'used' : 'none';
+}
+
+export function DownloadPanel({ d, spent, clicks, linkUntil, suspended, linkBusy, onDownloadClick, onNewLink }: { d: ExportDetail; spent: boolean; clicks: number; linkUntil: string | null; suspended: boolean; linkBusy: boolean; onDownloadClick: () => void; onNewLink: () => void }) {
+  const notice = downloadNotice(clicks, spent);
+  const newLink = <Btn variant="secondary" disabled={suspended} busy={linkBusy} busyLabel="Getting link" onClick={onNewLink}>Get a new link</Btn>;
+  return (
+    <>
+      {d.status === 'ready' && !spent && (
+        <SuccessBanner title="Package ready" action={<a className="btn btn-primary" href={d.download_url ?? '#'} download onClick={onDownloadClick}>Download package</a>}>
+          {linkUntil ? `This download link works once, until ${fmtDateTime(linkUntil)}.` : 'The download link works once and lasts 15 minutes.'}
+        </SuccessBanner>
+      )}
+      {d.status === 'ready' && notice === 'started' && (
+        <Banner kind="info" title="Download started" action={newLink}>Check your downloads folder. The link has now been used. If the file did not arrive, get a new link; the package itself is unchanged.</Banner>
+      )}
+      {d.status === 'ready' && notice === 'used' && (
+        <StateBlock kind="error" title="This download link was used or expired" cause="Each link works once, for 15 minutes." next="Get a new link. The package itself is unchanged." actions={newLink} />
       )}
     </>
   );
@@ -329,7 +370,8 @@ export function ExportDetailScreen({ id }: { id: string }) {
   const resume = useAction(() => api.exports.resume(id));
   const suspended = status === 'suspended';
   const heading = useRef<HTMLHeadingElement>(null);
-  const [downloaded, setDownloaded] = useState(false);
+  const [clicks, setClicks] = useState(0);
+  const [linkUntil, setLinkUntil] = useState<string | null>(null);
   void role;
   if (!detail && fail) {
     return fail.status === 404
@@ -356,17 +398,9 @@ export function ExportDetailScreen({ id }: { id: string }) {
           actions={<Btn variant="secondary" disabled={suspended} busy={resume.busy} busyLabel="Starting" onClick={async () => { const r = await resume.run(); if (r.ok) { setDetail({ ...d, status: 'building', failed_cause: null }); poll.restart(); } }}>Start again</Btn>} />
       )}
       {resume.error && <ErrorBlock title="The build did not start" err={resume.error} next="Try again." />}
-      {d.status === 'ready' && !spent && (
-        <>
-          <SuccessBanner title="Package ready" action={<a className="btn btn-primary" href={d.download_url ?? '#'} download onClick={() => { setDownloaded(true); window.setTimeout(() => poll.restart(), 1500); }}>Download package</a>}>
-            {`The download link works once, until ${d.expires_at ? fmtDateTime(d.expires_at) : NA}.`}
-          </SuccessBanner>
-        </>
-      )}
-      {(spent || downloaded) && d.status === 'ready' && (
-        <StateBlock kind="error" title="This download link was used or expired" cause="Each link works once, for 15 minutes." next="Get a new link. The package itself is unchanged."
-          actions={<Btn variant="secondary" disabled={suspended} busy={link.busy} busyLabel="Getting link" onClick={async () => { const r = await link.run(); if (r.ok) { setDownloaded(false); setDetail({ ...d, download_url: r.value.download_url, expires_at: r.value.expires_at, downloaded_at: null }); } }}>Get a new link</Btn>} />
-      )}
+      <DownloadPanel d={d} spent={spent} clicks={clicks} linkUntil={linkUntil} suspended={suspended} linkBusy={link.busy}
+        onDownloadClick={() => { setClicks((c) => c + 1); window.setTimeout(() => poll.restart(), 1500); }}
+        onNewLink={async () => { const r = await link.run(); if (r.ok) { setClicks(0); setLinkUntil(r.value.expires_at); setDetail({ ...d, download_url: r.value.download_url, downloaded_at: null }); } }} />
       {link.error && <ErrorBlock title="A new link could not be made" err={link.error} next="Try again." />}
       {poll.deadlinePassed && d.status === 'building' && <ErrorBlock title="The package is still building" err={new ApiError(0, 'timeout', '', null)} override="the build has taken longer than 30 minutes" next="Open the list to see its status later, or start the build again." actions={<LinkBtn href="/exports" variant="secondary">Evidence packages</LinkBtn>} />}
       {d.status === 'ready' && (
@@ -376,11 +410,7 @@ export function ExportDetailScreen({ id }: { id: string }) {
             <li>Run it on the package, offline, with the timestamp authority&apos;s root certificate and the published anchors.</li>
             <li>It names anything that fails. Change one byte and it fails by name.</li>
           </ol>
-          <KV rows={[
-            ['Package sha256', d.sha256 ? <span key="s" className="gap-row"><code className="mono">{d.sha256}</code><CopyButton text={d.sha256} ariaLabel="Copy package sha256" /></span> : <NotAvailable key="s" />],
-            ['Signed by', d.signature ? <span key="g">Platform key <code className="mono">{d.signature}</code></span> : <NotAvailable key="g" />],
-            ['Link expires', <Time key="e" iso={d.expires_at} />],
-          ]} />
+          <PackageFacts d={d} />
         </div>
       )}
       <div className="btn-row mt5"><LinkBtn href="/exports" variant="quiet">Back to evidence packages</LinkBtn></div>

@@ -251,7 +251,7 @@ done
 EV="${SECURITY_GATE_EVIDENCE_DIR:-}"
 if [ -z "$EV" ]; then
   if [ -d "$ROOT/governance/evidence" ]; then EV="$ROOT/governance/evidence/C-47"
-  elif [ -d "$ROOT/../consentvault-ops/governance/evidence" ]; then EV="$(cd "$ROOT/../consentvault-ops" && pwd)/governance/evidence/C-47"
+  elif [ -d "/Users/oxfloors/ConsentVault/operations/governance/evidence" ]; then EV="$(cd "/Users/oxfloors/ConsentVault/operations" && pwd)/governance/evidence/C-47"
   else EV="$ROOT/.security-evidence"; fi
 fi
 if bpath=$("$PY" -I "$LIB" bundle "$EV/$(basename "$ROOT")-$(date +%F).json" "$RESULTS" "$ROOT" "$TOOLS_JSON" 2>"$LOGDIR/bundle.err"); then

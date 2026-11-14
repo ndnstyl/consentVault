@@ -163,7 +163,7 @@ def test_the_entrypoint_refuses_a_token_key_that_is_not_hex(tmp_path):
     assert res.returncode != 0 and "CV_TENANT_TOKEN_KEY_HEX" in res.stderr
 
 
-PLUGIN = Path(os.environ.get("KMS_PLUGIN_DIR") or ROOT.parent / "consentvault-ops" / "provider") / "consentvault_kms"
+PLUGIN = Path(os.environ.get("KMS_PLUGIN_DIR") or Path("/Users/oxfloors/ConsentVault/operations/provider")) / "consentvault_kms"
 
 
 def _relative_imports(path: Path) -> set[str]:

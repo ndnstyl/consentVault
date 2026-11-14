@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Build the managed service's image: the open product image, then the cloud layer on top of it with the private KMS
 # key provider. Never pushes; prints the two image ids.
-#   scripts/build_cloud_image.sh [TAG]        (KMS_PLUGIN_DIR defaults to ../consentvault-ops/provider)
+#   scripts/build_cloud_image.sh [TAG]        (KMS_PLUGIN_DIR defaults to /Users/oxfloors/ConsentVault/operations/provider)
 # Exit 2 when the plugin folder is missing; any docker failure stops the build with its own exit code.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 tag=${1:-consentvault:cloud}
-plugin=${KMS_PLUGIN_DIR:-$root/../consentvault-ops/provider}
+plugin=${KMS_PLUGIN_DIR:-/Users/oxfloors/ConsentVault/operations/provider}
 if [ ! -d "$plugin/consentvault_kms" ]; then
     echo "build_cloud_image: the private KMS key provider is not at $plugin/consentvault_kms (set KMS_PLUGIN_DIR)" >&2
     exit 2

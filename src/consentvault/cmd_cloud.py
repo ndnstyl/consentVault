@@ -21,6 +21,10 @@ Settings (environment wins over consentvault.toml where the config reader suppor
   refused by name), ``CONSENTVAULT_STRIPE_SECRET_KEY_FILE``,
   ``CONSENTVAULT_STRIPE_WEBHOOK_SECRET_FILE``, ``CONSENTVAULT_LINK_SECRET_FILE`` (hex, 32+ bytes)
 
+- ``CONSENTVAULT_CONFIRMATIONS_API_BASE`` and ``CONSENTVAULT_CONFIRMATIONS_EDGE_CNAME``: both or neither (``confirm.wiring``).
+  Both: the confirmation service behind the portal's ``/v1/confirmations/*`` routes, the provider's inbound door and the two
+  public pages. Neither: those routes answer 503 by name. One alone, or a malformed value, refuses the start.
+
 Every route family the dashboard calls is mounted (``cloud_startup.build_routes``; tests/test_cloud_routes.py compares it with the
 dashboard's API client). Final-export delivery for offboarding is not wired: destruction stays operator-driven.
 """
@@ -111,8 +115,10 @@ def build_cloud(cfg, env: Mapping[str, str]):
     from .tenancy.oauth import AccessTokenSigner
     from .tenancy.pipeline import ReceiptSigner
     from .tenancy.session import require_edge_keys
+    from .confirm import wiring
 
     require_edge_keys(cfg)
+    confirm_settings = wiring.confirmation_settings(env)  # half configured refuses the start here, before anything is built
     custody = load_key_provider(cfg.key_provider, env=env)
     token_key = _token_key(env)
     connect = db.connect_factory(cfg)
@@ -137,8 +143,11 @@ def build_cloud(cfg, env: Mapping[str, str]):
     store, archive_store, ledger_store = cloud_stores(cfg, env)
     owner_connect = lambda: db.connect(cfg.require_operator_dsn())  # noqa: E731
     crypto = TenantCrypto(CustodyKeyAdapter.from_database(custody, owner_connect, token_key))  # fingerprint secret and display key come from the database
+    clock = dbclock.epoch_clock(connect)  # ONE clock (confirmations.md section 13): the admin app and the confirmation service
+    confirmations = wiring.build_service(env, connect=connect, token_key=token_key, custody=custody, clock=clock)
     admin_app = build_admin_app(cfg, identity=identity, token_key=token_key, connect=connect, owner_connect=owner_connect,
-                                custody=custody, mailer=mailer, evidence_store=store, crypto=crypto)
+                                custody=custody, mailer=mailer, evidence_store=store, crypto=crypto, clock=clock,
+                                confirmations=confirmations)
     auth = Authenticator(connect=connect, access_tokens=access, identity=None, operators={})
     signer = resolve_object(_plugin_spec(env, "CONSENTVAULT_EVIDENCE_SIGNER")).from_environment(env)
     notifier = resolve_object(_plugin_spec(env, "CONSENTVAULT_NOTIFIER")).from_environment(env)
@@ -149,7 +158,8 @@ def build_cloud(cfg, env: Mapping[str, str]):
         signer=signer, notifier=notifier, stripe=stripe, webhook_secret=_read(env, "CONSENTVAULT_STRIPE_WEBHOOK_SECRET_FILE"),
         link_secret=bytes.fromhex(_read(env, "CONSENTVAULT_LINK_SECRET_FILE")),
         mint_token=lambda o, sc: mint_org_token(token_key, o, sc, credential_id=None),
-        transport=EgressTransport(_need(env, ENV_EGRESS_URL), _read(env, ENV_EGRESS_SECRET_FILE)), region=cfg.default_region)
+        transport=EgressTransport(_need(env, ENV_EGRESS_URL), _read(env, ENV_EGRESS_SECRET_FILE)), region=cfg.default_region,
+        confirmations=confirmations, confirmations_api_base=confirm_settings[0] if confirm_settings else None)
     return api.CloudApiSettings(
         dsn=cfg.require_dsn(), token_key=token_key, access_tokens=access, receipts=receipts, crypto=crypto,
         evidence_store=store, token_endpoint_url=access_url, cursor_key=cursor_key, routes=routes,

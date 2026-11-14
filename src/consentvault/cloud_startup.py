@@ -20,10 +20,12 @@ BUILT_IN_ROUTES = frozenset({("POST", "/v1/proof")})
 
 
 def build_routes(*, admin_app, auth, connect, owner_connect, token_key, crypto, custody, evidence_store, archive_store, ledger,
-                 signer, notifier, stripe, webhook_secret, link_secret, mint_token, transport=None, region=None) -> tuple:
+                 signer, notifier, stripe, webhook_secret, link_secret, mint_token, transport=None, region=None, confirmations=None,
+                 confirmations_api_base=None) -> tuple:
     """Every route family the dashboard uses, in one place: admin (sign-in, members, configuration), systems and deliveries,
     evidence packages, billing, and erasure / offboarding / legal holds. serve-cloud mounts exactly this tuple; a test compares it
-    with the routes the dashboard's API client calls."""
+    with the routes the dashboard's API client calls. With the confirmation service on (``confirm.wiring``), its door (the
+    provider's inbound posts and the two public pages) is mounted last."""
     from .billing.routes import BillingRoutes
     from .evidence import ExportService
     from .route_wiring import AdminRoutes, ExportRouteAdapter, SyncRouteAdapter, TwentyWebhookAdapter, lifecycle_routes
@@ -36,8 +38,16 @@ def build_routes(*, admin_app, auth, connect, owner_connect, token_key, crypto, 
     lifecycle = LifecycleApp(connect=connect, owner_connect=owner_connect, token_key=token_key, crypto=crypto, custody=custody,
                              ledger=ledger, store=archive_store, signer=signer, notifier=notifier, export_cache=evidence_store,
                              region=region, links=exports)
-    return (AdminRoutes(admin_app, auth), SyncRouteAdapter(SyncRoutes(connect, crypto, custody=custody, transport=transport, mint_token=mint_token), auth, token_key),
+    routes = (AdminRoutes(admin_app, auth), SyncRouteAdapter(SyncRoutes(connect, crypto, custody=custody, transport=transport, mint_token=mint_token), auth, token_key),
             ExportRouteAdapter(exports, auth),
             BillingRoutes(connect=connect, mint_token=mint_token, client=stripe, webhook_secret=webhook_secret),
             lifecycle_routes(lifecycle, auth),
             TwentyWebhookAdapter(TwentyReceiver(connect, crypto, custody, token_key, region=region)))
+    if confirmations is None:
+        return routes
+    from .confirm.wiring import ConfirmationDoor
+
+    if not confirmations_api_base:
+        from .errors import ConfigError
+        raise ConfigError("the confirmation door needs the public API base it was configured with; nothing was started")
+    return routes + (ConfirmationDoor(confirmations, confirmations_api_base),)

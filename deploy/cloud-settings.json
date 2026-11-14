@@ -254,6 +254,42 @@
       "note": "path to consentvault.toml; environment wins over it"
     },
     {
+      "name": "CONSENTVAULT_CONFIRMATIONS_API_BASE",
+      "kind": "setting",
+      "required": "confirmations-send and confirmations-alarms and confirmations-link-hosts and confirmations-purge",
+      "used_by": [
+        "vault",
+        "job:confirmations-send",
+        "job:confirmations-alarms",
+        "job:confirmations-link-hosts",
+        "job:confirmations-purge"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "note": "https://<host> the text provider posts to (https://api.consentvault.ai); with CONSENTVAULT_CONFIRMATIONS_EDGE_CNAME turns the confirmation service on (confirm/wiring.py); both or neither, one alone refuses the start; required by the confirmation jobs"
+    },
+    {
+      "name": "CONSENTVAULT_CONFIRMATIONS_EDGE_CNAME",
+      "kind": "setting",
+      "required": "confirmations-send and confirmations-alarms and confirmations-link-hosts and confirmations-purge",
+      "used_by": [
+        "vault",
+        "job:confirmations-send",
+        "job:confirmations-alarms",
+        "job:confirmations-link-hosts",
+        "job:confirmations-purge"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "note": "the edge name each organisation points its wording link host at (edge.consentvault.ai); both or neither with CONSENTVAULT_CONFIRMATIONS_API_BASE"
+    },
+    {
       "name": "CONSENTVAULT_CURSOR_KEY_FILE",
       "kind": "secret_file",
       "required": true,
@@ -522,7 +558,11 @@
         "job:key-lifecycle",
         "job:restore-drill",
         "job:twenty-reconcile",
-        "job:projection-rebuild"
+        "job:projection-rebuild",
+        "job:confirmations-send",
+        "job:confirmations-alarms",
+        "job:confirmations-link-hosts",
+        "job:confirmations-purge"
       ],
       "read_by": "product",
       "deployments": [
@@ -656,7 +696,11 @@
         "job:key-lifecycle",
         "job:restore-drill",
         "job:twenty-reconcile",
-        "job:projection-rebuild"
+        "job:projection-rebuild",
+        "job:confirmations-send",
+        "job:confirmations-alarms",
+        "job:confirmations-link-hosts",
+        "job:confirmations-purge"
       ],
       "read_by": "kms-plugin",
       "deployments": [
@@ -866,7 +910,11 @@
         "vault",
         "sync",
         "job:erasure-resume",
-        "job:twenty-reconcile"
+        "job:twenty-reconcile",
+        "job:confirmations-send",
+        "job:confirmations-alarms",
+        "job:confirmations-link-hosts",
+        "job:confirmations-purge"
       ],
       "read_by": "product",
       "deployments": [
@@ -881,7 +929,11 @@
         "vault",
         "sync",
         "job:erasure-resume",
-        "job:twenty-reconcile"
+        "job:twenty-reconcile",
+        "job:confirmations-send",
+        "job:confirmations-alarms",
+        "job:confirmations-link-hosts",
+        "job:confirmations-purge"
       ],
       "read_by": "product",
       "deployments": [
@@ -896,7 +948,11 @@
         "vault",
         "sync",
         "job:erasure-resume",
-        "job:twenty-reconcile"
+        "job:twenty-reconcile",
+        "job:confirmations-send",
+        "job:confirmations-alarms",
+        "job:confirmations-link-hosts",
+        "job:confirmations-purge"
       ],
       "read_by": "product",
       "deployments": [
@@ -911,7 +967,11 @@
         "vault",
         "sync",
         "job:erasure-resume",
-        "job:twenty-reconcile"
+        "job:twenty-reconcile",
+        "job:confirmations-send",
+        "job:confirmations-alarms",
+        "job:confirmations-link-hosts",
+        "job:confirmations-purge"
       ],
       "read_by": "product",
       "deployments": [
@@ -926,7 +986,11 @@
         "vault",
         "sync",
         "job:erasure-resume",
-        "job:twenty-reconcile"
+        "job:twenty-reconcile",
+        "job:confirmations-send",
+        "job:confirmations-alarms",
+        "job:confirmations-link-hosts",
+        "job:confirmations-purge"
       ],
       "read_by": "product",
       "deployments": [
@@ -941,7 +1005,11 @@
         "vault",
         "sync",
         "job:erasure-resume",
-        "job:twenty-reconcile"
+        "job:twenty-reconcile",
+        "job:confirmations-send",
+        "job:confirmations-alarms",
+        "job:confirmations-link-hosts",
+        "job:confirmations-purge"
       ],
       "read_by": "product",
       "deployments": [
@@ -1286,7 +1354,11 @@
         "job:key-lifecycle",
         "job:restore-drill",
         "job:twenty-reconcile",
-        "job:projection-rebuild"
+        "job:projection-rebuild",
+        "job:confirmations-send",
+        "job:confirmations-alarms",
+        "job:confirmations-link-hosts",
+        "job:confirmations-purge"
       ],
       "read_by": "product",
       "deployments": [
@@ -1309,7 +1381,11 @@
         "job:key-lifecycle",
         "job:restore-drill",
         "job:twenty-reconcile",
-        "job:projection-rebuild"
+        "job:projection-rebuild",
+        "job:confirmations-send",
+        "job:confirmations-alarms",
+        "job:confirmations-link-hosts",
+        "job:confirmations-purge"
       ],
       "read_by": "product",
       "deployments": [

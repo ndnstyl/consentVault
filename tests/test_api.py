@@ -331,7 +331,9 @@ def test_a_captured_at_far_ahead_of_the_vaults_clock_is_stored_and_makes_no_even
     _stored(status, body)
     post, = _posts(conn)
     assert json.loads(bytes(post["body_ct"]))["captured_at"] == payload["captured_at"]
-    assert _unfinished_with(conn, post["post_id"], "ClockSkewError") and _events(conn) == 0
+    # a capture time past the skew bound at arrival is a final reason of the pure phase (one-door round 5), not an attempt
+    assert _facts(conn, post["post_id"])["event_not_derived"] == "ClockSkewError" and _attempts(conn, post["post_id"]) == []
+    assert _events(conn) == 0
     assert conn.execute("SELECT decision_time_parsed FROM consentvault.raw_post_field WHERE field = 'decision_time'"
                         ).fetchone()["decision_time_parsed"].year >= 2035
 

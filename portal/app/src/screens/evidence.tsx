@@ -72,7 +72,7 @@ export function permissionsFromRecord(rec: Pick<ContactRecord, 'channels'>): Pro
   const keys = [...order.filter((k) => rec.channels?.[k]), ...Object.keys(rec.channels ?? {}).filter((k) => !order.includes(k))];
   return keys.flatMap((k) => (rec.channels[k].purposes ?? []).map((p) => ({ channel: k, purpose: p.purpose, status: p.evidence_status, basis_event_ids: [] })));
 }
-export const statusOf = (p: ProofPermission): string => p.status ?? p.evidence_status ?? '';
+export const statusOf = (p: ProofPermission): string => p.status || p.evidence_status || '';
 export function chainLine(chain: NonNullable<Proof['chain']>): React.ReactNode {
   const last: ProofAnchor | undefined = chain.anchors[chain.anchors.length - 1];
   if (!last) return 'No outside anchor yet';
@@ -227,7 +227,7 @@ export function EvidenceLookup() {
               columns={[
                 { key: 't', header: 'Checked', render: (g) => <Time iso={g.at} />, primary: true },
                 { key: 'c', header: 'Channel', render: (g) => chLabel(g.channel) },
-                { key: 'e', header: 'Evidence status', render: (g) => <EvidenceChip status={g.evidence_status ?? g.status ?? ''} /> },
+                { key: 'e', header: 'Evidence status', render: (g) => <EvidenceChip status={g.evidence_status || g.status || ''} /> },
               ]} />
           )}
           {proof.gate_decisions?.next_cursor && <Btn size="sm" busy={more === 'gate_decisions'} busyLabel="Loading" onClick={() => loadMore('gate_decisions', proof.gate_decisions!.next_cursor)}>Load more contact checks</Btn>}

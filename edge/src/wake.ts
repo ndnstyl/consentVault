@@ -32,9 +32,9 @@ export async function callWake(env: WakeEnv, fetchImpl: typeof fetch, nowMs = Da
     return { ok: false, reason: `wake function unreachable: ${e instanceof Error ? e.name : "error"}` };
   }
   const text = await res.text().catch(() => "");
-  if (res.status < 200 || res.status >= 300) return { ok: false, reason: `wake function answered http ${res.status}: ${text.slice(0, 200)}` };
+  if (res.status < 200 || res.status >= 300) return { ok: false, reason: `wake function answered http ${res.status}`  /* the status only: the response text never reaches a caller or a log */ };
   let parsed: { services?: unknown } | null = null;
   try { parsed = JSON.parse(text); } catch { /* named below */ }
-  if (!parsed || typeof parsed.services !== "object" || parsed.services === null) return { ok: false, reason: `wake function answered http ${res.status} without the wake answer: ${text.slice(0, 200)}` };
+  if (!parsed || typeof parsed.services !== "object" || parsed.services === null) return { ok: false, reason: `wake function answered http ${res.status} without the wake answer` };
   return { ok: true, answer: parsed as { services: Record<string, unknown> } };
 }

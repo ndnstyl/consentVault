@@ -161,8 +161,6 @@ async function callback(request: Request, env: AuthEnv, deps: AuthDeps): Promise
   const who = whoFromExchange(tokens);
   const sso = ssoFromExchange(tokens);
   const method = typeof tokens.authentication_method === "string" ? tokens.authentication_method : "";
-  // Diagnostic (2026-11-09 sign-in loop): what the provider reported, never a token or an address.
-  console.log(JSON.stringify({ signin_method: method || null, amr, answer_fields: Object.keys(tokens).filter((k) => !/token/i.test(k)).sort() }));
   let check: Response;
   let vaultCalled = false;
   try {

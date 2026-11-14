@@ -15,7 +15,7 @@ import { Banner, Btn, Chip, DataTable, ErrorBlock, KV, LinkBtn, Meter, NotAvaila
 
 // ---------- 16 Retention ----------
 export function retentionInForce(d: Retention, inForce: number, min: number): string {
-  return d.current ? `${inForce} years (version ${d.current.version}, set ${fmtDate(d.current.applies_from)} by ${rec(d.current.set_by)})` : `${min} years (platform minimum)`;
+  return d.current ? `${inForce} years (version ${d.current.version}, set ${fmtDate(d.current.applies_from)}${d.current.set_by ? ` by ${d.current.set_by}` : ''})` : `${min} years (platform minimum)`;
 }
 export function RetentionHistory({ d, inForce }: { d: Retention; inForce: number }) {
   return d.partial?.includes('history') ? <Banner kind="warning" title="Version history did not load">{`The value in force is current: ${inForce} years.`}</Banner>

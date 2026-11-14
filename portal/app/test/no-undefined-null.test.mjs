@@ -83,7 +83,7 @@ test('Retention: a null set_by never prints "set by null"', () => {
     assert.doesNotMatch(retentionInForce(d, 7, 5), HOLE);
     assert.doesNotMatch(textOf(renderToStaticMarkup(React.createElement(RetentionHistory, { d, inForce: 7 }))), HOLE);
   }
-  assert.match(retentionInForce(RETENTION(null), 7, 5), /Not recorded/);
+  assert.doesNotMatch(retentionInForce(RETENTION(null), 7, 5), / by /, 'no setter recorded: the line says when it was set and names no one');
 });
 
 test('Retention: a recorded set_by is shown as the record holds it', () => {

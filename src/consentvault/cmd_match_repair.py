@@ -64,7 +64,11 @@ def _repair_post(writer: RawPostWriter, conn, enter: Callable, org: uuid.UUID, r
                                   (org, post_id, mv)).fetchone() is not None
         has_link = conn.execute("SELECT 1 FROM consentvault.raw_post_match WHERE org_id = %s AND post_id = %s AND map_version = %s",
                                 (org, post_id, mv)).fetchone() is not None
-        if has_fields and has_link:
+        # A post read under extractor version 1 lacks the certificate readings; they are appended, nothing earlier is touched.
+        lacks_certs = has_fields and fmap is not None and fmap.third_party_path is not None and conn.execute(
+            "SELECT 1 FROM consentvault.raw_post_field WHERE org_id = %s AND post_id = %s AND map_version = %s AND field = %s",
+            (org, post_id, mv, next(iter(extract.THIRD_PARTY_READINGS)))).fetchone() is None
+        if has_fields and has_link and not lacks_certs:
             return
         body = writer.read_body(conn, org, post_id)
         headers = _headers(row, key, org)
@@ -75,6 +79,10 @@ def _repair_post(writer: RawPostWriter, conn, enter: Callable, org: uuid.UUID, r
     readings = extract.read_fields(body, content_type, fmap)
     if not has_fields:
         extract.write_readings(conn, enter, org=org, post_id=post_id, map_version=mv, readings=readings, data_key=key)
+        counts["read"] += 1
+    elif lacks_certs:
+        extract.write_readings(conn, enter, org=org, post_id=post_id, map_version=mv, data_key=key,
+                               readings=[r for r in readings if r.field in extract.THIRD_PARTY_READINGS])
         counts["read"] += 1
     if not has_link:
         info = match.PostInfo(str(post_id), row["seq"], row["edge_received_at"] or row["received_at"], row["body_sha256"])

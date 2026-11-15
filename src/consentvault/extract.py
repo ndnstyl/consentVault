@@ -33,7 +33,13 @@ FIELDS = ("consent", "decision_time", "wording", "wording_hash", "contact", "sel
           "submit_context", "third_party_cert", "jurisdiction", "channel_scope")
 SENT, NOT_SENT, MANY, UNMAPPED, UNREADABLE = "sent", "not_sent", "sent_more_than_once", "unmapped", "body_unreadable"
 COL_VALUES = "raw_post_field.values"
-EXTRACTOR_VERSION = 1
+# Version 2 adds the two certificate readings below. A post read under version 1 keeps its rows; a re-read appends only the
+# readings it lacks (never rewrites one).
+EXTRACTOR_VERSION = 2
+
+# The hidden fields an issuer's own script puts in the host form, by the name attribute (tests/fixtures/certificates/SOURCE.md,
+# read from the issuers' pages 2026-11-15). The widget sends them under ``third_party`` as [{"name", "value"}, ...].
+THIRD_PARTY_READINGS = {"trustedform_cert": "xxTrustedFormCertUrl", "jornaya_token": "universal_leadid"}
 
 
 class ReadingNotWritten(ConsentVaultError):
@@ -232,6 +238,8 @@ class FieldMap:
     third_party_cert_path: str | None = None
     jurisdiction_path: str | None = None
     channel_scope_path: str | None = None
+    # where a widget-shaped post carries the certificate list ([{"name", "value"}, ...]); None for a map that reads none
+    third_party_path: str | None = None
     contact_paths: tuple[tuple[str, str], ...] = ()
     map_version: int = 0
     label: str = "map"
@@ -253,7 +261,7 @@ class FieldMap:
 # The widget posts {contact, checked, decided_at, disclosure_text, disclosure_sha256, ...}; the events API takes the event fields.
 WIDGET_MAP = FieldMap(body_format="json", consent_paths=("/checked",), decision_time_path="/decided_at",
                       wording_path="/disclosure_text", wording_hash_path="/disclosure_sha256",
-                      contact_paths=(("/contact", "detect"),), label="built_in:widget")
+                      third_party_path="/third_party", contact_paths=(("/contact", "detect"),), label="built_in:widget")
 EVENTS_API_MAP = FieldMap(body_format="json", consent_paths=("/checked",), decision_time_path="/captured_at",
                           wording_path=None, wording_hash_path="/disclosure_sha256",
                           contact_paths=(("/contact", "detect"),), label="built_in:events_api", box_expected=False)
@@ -363,9 +371,10 @@ def read_fields(body: bytes, content_type: str | None, fmap: FieldMap | None) ->
         return [Reading("consent", UNMAPPED)]
     wanted = {name: fmap.paths(name) for name in FIELDS}
     all_paths = [p for ps in wanted.values() for p in ps]
+    third_party = fmap.third_party_path if fmap.body_format == "json" else None
     try:
         if fmap.body_format == "json":
-            found = json_occurrences(body, all_paths)
+            found = json_occurrences(body, all_paths + ([third_party] if third_party else []))
         elif fmap.body_format == "form_urlencoded":
             found = form_occurrences(body, all_paths)
         elif fmap.body_format == "multipart":
@@ -373,7 +382,8 @@ def read_fields(body: bytes, content_type: str | None, fmap: FieldMap | None) ->
         else:
             raise Unreadable("a text body has no named fields")
     except Unreadable:  # loud-failure-exempt: the failure is the stored state body_unreadable on each field, and the caller raises its alarm
-        return [Reading(name, UNREADABLE) for name in FIELDS if wanted[name] or name == "consent"]
+        return [Reading(name, UNREADABLE) for name in FIELDS if wanted[name] or name == "consent"] + \
+            [Reading(name, UNREADABLE) for name in THIRD_PARTY_READINGS if third_party]
     out: list[Reading] = []
     for name in FIELDS:
         paths = wanted[name]
@@ -385,6 +395,43 @@ def read_fields(body: bytes, content_type: str | None, fmap: FieldMap | None) ->
         state = NOT_SENT if not values else SENT if len(values) == 1 else MANY
         parsed = parse_decision_time(values[0]) if name == "decision_time" and values else None
         out.append(Reading(name, state, values, parsed))
+    if third_party:
+        out.extend(third_party_readings(found[third_party]))
+    return out
+
+
+def third_party_readings(arrays: list[bytes]) -> list[Reading]:
+    """The certificate readings from the raw bytes of every ``third_party`` value in a post. Each value kept is the exact bytes
+    the sender wrote for ``value`` (a JSON string keeps its quotes and escapes), in the order sent; an entry whose name is not one
+    of the two read names is left to the raw post, which holds it whole. A name that does not occur reads "not sent"; nothing is
+    filled, defaulted or judged (a forged URL is recorded as sent)."""
+    by_name: dict[str, list[bytes]] = {n: [] for n in THIRD_PARTY_READINGS.values()}
+    for raw in arrays:
+        try:
+            entries = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):  # loud-failure-exempt: a third_party value that is not JSON reads "not sent"; the raw post holds it whole
+            continue
+        if not isinstance(entries, list):
+            continue
+        pointers = [f"/{i}/{k}" for i in range(len(entries)) for k in ("name", "value")]
+        try:
+            parts = json_occurrences(raw, pointers)
+        except Unreadable:  # loud-failure-exempt: as above, the bytes stay whole in the raw post
+            continue
+        for i in range(len(entries)):
+            names = parts[f"/{i}/name"]
+            if len(names) != 1:
+                continue
+            try:
+                name = json.loads(names[0].decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):  # loud-failure-exempt: an unreadable name matches neither reading
+                continue
+            if isinstance(name, str) and name in by_name:
+                by_name[name].extend(parts[f"/{i}/value"])
+    out = []
+    for reading, name in THIRD_PARTY_READINGS.items():
+        values = tuple(by_name[name])
+        out.append(Reading(reading, NOT_SENT if not values else SENT if len(values) == 1 else MANY, values))
     return out
 
 

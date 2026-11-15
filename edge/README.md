@@ -57,6 +57,16 @@ widget does before hashing) or every submission is refused. Use
 `data-template="id"` to read the disclosure from a `<template>` instead. `submit(contact)` rejects on
 every failure and never reports success unless the worker answered `recorded: true`.
 
+### Certificates your form already carries
+
+If the form runs TrustedForm or Jornaya LeadiD, the widget copies the hidden values their scripts write into the same post, under
+`third_party`, exactly as found (never trimmed or altered; an empty or missing field is left out). Default names, read from the
+issuers' own pages: `xxTrustedFormCertUrl` (TrustedForm) and `universal_leadid` (Jornaya). If your script uses another input name,
+list the names in `data-passthrough="name1,name2"` (it replaces the default list). The widget fetches nothing from either issuer.
+Place the issuer's script so it has filled its field before `submit` runs; a field still empty at submit is left out and is read as
+"not sent". The vault stores the values and shows them beside the record as "sent by the form; ConsentVault has not checked it
+with the issuer". Sources and read dates: `tests/fixtures/certificates/SOURCE.md`.
+
 ## Test
 
 ```

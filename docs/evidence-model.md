@@ -159,6 +159,16 @@ fingerprints and confirm whether that person appears in the organisation's recor
 does not remove that ability, and destroying the organisation's wrap key does not either unless the fingerprint key
 is destroyed with it. Full offboarding destroys both.
 
+## Certificates the form sent (TrustedForm, Jornaya)
+
+When the form's widget post carries `third_party` (the hidden values an issuer's script wrote, copied as found), the vault keeps the
+post whole (the body hash and seal of the raw post cover those bytes) and reads two named values from it under extractor version 2:
+`trustedform_cert` (the input named `xxTrustedFormCertUrl`) and `jornaya_token` (the input named `universal_leadid`). Each reading says
+sent, not sent, or sent more than once, with the exact text of every occurrence. A re-read adds the readings an older post lacks and
+changes none already stored. The export carries them per event as `third_party_certificates`, each labelled "sent by the form;
+ConsentVault has not checked it with the issuer". A forged URL is recorded as sent; nothing here says a certificate is genuine, and the
+product never contacts the issuer. A later verify page shows the same values from the same source.
+
 ## What this does not prove
 
 - Who physically ticked the box. IP address and user agent are corroboration, not identity. `otp` and

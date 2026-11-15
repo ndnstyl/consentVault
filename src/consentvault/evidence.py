@@ -795,6 +795,63 @@ def contact_has_records(conn: psycopg.Connection, crypto, fp: str) -> bool:
     return False
 
 
+CERTIFICATE_LABEL = "sent by the form; ConsentVault has not checked it with the issuer"
+
+
+def third_party_certificates(conn: psycopg.Connection, crypto, org, event_ids: list[str]) -> dict[str, list[dict]]:
+    """The certificate values (TrustedForm certificate URL, Jornaya LeadiD token) the form sent with each event's triggering
+    post, as the extractor read them, keyed by event id. Values are the exact text the sender wrote, never trimmed, never checked
+    with the issuer, and carry the label saying so. An event with no source post, or whose post was read before the certificate
+    readings existed, has an empty list. Runs inside an entered tenant with a read scope."""
+    from .extract import COL_VALUES, THIRD_PARTY_READINGS
+    from .tenancy import crypto as tc
+    from .tenancy.errors import FieldCryptoError, KeyProviderError
+    from .tenancy.keys_protocol import WrappedKey
+
+    if not event_ids:
+        return {}
+    rows = conn.execute(
+        "SELECT s.event_id, s.post_id, f.map_version, f.field, f.state, f.values_ct, f.extractor_version, p.encryption"
+        " FROM consentvault.event_source_post s"
+        " JOIN consentvault.raw_post p ON p.org_id = s.org_id AND p.post_id = s.post_id"
+        " JOIN consentvault.raw_post_field f ON f.org_id = s.org_id AND f.post_id = s.post_id"
+        " WHERE s.org_id = (SELECT consentvault.current_org()) AND s.role = 'trigger' AND s.event_id = ANY(%s::uuid[])"
+        " AND f.field = ANY(%s) ORDER BY s.recorded_at, s.event_id, f.map_version, f.field",
+        (event_ids, list(THIRD_PARTY_READINGS))).fetchall()
+    keys: dict = {}
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        post_id = str(r["post_id"])
+        values: list = []
+        erased = False
+        if r["values_ct"] is not None:
+            blob = bytes(r["values_ct"])
+            if r["encryption"] == "none":
+                raw = blob
+            else:
+                if post_id not in keys:
+                    held = conn.execute("SELECT post_key_wrapped, key_version FROM consentvault.raw_post_key"
+                                        " WHERE org_id = (SELECT consentvault.current_org()) AND post_id = %s",
+                                        (r["post_id"],)).fetchone()
+                    try:
+                        keys[post_id] = None if held is None else crypto.open_contact_key(
+                            org, WrappedKey(bytes(held["post_key_wrapped"]), held["key_version"]))
+                    except KeyProviderError as exc:
+                        raise KeyUnavailableError("the organization key could not be used to open a post's data key") from exc
+                if keys[post_id] is None:
+                    raw, erased = None, True
+                else:
+                    try:
+                        raw = tc.decrypt_field(keys[post_id], org, f"{post_id}:{r['map_version']}:{r['field']}", COL_VALUES, blob)
+                    except FieldCryptoError as exc:
+                        raise ExportIntegrityError(f"a certificate reading of post {post_id} failed authentication") from exc
+            values = [] if raw is None else json.loads(raw)
+        out.setdefault(str(r["event_id"]), []).append({
+            "post_id": post_id, "reading": r["field"], "state": "erased" if erased else r["state"], "values": values,
+            "map_version": r["map_version"], "extractor_version": r["extractor_version"], "label": CERTIFICATE_LABEL})
+    return out
+
+
 def gather_tenant(conn: psycopg.Connection, crypto, contact_fp: str) -> tuple[dict, dict[str, bytes]]:
     """Everything this organisation holds for one contact fingerprint, in the clear for that person only.
 
@@ -867,6 +924,9 @@ def gather_tenant(conn: psycopg.Connection, crypto, contact_fp: str) -> tuple[di
         timeline.append(entry)
 
     event_ids = [e["event_id"] for e in timeline]
+    certificates = third_party_certificates(conn, crypto, org, event_ids)
+    for e in timeline:
+        e["third_party_certificates"] = certificates.get(e["event_id"], [])
     seals = conn.execute(
         "SELECT seal_uuid, event_id, hash_version, columns, digest, tsa_url, token, gen_time, verified_at"
         f" FROM consentvault.seal WHERE {cur_org} AND event_id = ANY(%s::uuid[]) ORDER BY created_at, seal_uuid",

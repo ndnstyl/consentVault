@@ -25,11 +25,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: PostgreSQL server binaries (the tests start their own throwaway server)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-16 openssl
+        run: sudo install -d /usr/share/postgresql-common/pgdg && sudo curl -fsSLo /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list && sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-17 postgresql-17-pgaudit openssl   # production runs 17 and the security manifest is built on 17
       - run: pip install -e .[dev]
       - run: pytest -m "not network"
         env:
-          PG_BIN: /usr/lib/postgresql/16/bin
+          PG_BIN: /usr/lib/postgresql/17/bin
           TWENTY_CONFORMANCE_WALKS: "120"  # the Twenty model conformance, its model kept in tests/connectors/twenty/model
 
   suites:
@@ -44,11 +44,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: PostgreSQL server binaries
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-16 openssl
+        run: sudo install -d /usr/share/postgresql-common/pgdg && sudo curl -fsSLo /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list && sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-17 postgresql-17-pgaudit openssl   # production runs 17 and the security manifest is built on 17
       - run: pip install -e .[dev]
       - name: Run tests/${{ matrix.suite }} when the folder exists
         env:
-          PG_BIN: /usr/lib/postgresql/16/bin
+          PG_BIN: /usr/lib/postgresql/17/bin
         run: |
           if [ -d "tests/${{ matrix.suite }}" ]; then
             pytest "tests/${{ matrix.suite }}" -m "not network"
@@ -74,7 +74,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pip-audit==2.10.1 -e .[cloud]
-      - run: pip-audit --local --strict
+      - run: pip-audit --local --strict --skip-editable   # the product itself is installed editable and is not on PyPI
 
   gitleaks:
     runs-on: ubuntu-24.04

@@ -16,4 +16,8 @@ regexes = [
   '''9d3a1c1e-7b1a-4c3e-9f6e-''',  # the log-scrub tests' fixture token, present only to prove it is masked (tests/test_log_scrub_providers.py)
   '''api_key_secret=abcDEF123456''',  # same file: an obviously fake key proving the scrubber masks the value
   '''\| gate9 \| `test_gate_[a-z_]+` in `test_gates\.py`''',  # a test's name in the projection index table (tests/projection/INDEX.md history), not a key
+  '''08171756-ceb2-4c9d-8830-dadb1f20aafb''',  # a test record's id quoted in a KeyError line of the projection index (tests/projection/INDEX.md history), not a key
+  '''8dd60f33-ed3f-44a1-973f-85e3626c5191''',  # a test record's id quoted in a KeyError line of the projection index (tests/projection/INDEX.md history), not a key
+  '''f052cb49-27d1-44a2-85be-f1a69b0e86b3''',  # a test record's id quoted in a KeyError line of the projection index (tests/projection/INDEX.md history), not a key
+  '''Abc_def-0123456789abcdefghijklmnopqrstuvwxyz''',  # the confirmations tests' made-up inbound key (edge/test/gateway-confirmations.test.ts and tests/test_confirmations_*.py), never a live one
 ]

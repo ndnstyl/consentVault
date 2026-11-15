@@ -15,7 +15,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 180   # the whole suite, about 4,000 tests: 51 minutes on a 20-core box, longer on a shared runner
     strategy:
       fail-fast: false
       matrix:

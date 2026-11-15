@@ -140,10 +140,37 @@ def test_the_provider_door_passes_the_raw_body_and_headers_and_the_stored_addres
     body = b"Body=STOP&From=%2B15555550100"
     headers = {"X-Twilio-Signature": "sig=", "Content-Type": "application/x-www-form-urlencoded", "X-Request-Id": "r1"}
     res = door.handle("POST", f"/v1/confirmations/inbound/{KEY}", body=body, headers=headers, caller=None)
-    assert res.status == 200 and res.payload == {}  # an empty JSON object, never null
+    assert res.status == 200 and res.payload is None and res.raw == wiring.EMPTY_TWIML  # Twilio reads XML, never JSON
     kind, key, seen, got, url = svc.calls[0]
     assert (kind, key, got, url) == ("inbound", KEY, body, f"{BASE}/v1/confirmations/inbound/{KEY}")
     assert seen["X-Twilio-Signature"] == "sig=" and seen["Content-Type"] == headers["Content-Type"]
+
+
+class _AnsweringService(_FakeService):
+    def __init__(self, reply):
+        super().__init__()
+        self.reply = reply
+
+    def handle_inbound(self, inbound_key, headers, body, url, **kw):
+        return self.reply
+
+
+@pytest.mark.parametrize("word", ["verified", "recorded", "replayed", "ignored", "unknown_message"])
+def test_a_taken_inbound_post_answers_twilio_with_empty_twiml_and_the_outcome_in_a_header(word):
+    # Twilio logs error 12300 ("Invalid Content-Type") for every JSON answer; seen live on the first test reply, 2026-11-15.
+    door = wiring.ConfirmationDoor(_AnsweringService(Reply(200, {"status": word})), BASE)
+    for path in (f"/v1/confirmations/inbound/{KEY}", f"/v1/confirmations/inbound-fallback/{KEY}"):
+        res = door.handle("POST", path, body=b"Body=hi", headers={}, caller=None)
+        assert res.status == 200 and res.payload is None
+        assert res.raw == b'<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+        assert res.headers["Content-Type"] == "text/xml; charset=utf-8"
+        assert res.headers["X-ConsentVault-Inbound"] == word
+
+
+def test_a_refused_inbound_post_keeps_its_status_and_reason():
+    door = wiring.ConfirmationDoor(_AnsweringService(Reply(503, {"error": "service_unavailable"})), BASE)
+    res = door.handle("POST", f"/v1/confirmations/inbound/{KEY}", body=b"", headers={}, caller=None)
+    assert res.status == 503 and res.payload == {"error": "service_unavailable"}
 
 
 @pytest.mark.parametrize("header", ["X-ConsentVault-Link-Host", "x-consentvault-link-host"])

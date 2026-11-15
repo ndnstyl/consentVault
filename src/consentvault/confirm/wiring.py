@@ -47,6 +47,25 @@ FALLBACK_PATH = re.compile(r"^/v1/confirmations/inbound-fallback/([A-Za-z0-9_-]{
 TWILIO_RETRY_FRAGMENT = "#rp=all&rc=3"
 
 
+# What the provider door answers Twilio when it takes a post: empty TwiML. Twilio reads a messaging webhook's answer as TwiML
+# and logs error 12300 ("Invalid Content-Type") for anything else, so a JSON answer put an error in the customer's Twilio console
+# on every reply (seen on the first live test reply, 2026-11-15). The outcome word rides in a header for our own logs.
+EMPTY_TWIML = b'<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+TWIML_TYPE = "text/xml; charset=utf-8"
+OUTCOME_HEADER = "X-ConsentVault-Inbound"
+
+
+def _to_twilio(res: Reply) -> Reply:
+    """A taken post (2xx) answers empty TwiML with the outcome in a header; a refusal keeps its status and reason."""
+    if not 200 <= res.status < 300:
+        return res if res.payload is not None or res.raw is not None else Reply(res.status, {}, headers=res.headers)
+    word = res.payload.get("status", "") if isinstance(res.payload, dict) else ""
+    headers = {**(res.headers or {}), "Content-Type": TWIML_TYPE}
+    if word:
+        headers[OUTCOME_HEADER] = str(word)
+    return Reply(res.status, raw=EMPTY_TWIML, headers=headers)
+
+
 def _host_ok(host: str) -> bool:
     return len(host) <= 253 and bool(_HOST.match(host))
 
@@ -118,7 +137,7 @@ class ConfirmationDoor:
             # (its fallback form on the fallback door).
             kw = {"fallback": True} if f else {}
             res = self._service.handle_inbound((m or f).group(1), headers=headers, body=body or b"", url=self._api_base + path, **kw)
-            return res if res.payload is not None or res.raw is not None else Reply(res.status, {}, headers=res.headers)
+            return _to_twilio(res)
         host = _header(headers, LINK_HOST_HEADER).strip().lower()
         if not host:
             # Never read Host: behind the tunnel it is localhost, and a page is found only on its organisation's own host.

@@ -400,7 +400,8 @@ async function fallbackDoor(request: Request, url: URL, env: GatewayEnv, deps: G
     } else if (res && res.status < 500) {
       alarm("confirmations.inbound_spool_vault_fault", `the vault's door answered a fallback post ${res.status} without a named refusal; it stays stored`);
     } else alarm("confirmations.inbound_spooled", "the vault did not take a fallback post; it is stored at the edge and delivered by the drain");
-    return new Response(JSON.stringify({ received: true, kept: true }), { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    // Empty TwiML: Twilio logs error 12300 on a JSON answer to a messaging webhook.
+    return new Response('<?xml version="1.0" encoding="UTF-8"?><Response></Response>', { status: 200, headers: { "content-type": "text/xml; charset=utf-8", "cache-control": "no-store", "x-consentvault-inbound": "kept" } });
   }
   if (res) return new Response(res.body, { status: res.status, headers: scrub(res.headers) });
   return err(503, "store_unavailable", "the post could be neither stored nor delivered; nothing was recorded");

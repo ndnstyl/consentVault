@@ -224,6 +224,8 @@ test("a fallback post while the vault is down is stored and Twilio is told it wa
   const { env, alarms } = mk({ INBOUND_SPOOL: db });
   const res = await handleGateway(at("api.consentvault.ai", FPATH, { method: "POST", headers: TWILIO, body: RAW }), env, { fetch: down(), alarm: (n) => alarms.push(n) });
   assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "text/xml; charset=utf-8"); // Twilio logs error 12300 on a JSON answer
+  assert.equal(await res.text(), '<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
   assert.equal(open(db).length, 1);
   const row = open(db)[0];
   assert.equal(row.number_key, KEY);

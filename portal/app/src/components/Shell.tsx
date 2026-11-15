@@ -9,6 +9,8 @@ import { fmtDate } from '../lib/format.ts';
 import { Banner, Btn, ErrorBlock, Icon, LinkBtn, PageHead, Skeleton, Sprite, StateBlock } from './ui.tsx';
 import { Dialog } from './Dialog.tsx';
 import { Screen } from '../screens/index.tsx';
+import { Assistant } from './Assistant.tsx';
+import { assistantEnabled } from '../lib/assist.ts';
 
 function Brand() {
   return <Link className="brand" href="/"><i aria-hidden="true" />CONSENTVAULT</Link>;
@@ -226,6 +228,7 @@ export function Shell() {
           <button type="button" className="pill-btn menu-btn" aria-expanded={menuOpen} aria-controls="side" onClick={() => setMenuOpen(!menuOpen)}><Icon name="i-menu" />Menu</button>
           <Brand />
           <span className="spacer" />
+          {assistantEnabled() && <Assistant />}
           <OrgSwitcher />
           <PersonMenu />
         </header>

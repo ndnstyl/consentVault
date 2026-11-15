@@ -12,8 +12,6 @@ import os
 import psycopg
 import pytest
 
-from .conftest import load_settings
-
 
 def _drop_test_databases(port: int) -> int:
     dropped = 0
@@ -24,14 +22,27 @@ def _drop_test_databases(port: int) -> int:
     return dropped
 
 
+_checked: list = []  # the other-client check runs once, before this session's own tests connect
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_fixture_setup(fixturedef, request):
     if fixturedef.argname != "pg_server":
         return None
-    inside = os.environ.get("SUITES_DB_PORT")  # set when the suites run in the stack's own network (the supported way)
-    port = int(inside) if inside else int(load_settings()["SUITES_DB_PORT"])
+    inside = os.environ.get("SUITES_DB_PORT")  # set when the suites run in the stack's own network (the only supported way)
+    if not inside:
+        raise AssertionError("SUITES_DB_PORT is not set: run the suites through the `suites` service of deploy/selfhost/docker-compose.yml; "
+                             "the throwaway database publishes no host port, so no other process can share its roles")
+    port = int(inside)
+    first_call = not _checked
+    _checked.append(True)
     with psycopg.connect(f"postgresql://postgres@127.0.0.1:{port}/postgres", connect_timeout=10) as c:
         version = c.execute("SHOW server_version").fetchone()[0]
+        others = c.execute("SELECT pid, usename, application_name, client_addr::text FROM pg_stat_activity"
+                           " WHERE backend_type = 'client backend' AND pid <> pg_backend_pid()").fetchall()
+    if others and first_call:
+        raise AssertionError(f"another client is connected to the suites database ({others}); the suite's roles are cluster-wide, "
+                             "so a second runner on this database makes the stray-login guard fail unrelated tests")
     if not version.startswith("17."):
         raise AssertionError(f"the suites expected the stack's PostgreSQL 17 image, got {version}")
     _drop_test_databases(port)

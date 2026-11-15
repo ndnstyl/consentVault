@@ -1,14 +1,14 @@
 {
- "exit_code": 1,
- "finished_at": "2026-11-15T07:07:02.014535Z",
+ "exit_code": 0,
+ "finished_at": "2026-11-15T12:14:49.614450Z",
  "format": "consentvault-selfhost-receipt/2",
  "manifest_sha256": "d94babab975cc273f8ee96554facd3189217b702a5803e6a4102ea4e36c2a681",
- "product_sha256": "ed9a86efcab697d02422b3e219de1ead6a501d5a7662c76874988ef3d96e1cb2",
+ "product_sha256": "930be8cd5454b37fd9567b3a34b5df3ad44754415e56fb7ebb3889a41aedf90e",
  "sections": {
   "integrity: ledger, seal, proof, evidence": "passed",
   "isolation": "passed",
   "live providers: OpenBao keys, S3 Object Lock evidence, Keycloak OIDC, vault service": "passed",
-  "suppression sync": "failed"
+  "suppression sync": "passed"
  },
  "tests": {
   "tests/selfhost/test_keycloak_oidc.py::test_a_password_only_login_is_refused_where_mfa_is_required": "passed",

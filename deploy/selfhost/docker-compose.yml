@@ -35,8 +35,9 @@ services:
       POSTGRES_HOST_AUTH_METHOD: trust
     volumes:
       - suites-data:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:${SUITES_DB_PORT:-55432}:5432"
+    # No published port: the cluster is reachable only from the `suites` runner in its own network. A published port let any
+    # other process on the machine (another worktree's run, a stray test) create roles in this cluster mid-run, and the
+    # suite's stray-login guard then failed whichever unrelated test happened to be finishing.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 3s
@@ -44,8 +45,12 @@ services:
       retries: 20
 
   # Test-only runner for the product suites (see Dockerfile.suites for why it lives in the database's network and clock).
+  # Its own profile, never started by `up`: with the `suites` profile it also started this runner, which ran the WHOLE
+  # product suite (erasure tests included) against db-suites at the same time as every section run_suites.sh starts.
+  # The erasure tests make short-lived login roles on the cluster, which the stray-login guard then blamed on whichever
+  # sync test was finishing. `docker compose run` starts it on demand and needs no profile flag.
   suites:
-    profiles: ["suites"]
+    profiles: ["suites-run"]
     build:
       context: .
       dockerfile: Dockerfile.suites

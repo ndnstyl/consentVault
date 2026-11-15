@@ -31,6 +31,9 @@ export interface GatewayEnv {
   // Workers rate-limit bindings for the confirmation doors (wrangler [[ratelimits]]); see confirmationDoor below.
   INBOUND_LIMITER?: RateLimiter;
   PAGE_LIMITER?: RateLimiter;
+  // The public read class (record links): served only on this host name (a configuration value, no default), with its own per-IP limiter.
+  VERIFY_HOST?: string;
+  VERIFY_LIMITER?: RateLimiter;
   // D1 database the fallback door stores each post in until the vault has answered it with a 2xx (drainInboundSpool, on the cron).
   INBOUND_SPOOL?: D1Like;
   // The operator's bearer for POST /ops/inbound-spool/replay (a Worker secret). Unset: the route does not exist (404).
@@ -566,9 +569,98 @@ async function pageDoor(request: Request, url: URL, env: GatewayEnv, deps: Gatew
   return new Response(res.body, { status: res.status, headers: scrub(res.headers) });
 }
 
+// ---- The public read class (record links) --------------------------------------------------------------------------------
+// GET /p/{id}, GET /p/{id}.json, GET /p/{id}/record.zip and POST /p/{id}/match, on the configured verify host only. No bearer, no
+// cookie in either direction, one per-IP limiter, the privacy headers on every response. Unknown, malformed, misrouted and
+// wrong-method requests all answer one fixed 404; each makes exactly one call to the origin (a malformed or stray request asks
+// for a fixed well-formed id that no link carries), so the timing class matches and the visitor's text never reaches the origin.
+const PUBLIC_ID = "[A-Za-z2-7]{26}";
+const PUBLIC_RE = new RegExp(`^/p/(cvp_${PUBLIC_ID})(\\.json|/record\\.zip|/match)?$`);
+const PUBLIC_PROBE_ID = "cvp_" + "a".repeat(26);
+const PUBLIC_ORIGIN_BASE = "/v1/public/record-link/";
+const PUBLIC_MATCH_MAX_BODY = 2 * 1024;
+const PUBLIC_FIXED_404 = '{"error":"not_found","message":"no such record link"}';
+const PUBLIC_DEFAULT_CSP = "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+
+function publicHeaders(source: Headers | undefined, kind: "page" | "zip" | "other"): Headers {
+  const h = new Headers();
+  const type = source?.get("content-type");
+  if (type) h.set("content-type", type);
+  h.set("referrer-policy", "no-referrer");
+  h.set("cache-control", "no-store");
+  h.set("x-robots-tag", "noindex, nofollow");
+  h.set("x-content-type-options", "nosniff");
+  let csp = source?.get("content-security-policy") || PUBLIC_DEFAULT_CSP;
+  if (!/(^|;)\s*frame-ancestors\s/i.test(csp)) csp += "; frame-ancestors 'none'";
+  h.set("content-security-policy", csp);
+  if (kind === "zip") h.set("content-disposition", source?.get("content-disposition")?.toLowerCase().startsWith("attachment") ? source.get("content-disposition")! : 'attachment; filename="record.zip"');
+  return h;
+}
+
+function publicJson(status: number, body: string, extra: Record<string, string> = {}): Response {
+  const h = publicHeaders(undefined, "other");
+  h.set("content-type", "application/json");
+  for (const [k, v] of Object.entries(extra)) h.set(k, v);
+  return new Response(body, { status, headers: h });
+}
+
+async function publicReadDoor(request: Request, url: URL, env: GatewayEnv, deps: GatewayDeps): Promise<Response> {
+  if (!env.ORIGIN_URL || !env.ACCESS_CLIENT_ID || !env.ACCESS_CLIENT_SECRET) {
+    alarmOf(deps)("public_verify.misconfigured", "the gateway has no origin address or Access token; the record links are not served");
+    return publicJson(500, '{"error":"misconfigured","message":"temporarily unavailable"}');
+  }
+  const ip = request.headers.get("cf-connecting-ip") || "unknown";
+  if (!env.VERIFY_LIMITER) {
+    alarmOf(deps)("public_verify.rate_limit_unbound", "the VERIFY_LIMITER binding is not set; the record links are not rate limited");
+  } else if (!(await env.VERIFY_LIMITER.limit({ key: `verify:${ip}` })).success) {
+    return publicJson(429, '{"error":"rate_limited","message":"too many requests; try again shortly"}', { "retry-after": "10" });
+  }
+  const m = PUBLIC_RE.exec(url.pathname);
+  const suffix = m?.[2] ?? "";
+  const wanted = m && ((request.method === "GET" && suffix !== "/match") || (request.method === "POST" && suffix === "/match"));
+  let originPath = PUBLIC_ORIGIN_BASE + PUBLIC_PROBE_ID;
+  let method = "GET";
+  let body: ArrayBuffer | undefined;
+  if (wanted) {
+    originPath = PUBLIC_ORIGIN_BASE + m![1] + suffix;
+    method = request.method;
+    if (method === "POST") {
+      try {
+        body = await readCapped(request, PUBLIC_MATCH_MAX_BODY);
+      } catch (e) {
+        if (e instanceof Refusal) return publicJson(413, '{"error":"too_large","message":"request body too large"}');
+        throw e;
+      }
+    }
+  }
+  const headers = new Headers();
+  headers.set("cf-access-client-id", env.ACCESS_CLIENT_ID);
+  headers.set("cf-access-client-secret", env.ACCESS_CLIENT_SECRET);
+  const type = request.headers.get("content-type");
+  if (wanted && method === "POST" && type) headers.set("content-type", type);
+  let res: Response;
+  try {
+    res = await deps.fetch(clean(env.ORIGIN_URL) + originPath, { method, headers, body });
+  } catch (e) {
+    alarmOf(deps)("public_verify.origin_unreachable", `the origin did not answer a record link request (${(e as Error).name})`);
+    return publicJson(502, '{"error":"origin_unreachable","message":"temporarily unavailable"}');
+  }
+  if (!wanted || res.status === 404) {
+    await res.body?.cancel();
+    return publicJson(404, PUBLIC_FIXED_404);
+  }
+  const kind = suffix === "/record.zip" ? "zip" : "page";
+  return new Response(res.body, { status: res.status, headers: publicHeaders(res.headers, kind) });
+}
+
 export async function handleGateway(request: Request, env: GatewayEnv, deps: GatewayDeps): Promise<Response> {
   try {
     const url = new URL(request.url);
+    if (env.VERIFY_HOST && url.hostname.toLowerCase() === env.VERIFY_HOST.toLowerCase()) {
+      // The verify host answers the public read class and nothing else, on every path.
+      if (url.pathname === "/p" || url.pathname.startsWith("/p/")) return await publicReadDoor(request, url, env, deps);
+      return publicJson(404, PUBLIC_FIXED_404);
+    }
     if (isCapturePath(url.pathname)) {
       if (!env.ORIGIN_URL || !env.ACCESS_CLIENT_ID || !env.ACCESS_CLIENT_SECRET) {
         (deps.alarm ?? ((n, d) => console.error(`consentvault gateway alarm ${n}: ${d}`)))("capture.store_unavailable", "the gateway has no origin address or Access token; nothing was stored");

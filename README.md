@@ -10,24 +10,27 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-C6B25D?labelColor=2A3845"></a>
   <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-C6B25D?labelColor=2A3845">
   <img alt="PostgreSQL 15+" src="https://img.shields.io/badge/postgresql-15%2B-C6B25D?labelColor=2A3845">
-  <img alt="tests: 354 passing" src="https://img.shields.io/badge/tests-354%20passing-C6B25D?labelColor=2A3845">
 </p>
 
 <p align="center"><b>An open-source consent evidence vault: a tamper-evident record of who agreed to be contacted, how, under which exact wording, and who later said stop.</b><br>
-<a href="https://www.consentvault.ai">consentvault.ai</a></p>
+<a href="https://consentvault.ai">consentvault.ai</a></p>
 
 It exists to preserve the evidence behind one question: **"What was recorded about this person's consent to this contact, and about any withdrawal of it?"**
 
 > **Scope.** ConsentVault is an independent evidence custodian and compliance-support infrastructure. It is not a
-> legal authority and it gives no legal advice. It provides defensible documentation, not guaranteed compliance.
+> legal authority and it gives no legal advice. It preserves documentation, not guaranteed compliance.
 > Whether a consent is legally valid, whether a disclosure satisfies a law, and whether a communication is permitted
 > are determinations for you and the counsel you choose to involve. Read [docs/scope.md](docs/scope.md).
 
-## Why ConsentVault
+## Why
 
-Consent records usually live as a flag in a CRM. A flag says "yes" and nothing else: not what the person
-saw, not when, not from where, not whether anyone edited it afterwards. ConsentVault preserves the evidence instead
-of the flag, and keeps it apart from the systems that act on it.
+- A consent record kept as a flag in a CRM says "yes" and nothing else: not what the person saw, when, or whether anyone edited it afterwards.
+- ConsentVault keeps the evidence instead of the flag: every event is append-only, hash-chained, and timestamped by an authority you do not run.
+- The vault's code, including the code that writes and checks each record, is MIT licensed; the records stay private to whoever runs it. You can read the code, run it yourself, and check a record without trusting us. See [docs/why-open-source.md](docs/why-open-source.md). The managed service's key provider and support answer service are not in this repository.
+
+## What it is
+
+An open-source consent evidence vault, written in Python on PostgreSQL. It stores what was recorded: the box as it was left, the exact wording by its sha256, the time, and what the server received. It then lets anyone check that none of it changed. It is deterministic code with no model on the record path: the same input gives the same output.
 
 <table>
 <tr>
@@ -36,12 +39,12 @@ of the flag, and keeps it apart from the systems that act on it.
 <td width="33%" valign="top"><b>Sealed outside</b><br>Each event's digest is timestamped by an independent RFC 3161 authority. Only a 32-byte digest leaves your host.</td>
 </tr>
 <tr>
-<td valign="top"><b>Two database roles</b><br>The runtime role can read and append, nothing else. It owns nothing and cannot change history, the schema or the triggers; only the owner role migrates.</td>
+<td valign="top"><b>Separate roles</b><br>On the event ledger the runtime role can only read and insert. It owns nothing and cannot change history, the schema or the triggers; only the owner role migrates.</td>
 <td valign="top"><b>The wording is evidence</b><br>The exact disclosure text is stored once by its sha256, and every grant references it by hash.</td>
-<td valign="top"><b>Stops count as much as grants</b><br>Events are ordered by arrival, never by a time the caller claims. A stop outranks a grant until the person's own later, verified grant is released under the release rule. A stop for <code>*</code> stops every purpose.</td>
+<td valign="top"><b>Stops count as much as grants</b><br>Events are ordered by arrival, never by a time the caller claims. <code>--purpose '*'</code> withdraws every purpose on the channel or channels named; a stop applies to its channel, under the rule in the permission view (migrations/0075_permission_by_arrival.sql).</td>
 </tr>
 <tr>
-<td valign="top"><b>Fail closed, with a reason</b><br>If the vault cannot answer, the answer is "no", with a named reason. The answer reports what the record shows, not a legal conclusion.</td>
+<td valign="top"><b>Fail closed, with a reason</b><br>If the vault cannot answer, the answer is <code>unavailable</code>, with a named reason. The answer reports what the record shows, not a legal conclusion.</td>
 <td valign="top"><b>Capture edge included</b><br>A dependency-free edge worker and an embeddable checkbox widget that hashes the wording on screen at submit time.</td>
 <td valign="top"><b>Self-verifying evidence</b><br>Export a bundle a reviewer can check with only Python and openssl, using trust roots and anchors taken from outside the bundle.</td>
 </tr>
@@ -61,40 +64,72 @@ fingerprint of what it stored; nothing about a capture is refused. The consent v
 exactly as it was sent. Seals and anchors live outside your company's control. The gate, the consent timeline and the evidence bundle all read the same ledger. See
 [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
 
-## Quickstart
+## Quick start (about 5 minutes)
+
+You need Docker with the Compose plugin, `openssl`, `curl` and Python 3. Everything below runs on your machine. Once it is running, the only outside call the vault makes is to the timestamp authority, which receives a 32-byte digest and nothing else. This example uses the public authority at freetsa.org; choose your own for real use.
 
 ```
 git clone https://github.com/ndnstyl/consentVault.git && cd consentVault
-export CONSENTVAULT_ADMIN_PASSWORD=$(openssl rand -hex 16)   # bootstrap superuser, used once to create the roles below
-export CONSENTVAULT_MIGRATOR_PASSWORD=$(openssl rand -hex 16) # migrator login; only `migrate` uses it (the owner cannot log in)
-export CONSENTVAULT_OPERATOR_PASSWORD=$(openssl rand -hex 16) # operator console login; owns nothing
-export CONSENTVAULT_APP_PASSWORD=$(openssl rand -hex 16)     # runtime role: SELECT and INSERT only
-export CONSENTVAULT_API_SECRET=$(openssl rand -hex 32)       # signs capture-edge requests
-export CONSENTVAULT_API_TOKEN=$(openssl rand -hex 32)        # bearer token for read endpoints
-export CONSENTVAULT_PURPOSES=marketing,service               # the purposes your consent may name
-export CONSENTVAULT_TSA_URL=https://tsa.example.com/rfc3161
-export CONSENTVAULT_ANCHOR_SINK=https://anchors.example.com/hook   # where `consentvault anchor` writes the chain head
-docker compose up -d --build db
+
+# 1. Settings: random passwords, a timestamp authority, and a folder the vault writes to.
+export CONSENTVAULT_ADMIN_PASSWORD=$(openssl rand -hex 16)
+export CONSENTVAULT_MIGRATOR_PASSWORD=$(openssl rand -hex 16)
+export CONSENTVAULT_OPERATOR_PASSWORD=$(openssl rand -hex 16)
+export CONSENTVAULT_APP_PASSWORD=$(openssl rand -hex 16)
+export CONSENTVAULT_API_SECRET=$(openssl rand -hex 32)
+export CONSENTVAULT_API_TOKEN=$(openssl rand -hex 32)
+export CONSENTVAULT_PURPOSES=marketing,service
+export CONSENTVAULT_TSA_URL=https://freetsa.org/tsr
+export CONSENTVAULT_ANCHOR_SINK=/out/anchors/anchors.jsonl   # a file here; in production use a sink the database host cannot rewrite
+mkdir -p out/anchors out/bundle && chmod -R 777 out          # the vault runs as an unprivileged user
+curl -sS -o out/tsa-root.pem https://freetsa.org/files/cacert.pem
+
+# 2. Start the database, apply the schema, start the service.
+docker compose up -d db
 docker compose run --rm migrate
 docker compose up -d vault
+
+# 3. Check that it answers (no record yet, so it says so).
+curl -s --retry 10 --retry-delay 1 --retry-connrefused --retry-all-errors -H "Authorization: Bearer $CONSENTVAULT_API_TOKEN" \
+  "http://127.0.0.1:8080/v1/permission?contact=%2B15555550100"
 ```
 
-Record a grant. The wording must be registered first by an operator: a grant event is written only for wording the vault
-holds, and a grant may not name a channel or purpose its wording does not (a capture that does not fit is still stored
-whole, and the reason is kept beside it):
+The last call returns `"status": "no_record_found"`. Now record one consent and seal it:
 
 ```
-docker compose run --rm vault consentvault disclosure register \
-  --body "I agree to receive texts about my account. Reply STOP to end." \
-  --label signup-form --channel sms --purpose marketing   # prints the sha256 to use below
-docker compose run --rm vault consentvault capture \
-  --contact "+15555550100" --checked \
-  --disclosure <sha256-of-the-wording> \
-  --channel sms --purpose marketing \
-  --session-ref demo-1 --page-url https://www.example.com/signup
-docker compose run --rm vault consentvault anchor
-docker compose run --rm vault consentvault verify-chain
+cv() { docker compose run --rm -e CONSENTVAULT_TSA_CAFILE=/out/tsa-root.pem -v "$PWD/out:/out" vault consentvault "$@"; }
+
+cv disclosure register --body "I agree to receive texts about my account. Reply STOP to end." \
+  --label signup-form --channel sms --purpose marketing        # prints the sha256 of the wording
+cv capture --contact "+15555550100" --checked --disclosure <sha256-from-above> \
+  --channel sms --purpose marketing --session-ref demo-1 --page-url https://www.example.com/signup
+cv seal            # timestamp the new events with the authority
+cv anchor          # write the chain head to the sink
+cv verify-chain    # recompute the chain from the database
 ```
+
+Wording must be registered before a grant names it, and a grant may not name a channel or purpose its wording does not. The post is still stored whole and unchanged, so the record shows exactly what was received; the refusal applies to the grant, not to the stored post.
+
+### Verify a record offline
+
+Export the person's record as a bundle, then check it with nothing but Python and `openssl`. The trust root and the anchors come from outside the bundle, so the bundle cannot vouch for itself.
+
+```
+cv export "+15555550100" --out /out/bundle
+cd out/bundle
+python3 verify.py --cafile ../tsa-root.pem --anchors ../anchors/anchors.jsonl
+```
+
+A good run ends with `RESULT PASS`. The check fails if the chain does not start at the first event, does not reach every anchor you supply, has a link that does not recompute, or has an event with no seal. A timestamp shows a digest existed at a time; it does not show who ticked the box. Read [docs/evidence-model.md](docs/evidence-model.md).
+
+### Clean up
+
+```
+cd ../..
+docker compose --profile tools down -v    # removes the containers and the database volume
+```
+
+`out/` holds your demo bundle and anchors; delete it when you are done. For a hardened stack (write-once evidence store, key custody, sign-in) see [docs/selfhost.md](docs/selfhost.md).
 
 ### Without Docker
 
@@ -108,16 +143,18 @@ everything else. See [deployment](docs/deployment.md).
 |---|---|
 | `consentvault migrate` | apply pending migrations as the owner role; refuses a changed, missing or out-of-order file |
 | `consentvault disclosure register` | store the exact consent wording and print its sha256 |
-| `consentvault capture` | record a checked consent box as a grant event; `--verification otp` or `--verification inbound_keyword --inbound-message START` records that you verified the person controls the contact point, which a stop's release requires |
-| `consentvault revoke` | record that a person withdrew consent (`--purpose '*'` withdraws every purpose) |
+| `consentvault capture` | record a checked consent box as a grant event; `--verification otp` records that you verified the person controls the contact point; `--inbound-message` stores the post exactly as received, creates no consent, lifts no stop, and exits with the named reason |
+| `consentvault revoke` | record that a person withdrew consent (`--purpose '*'` withdraws every purpose on the channel or channels named; a stop applies to its channel) |
 | `consentvault verify-chain` | recompute the hash chain, check every anchor, report any break |
 | `consentvault anchor` | write the current chain head to `chain_head` and the external sink |
-| `consentvault may-contact` | ask what the record shows for a contact point, channel and purpose (exit 1 = the record does not support contact); a statement of the evidence, not a legal determination |
+| `consentvault may-contact` | print the facts and history recorded for a contact point (exit 1 = the record could not be read, exit 2 = bad input). A contact with a stop on record still exits 0, so exit 0 is not permission to contact |
 | `consentvault seal` / `consentvault verify-seals` | timestamp events with the authority; re-verify every stored seal |
-| `consentvault proof` | full timeline for a contact: grants, stops, current recorded status, seal status |
+| `consentvault proof` | full timeline for a contact: grants, stops, seal status, and a reading of each channel and purpose under the rule in the permission view (migrations/0075_permission_by_arrival.sql); its `allowed` field is that reading, not permission to contact |
 | `consentvault export` | write a self-verifying evidence bundle (verify it with `verify.py --cafile <root> --anchors <sink file>`) |
-| `consentvault classify` | classify an inbound message as stop, not stop, or needs review |
+| `consentvault classify` | a reading of the text you pass in; it writes nothing |
 | `consentvault serve` | run the HTTP API |
+
+A clear or empty result is not permission to contact. Whether a contact is permitted is for the customer's counsel to decide.
 
 Run `consentvault --help` for the commands installed in your version.
 
@@ -147,8 +184,7 @@ a link that does not recompute, or has an event with no seal. Read [docs/evidenc
   keep records, and what a court or regulator will accept are your decisions. Involving qualified counsel in your
   own jurisdiction is recommended as best practice and is your choice.
 - A timestamp shows that a digest existed at a time. It does not show who ticked the box.
-- A web-form grant never lifts a stop: only a grant the integrator marks as verified (a one-time code the
-  integrator checked, or an inbound START message) does. The vault records the claim; the code check is yours.
+- A text, START included, is stored as received and lifts no stop. The way back is a later consent through your form, on the same contact point.
 - An evidence bundle can be checked for an unbroken chain only against anchors the verifier takes from the anchor sink itself;
   events after the newest anchor you hold are not covered.
 - If the capture surface is compromised before the vault sees the data, the vault records what it was told.
@@ -158,11 +194,11 @@ a link that does not recompute, or has an event with no seal. Read [docs/evidenc
 - Integrations (CRMs, dialers, messaging providers) are adapters you write or configure; ConsentVault.AI does not
   enforce anything in systems it does not control.
 
-Report a vulnerability as described in [SECURITY.md](SECURITY.md).
+Report a vulnerability as described in [SECURITY.md](SECURITY.md). Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## Repository layout
 
-- `src/consentvault/`: the Python package (only dependency: `psycopg`).
+- `src/consentvault/`: the Python package (only required dependency: `psycopg`).
 - `migrations/`: ordered SQL with a matching `down/` file for each.
 - `edge/`: an optional dependency-free capture worker and an embeddable checkbox widget.
 - `docs/`: documentation (below).
@@ -176,6 +212,7 @@ Report a vulnerability as described in [SECURITY.md](SECURITY.md).
 | [Evidence model](docs/evidence-model.md) | what is recorded, what a seal covers, what it does not show |
 | [HTTP API](docs/api.md) | signed event intake, permission and proof endpoints |
 | [Adapters](docs/adapters.md) | CRM and messaging interfaces |
+| [Why it is open source](docs/why-open-source.md) | what is open and how anyone can check it |
 | [Deployment](docs/deployment.md) | requirements, database roles, configuration |
 | [Capture edge](edge/README.md) | the worker and the checkbox widget |
 | [Changelog](CHANGELOG.md) | what changed in each release |

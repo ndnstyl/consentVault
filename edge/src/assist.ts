@@ -212,7 +212,7 @@ async function ask(request: Request, env: AssistEnv, deps: GatewayDeps): Promise
 
   const sub = tokenClaims(rec.token)?.sub ?? "";
   const toCore = {
-    surface: "portal", conversation_id: b.conversation_id, question, history: Array.isArray(b.history) ? b.history.slice(-4) : [], page: typeof b.page === "string" ? b.page.slice(0, 200) : undefined,
+    surface: "portal", conversation_id: b.conversation_id, question,
     role: me.role, capability: `${objectId}.${secret}`, question_id: questionId,
     member_key: await sha256Hex(`portal-member:${sub}:${rec.org_id}`),
     contact: { org_id: rec.org_id, email: rec.email ?? null },

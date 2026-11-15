@@ -34,6 +34,14 @@ export class SessionGate {
     await this.storage.deleteAll();
   }
 
+  // Capability operations run one at a time inside the object, so the count of uses left is read and written without another read between.
+  private tail: Promise<unknown> = Promise.resolve();
+  private serial<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.tail.then(fn, fn);
+    this.tail = run.catch(() => undefined);
+    return run;
+  }
+
   private async caps(nowMs: number): Promise<Record<string, CapRecord>> {
     const raw = (await this.storage.get(CAPS_KEY)) as string | undefined;
     const all = raw ? (JSON.parse(raw) as Record<string, CapRecord>) : {};
@@ -65,10 +73,12 @@ export class SessionGate {
     }
     if (rec.question_id !== a.questionId) return { ok: false, reason: "wrong_question" };
     if (rec.uses_left <= 0) return { ok: false, reason: "spent" };
-    const live = await this.store.load(rec.sid, a.nowMs);
-    if (!live || live.org_id !== rec.org) return { ok: false, reason: "wrong_session" };
+    // The use is spent and stored first; only then is the session read. A session that has ended still costs the use, so no ordering of
+    // overlapping reads can pass more than the four the capability allows.
     rec.uses_left -= 1;
     await this.storage.put(CAPS_KEY, JSON.stringify(all));
+    const live = await this.store.load(rec.sid, a.nowMs);
+    if (!live || live.org_id !== rec.org) return { ok: false, reason: "wrong_session" };
     return { ok: true, sid: rec.sid, org: rec.org };
   }
 
@@ -77,8 +87,8 @@ export class SessionGate {
     const s = this.store;
     let out: unknown;
     switch (a.op) {
-      case "mintCap": out = await this.mintCap(a); break;
-      case "spendCap": out = await this.spendCap(a); break;
+      case "mintCap": out = await this.serial(() => this.mintCap(a)); break;
+      case "spendCap": out = await this.serial(() => this.spendCap(a)); break;
       case "create": await s.create(a.sid, a.rec, a.nowMs); await this.storage.setAlarm(a.rec.until * 1000); out = null; break;
       case "load": out = await s.load(a.sid, a.nowMs); break;
       case "refresh": out = await s.refresh(a.sid, a.nowMs, a.leadSeconds); break;

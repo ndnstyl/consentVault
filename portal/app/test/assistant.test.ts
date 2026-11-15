@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ASK_COPY, ASK_MAX, ask, toReply } from '../src/lib/assist.ts';
+import { ASK_COPY, ASK_MAX, ask, clearsInput, toReply, type AskReply } from '../src/lib/assist.ts';
 import { scanCopy } from '../src/lib/copycheck.ts';
 const { AssistantPanel, AskButton } = await import('../src/components/Assistant.tsx');
 
@@ -63,4 +63,27 @@ test('the header shows the button only when the build flag is on', () => {
   const shell = fs.readFileSync('src/components/Shell.tsx', 'utf8');
   assert.match(shell, /\{assistantEnabled\(\) && <Assistant \/>\}/);
   assert.equal(process.env.NEXT_PUBLIC_ASSISTANT, undefined, 'the flag is off unless a build sets it');
+});
+
+test('the request carries the conversation and the question and nothing else: no page path, no earlier turns', async () => {
+  let body = '';
+  const f = (async (_u: string, init: RequestInit) => { body = String(init.body); return new Response(JSON.stringify({ kind: 'answer', text: 'ok' }), { status: 200 }); }) as unknown as typeof fetch;
+  await ask('How do I start?', 'c_' + 'a'.repeat(32), 'org-1', f);
+  assert.deepEqual(Object.keys(JSON.parse(body)).sort(), ['conversation_id', 'question']);
+});
+
+test('the box warns against typing a customer\'s name, email or phone, and the question box points at the warning', () => {
+  assert.match(ASK_COPY.warning, /Do not type a customer's name, email address or phone number/);
+  assert.deepEqual(scanCopy(ASK_COPY.warning), []);
+  const html = renderToStaticMarkup(React.createElement(AssistantPanel, { turns: [], busy: false, onSend: async (): Promise<AskReply> => ({ kind: 'answer', text: 'x', links: [] }), onClose: () => {} }));
+  assert.ok(html.includes(ASK_COPY.warning.replace("'", '&#x27;')));
+  const warnId = /<p id="([^"]+)"[^>]*>Do not type/.exec(html)?.[1];
+  assert.ok(warnId, 'the warning has an id');
+  assert.match(html, new RegExp(`<textarea[^>]*aria-describedby="[^"]*${warnId}`));
+});
+
+test('the typed question is kept when nothing answered it, and cleared only when something did', () => {
+  for (const k of ['failed', 'signin', 'limited', 'unavailable'] as const) assert.equal(clearsInput(k), false, k);
+  for (const k of ['answer', 'refusal', 'handoff'] as const) assert.equal(clearsInput(k), true, k);
+  assert.match(ASK_COPY.failed, /still in the box/);
 });

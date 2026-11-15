@@ -6,6 +6,7 @@ export const ASK_COPY = {
   button: 'Ask',
   title: 'Ask a question',
   greeting: 'Ask about a portal screen, your setup, your plan and usage, or what an error message means.',
+  warning: 'Do not type a customer\'s name, email address or phone number.',
   scope: 'I cannot read your records, contact points or evidence, and I cannot give legal advice. If I cannot answer, I pass your question to the team.',
   label: 'Your question',
   send: 'Send',
@@ -18,6 +19,9 @@ export const ASK_COPY = {
 } as const;
 
 export const ASK_MAX = 4000;
+
+/** The typed question leaves the box only when something answered it; a failure, an ended sign-in, a limit or an off switch keeps it there. */
+export const clearsInput = (kind: AskKind): boolean => kind === 'answer' || kind === 'refusal' || kind === 'handoff';
 
 export type AskKind = 'answer' | 'refusal' | 'handoff' | 'limited' | 'unavailable' | 'signin' | 'failed';
 export interface AskLink { label: string; path: string }
@@ -73,7 +77,7 @@ export async function ask(question: string, conversationId: string, orgId: strin
   try {
     res = await f('/assist/ask', {
       method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', accept: 'application/json', 'x-cv-org': orgId },
-      body: JSON.stringify({ conversation_id: conversationId, question, page: typeof location === 'undefined' ? undefined : location.pathname }),
+      body: JSON.stringify({ conversation_id: conversationId, question }),
     });
   } catch { return toReply(0, null); }
   return toReply(res.status, await res.json().catch(() => null));

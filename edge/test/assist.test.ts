@@ -306,3 +306,26 @@ test("assist.ts calls the vault only as a GET through the gateway", () => {
   assert.ok(!/method:\s*["'](POST|PUT|PATCH|DELETE)["'][^}]*\/v1\//.test(src));
   assert.equal((src.match(/viaGateway\(/g) ?? []).length, 3, "the definition and the two callers (role lookup, reader)");
 });
+
+test("the use is spent before the session is read, so ten overlapping reads against one capability can never pass more than four", async () => {
+  // A storage whose reads yield to the event loop, as real storage does, with no one-at-a-time wrapper around the object.
+  const data = new Map<string, string>();
+  const tick = () => new Promise((r) => setTimeout(r, 1));
+  const storage = { get: async (k: string) => { await tick(); return data.get(k); }, put: async (k: string, v: string) => { await tick(); data.set(k, v); }, delete: async (k: string) => data.delete(k), setAlarm: async () => {}, deleteAll: async () => data.clear() };
+  const gate = new SessionGate({ storage } as any, { ...AUTH_ENV_BASE });
+  const rec: SessionRecord = { token: jwt({ sub: "u", sid: "ps", exp: nowSec() + 600 }), token_exp: nowSec() + 600, refresh: "rt", provider_sid: "ps", org_id: ORG_A, tenant: { token: TENANT_A, exp: nowSec() + 600 }, until: nowSec() + 28800, iat: nowSec(), amr: ["hwk"], method: "Passkey", email: null, email_verified: true };
+  const op = async (body: Record<string, unknown>) => (await (await gate.fetch(new Request("https://session-gate/op", { method: "POST", body: JSON.stringify(body) }))).json()) as any;
+  await op({ op: "create", sid: SID_A, rec, nowMs: NOW_MS });
+  assert.equal((await op({ op: "mintCap", sid: SID_A, capHash: "h1", org: ORG_A, questionId: "q_1", nowMs: NOW_MS })).ok, true);
+  const results = await Promise.all(Array.from({ length: 10 }, () => op({ op: "spendCap", capHash: "h1", questionId: "q_1", nowMs: NOW_MS })));
+  assert.equal(results.filter((r) => r.ok).length, 4, JSON.stringify(results.map((r) => r.ok ? "ok" : r.reason)));
+});
+
+test("the core is sent only what it uses: no page path and no earlier turns, whatever the browser posted", async () => {
+  const t = setup();
+  await t.make(SID_A, ORG_A, TENANT_A);
+  const res = await handleAssist(ask(SID_A, { ...Q, page: "/records", history: [{ q: "an earlier question", a: "an earlier answer" }] }), t.env, t.deps);
+  assert.equal(res.status, 200);
+  assert.deepEqual(Object.keys(t.coreCalls[0].body).sort(), ["capability", "contact", "conversation_id", "member_key", "question", "question_id", "role", "surface"]);
+  assert.ok(!JSON.stringify(t.coreCalls[0].body).includes("an earlier question") && !JSON.stringify(t.coreCalls[0].body).includes("/records"));
+});

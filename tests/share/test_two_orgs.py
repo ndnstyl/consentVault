@@ -29,8 +29,8 @@ def test_org_b_cannot_list_or_withdraw_org_a_links(record):
 def test_a_share_row_cannot_point_across_organisations(record):
     with record.superuser() as su:
         with pytest.raises(psycopg.errors.ForeignKeyViolation):
-            su.execute("INSERT INTO consentvault.proof_share (org_id, share_id, link_digest, event_id, flags, created_by, code_version)"
-                       " VALUES (%s, gen_random_uuid(), repeat('a', 64), %s, '{}'::jsonb, 'x', 'x')",
+            su.execute("INSERT INTO consentvault.proof_share (org_id, share_id, link_digest, event_id, created_by, code_version)"
+                       " VALUES (%s, gen_random_uuid(), repeat('a', 64), %s, 'x', 'x')",
                        (record.b.org_id, record.a.event_ids[0]))
 
 

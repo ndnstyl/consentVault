@@ -37,7 +37,7 @@ def mounted():
     return build_routes(admin_app=admin, auth=stuff, connect=lambda: None, owner_connect=lambda: None, token_key=stuff,
                         crypto=stuff, custody=stuff, evidence_store=stuff, archive_store=stuff, ledger=stuff, signer=stuff,
                         notifier=stuff, stripe=stuff, webhook_secret="whsec", link_secret=b"x" * 32, mint_token=lambda o, s: "t",
-                        region="US")
+                        region="US", record_links=(lambda: None, "verify.example.com"))
 
 
 def test_the_client_file_is_read_and_calls_something():

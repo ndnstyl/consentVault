@@ -29,8 +29,23 @@ def link_post(t, org, event_id, post_id):
                    (org.org_id, event_id, uuid.UUID(str(post_id))))
 
 
+def seal_post(t, org, post_id, tsa):
+    """A real seal of the stored post: the digest the seal module computes, stamped by the throwaway authority."""
+    from datetime import datetime, timezone
+
+    from consentvault import seal_raw
+
+    with t.superuser() as su:
+        row = su.execute("SELECT * FROM consentvault.raw_post WHERE org_id = %s AND post_id = %s", (org.org_id, uuid.UUID(post_id))).fetchone()
+        columns, digest = seal_raw.digest_columns(row)
+        su.execute("INSERT INTO consentvault.raw_post_seal (org_id, post_id, hash_version, columns, digest, tsa_url, token, gen_time)"
+                   " VALUES (%s, %s, %s, %s, %s, 'https://tsa.example.com', %s, %s)",
+                   (org.org_id, uuid.UUID(post_id), seal_raw.RAW_SEAL_VERSION, columns, digest, tsa.stamp(digest.hex()),
+                    datetime.now(timezone.utc)))
+
+
 @pytest.fixture
-def record(world, tmp_path):  # noqa: F811
+def record(world, tmp_path, throwaway_tsa):  # noqa: F811
     """The first organisation's grant, with a stored widget post that carries every field the page may show."""
     t = world
     body = {"contact": PHONE, "checked": True, "decided_at": DECIDED, "disclosure_text": WORDING,
@@ -40,6 +55,7 @@ def record(world, tmp_path):  # noqa: F811
     event_id = t.a.event_ids[0]
     link_post(t, t.a, event_id, stored.post_id)
     t.record_post_id = str(stored.post_id)
+    seal_post(t, t.a, t.record_post_id, throwaway_tsa)
     return t
 
 
@@ -83,13 +99,15 @@ def mint_link(t, *, org=None, event_id=None, flags=None, ack=None, note="", acto
         return share.mint(app, event_id=event_id or org.event_ids[0], actor=actor, flags=flags or {}, contact_ack=ack, note=note)
 
 
-def attach_post(t, tmp_path, event_id, **overrides):
+def attach_post(t, tmp_path, event_id, tsa=None, **overrides):
     """Store a widget post for the first organisation and make it the trigger of ``event_id``."""
     body = {"contact": PHONE, "checked": True, "decided_at": DECIDED, "disclosure_text": WORDING, "disclosure_sha256": "0" * 64,
             "page_url": PAGE_URL, "session": "s-canary"}
     body.update(overrides)
     stored, _ = post(t, make_writer(t, tmp_path), body, org=t.a, source_id=t.a.source_id)
     link_post(t, t.a, event_id, stored.post_id)
+    if tsa is not None:
+        seal_post(t, t.a, str(stored.post_id), tsa)
     return str(stored.post_id)
 
 

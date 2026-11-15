@@ -26,16 +26,19 @@ def _page(nasty, routes, **flags):
 
 def test_nothing_visitor_controlled_reaches_the_page_unescaped(nasty, routes):
     page, _ = _page(nasty, routes, show_page_url=True)
-    assert "<script>alert" not in page and "<img src=x" not in page and "onerror=alert" not in page
+    at = page.find("<script>alert")
+    assert at == -1, page[max(0, at - 300):at + 120]
+    assert "<img" not in page and "&lt;img src=x onerror=alert(2)&gt;" in page  # present only as escaped text
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
     assert "\x01" not in page and "\x07" not in page and "‮" not in page
     assert len(re.findall(r"<script\b", page)) == 1  # only the one recompute script of ours
 
 
-def test_the_private_note_is_never_public(nasty, routes):
-    page, made = _page(nasty, routes)
-    assert "alert(1)" not in page
-    assert "alert(1)" not in text_of(get(routes, made["link_id"], ".json"))
+def test_the_private_note_is_never_public(record, routes):
+    made = mint_link(record, note="PRIVATE-NOTE-CANARY <script>alert(9)</script>")
+    assert "PRIVATE-NOTE-CANARY" not in text_of(get(routes, made["link_id"]))
+    assert "PRIVATE-NOTE-CANARY" not in text_of(get(routes, made["link_id"], ".json"))
+    assert "PRIVATE-NOTE-CANARY" not in text_of(get(routes, made["link_id"], "/record.zip"))
 
 
 def test_a_certificate_value_is_a_link_only_for_the_exact_pattern(record, tmp_path, routes):
@@ -60,3 +63,17 @@ def test_the_csp_lists_only_hashes_of_our_own_style_and_script(record, routes):
     assert csp.startswith("default-src 'none'") and "frame-ancestors 'none'" in csp
     assert re.search(r"script-src 'sha256-[A-Za-z0-9+/=]+'", csp) and re.search(r"style-src 'sha256-[A-Za-z0-9+/=]+'", csp)
     assert "unsafe-inline" not in csp and "unsafe-eval" not in csp
+
+
+def test_a_hostile_contact_page_address_and_seller_name_are_escaped(record):
+    from consentvault import share_render
+
+    from .conftest import admin
+
+    with admin(record) as app:
+        material = share.preview_material(app, event_id=record.a.event_ids[0], flags={"show_contact": True, "show_page_url": True})
+    view = share.build_view(material, record.crypto)
+    view.update(contact=NASTY, page_url=NASTY, org_name=NASTY)
+    page = share_render.render_page(view).html.decode()
+    assert "<script>alert" not in page and "<img" not in page and "&lt;script&gt;alert(1)&lt;/script&gt;" in page
+    assert len(re.findall(r"<script\b", page)) == 1

@@ -21,7 +21,7 @@ BUILT_IN_ROUTES = frozenset({("POST", "/v1/proof")})
 
 def build_routes(*, admin_app, auth, connect, owner_connect, token_key, crypto, custody, evidence_store, archive_store, ledger,
                  signer, notifier, stripe, webhook_secret, link_secret, mint_token, transport=None, region=None, confirmations=None,
-                 confirmations_api_base=None) -> tuple:
+                 confirmations_api_base=None, record_links=None) -> tuple:
     """Every route family the dashboard uses, in one place: admin (sign-in, members, configuration), systems and deliveries,
     evidence packages, billing, and erasure / offboarding / legal holds. serve-cloud mounts exactly this tuple; a test compares it
     with the routes the dashboard's API client calls. With the confirmation service on (``confirm.wiring``), its door (the
@@ -43,6 +43,12 @@ def build_routes(*, admin_app, auth, connect, owner_connect, token_key, crypto, 
             BillingRoutes(connect=connect, mint_token=mint_token, client=stripe, webhook_secret=webhook_secret),
             lifecycle_routes(lifecycle, auth),
             TwentyWebhookAdapter(TwentyReceiver(connect, crypto, custody, token_key, region=region)))
+    if record_links is not None:  # (a connection to the public record link login, the host the links are shown under); off by default
+        from .share_routes import PublicRecordLinks, RecordLinkRoutes
+
+        public_connect, public_host = record_links
+        routes = routes + (RecordLinkRoutes(connect, crypto, auth, public_host=public_host),
+                           PublicRecordLinks(public_connect, crypto, region=region))
     if confirmations is None:
         return routes
     from .confirm.wiring import ConfirmationDoor

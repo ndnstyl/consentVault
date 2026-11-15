@@ -1,0 +1,19 @@
+:root{color-scheme:light dark}
+body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;line-height:1.5}
+h1{font-size:1.6rem;margin:0 0 .5rem}
+h2{font-size:1.15rem;margin:2rem 0 .5rem;border-top:1px solid #8888;padding-top:1rem}
+dl{display:grid;grid-template-columns:minmax(10rem,14rem) 1fr;gap:.35rem 1rem;margin:.5rem 0}
+dt{font-weight:600}
+dd{margin:0;overflow-wrap:anywhere}
+code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85rem}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#8881;padding:.5rem .6rem;margin:.25rem 0;border-radius:3px}
+blockquote{border-left:3px solid #8888;margin:.5rem 0;padding:.1rem 1rem;white-space:pre-wrap;overflow-wrap:anywhere}
+.stmt{margin:.4rem 0}
+.check{margin:1rem 0;padding:.6rem .8rem;border:1px solid #8886;border-radius:3px}
+.check h3{font-size:1rem;margin:0 0 .25rem}
+.label{font-weight:600;display:block;margin-top:.4rem}
+.small{font-size:.85rem}
+form{display:flex;gap:.5rem;flex-wrap:wrap;margin:.5rem 0}
+input[type=text]{flex:1;min-width:12rem;padding:.4rem;font-size:1rem}
+button{padding:.4rem .9rem;font-size:1rem}
+a{overflow-wrap:anywhere}

@@ -153,6 +153,9 @@ def build_cloud(cfg, env: Mapping[str, str]):
     signer = resolve_object(_plugin_spec(env, "CONSENTVAULT_EVIDENCE_SIGNER")).from_environment(env)
     notifier = resolve_object(_plugin_spec(env, "CONSENTVAULT_NOTIFIER")).from_environment(env)
     stripe = HttpStripeClient(_read(env, "CONSENTVAULT_STRIPE_SECRET_KEY_FILE"))
+    from .share_routes import public_settings
+
+    record_link_settings = public_settings(env)  # None unless CONSENTVAULT_PUBLIC_VERIFY_DSN is set: record links are off by default
     routes = build_routes(
         admin_app=admin_app, auth=auth, connect=connect, owner_connect=owner_connect, token_key=token_key, crypto=crypto,
         custody=custody, evidence_store=store, archive_store=archive_store, ledger=LifecycleLedger(ledger_store, clock=dbclock.datetime_clock(connect)),
@@ -160,7 +163,8 @@ def build_cloud(cfg, env: Mapping[str, str]):
         link_secret=bytes.fromhex(_read(env, "CONSENTVAULT_LINK_SECRET_FILE")),
         mint_token=lambda o, sc: mint_org_token(token_key, o, sc, credential_id=None),
         transport=egress, region=cfg.default_region,
-        confirmations=confirmations, confirmations_api_base=confirm_settings[0] if confirm_settings else None)
+        confirmations=confirmations, confirmations_api_base=confirm_settings[0] if confirm_settings else None,
+        record_links=None if record_link_settings is None else ((lambda dsn=record_link_settings[0]: db.connect(dsn)), record_link_settings[1]))
     return api.CloudApiSettings(
         dsn=cfg.require_dsn(), token_key=token_key, access_tokens=access, receipts=receipts, crypto=crypto,
         evidence_store=store, token_endpoint_url=access_url, cursor_key=cursor_key, routes=routes,

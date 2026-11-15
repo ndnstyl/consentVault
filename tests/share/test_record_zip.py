@@ -66,15 +66,15 @@ def test_a_changed_byte_in_any_file_fails_it(record, routes, throwaway_tsa, tmp_
     assert _run(out, throwaway_tsa.ca).returncode == 0
 
 
-def test_the_file_holds_the_body_only_when_the_contact_is_shown(record, routes, throwaway_tsa, tmp_path):
+def test_the_file_holds_the_body_only_when_the_contact_and_page_address_are_shown(record, routes, throwaway_tsa, tmp_path):
     _, out = _fixture(record, throwaway_tsa, routes, tmp_path)
     assert not (out / "post_body.json").exists()
     assert "5555550142" not in "".join(p.read_text(errors="replace") for p in out.iterdir() if p.is_file() and p.suffix != ".tsr")
 
 
-def test_with_the_contact_shown_the_body_is_carried_and_checked(record, routes, throwaway_tsa, tmp_path):
+def test_with_the_contact_and_the_page_address_shown_the_body_is_carried_and_checked(record, routes, throwaway_tsa, tmp_path):
     (tmp_path / "w").mkdir()
-    made = mint_link(record, flags={"show_contact": True}, ack=share.CONTACT_ACK)
+    made = mint_link(record, flags={"show_contact": True, "show_page_url": True}, ack=share.CONTACT_ACK)
     zipped = get(routes, made["link_id"], "/record.zip")
     out = tmp_path / "w" / "one"
     with zipfile.ZipFile(io.BytesIO(zipped.raw)) as zf:

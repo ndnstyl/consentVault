@@ -290,6 +290,34 @@
       "note": "the edge name each organisation points its wording link host at (edge.consentvault.ai); both or neither with CONSENTVAULT_CONFIRMATIONS_API_BASE"
     },
     {
+      "name": "CONSENTVAULT_PUBLIC_VERIFY_DSN",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "note": "the address of the public record link login (a member of consentvault_public_verify, migration 0112); setting it turns record links on, unset they are off; with CONSENTVAULT_PUBLIC_VERIFY_HOST"
+    },
+    {
+      "name": "CONSENTVAULT_PUBLIC_VERIFY_HOST",
+      "kind": "setting",
+      "required": false,
+      "used_by": [
+        "vault"
+      ],
+      "read_by": "product",
+      "deployments": [
+        "cloud",
+        "self-host"
+      ],
+      "note": "the host record links are shown under (default verify.consentvault.ai); set only together with CONSENTVAULT_PUBLIC_VERIFY_DSN"
+    },
+    {
       "name": "CONSENTVAULT_CURSOR_KEY_FILE",
       "kind": "secret_file",
       "required": true,

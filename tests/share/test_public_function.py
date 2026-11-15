@@ -27,10 +27,19 @@ def test_the_login_reads_no_table(record, public_conn):
                 public_conn.execute(sql)
 
 
-def test_the_login_can_run_one_function_and_no_other(record, public_conn):
-    rows = public_conn.execute(
-        "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'consentvault'"
-        " AND has_function_privilege(current_user, p.oid, 'EXECUTE') ORDER BY 1").fetchall()
+def test_the_login_can_run_one_function_beyond_what_every_login_can(record, public_dsn):
+    """A function created without a revoke is runnable by every role (helpers and trigger functions); the public login must hold
+    exactly one execute right beyond a role that holds nothing."""
+    import uuid as _uuid
+
+    control = "ctl_" + _uuid.uuid4().hex[:8]
+    with record.superuser() as su:
+        su.execute(f'CREATE ROLE "{control}" NOLOGIN')
+        rows = su.execute(
+            "SELECT p.proname, p.oid::regprocedure::text AS sig FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace"
+            " WHERE n.nspname = 'consentvault' AND has_function_privilege('consentvault_public_verify', p.oid, 'EXECUTE')"
+            " AND NOT has_function_privilege(%s, p.oid, 'EXECUTE') ORDER BY 1", (control,)).fetchall()
+        su.execute(f'DROP ROLE "{control}"')
     assert [r["proname"] for r in rows] == ["public_proof_view"]
 
 
@@ -56,7 +65,20 @@ def test_flags_on_add_exactly_their_ciphertext(record, public_conn):
     made = mint_link(record, flags={"show_contact": True, "show_page_url": True}, ack=share.CONTACT_ACK)
     material = public_conn.execute("SELECT consentvault.public_proof_view(%s, 'page') AS r",
                                    (_digest(made["link_id"]),)).fetchone()["r"]["material"]
-    assert material["contact_ct_hex"] and material["page_url_ct_hex"] and material["body_ct_hex"]
+    assert material["contact_ct_hex"] and material["page_url_ct_hex"] and material["post"]["body_ct_hex"]
+
+
+def test_the_post_body_leaves_only_with_both_the_contact_and_the_page_address(record, public_conn):
+    from consentvault import share
+
+    def body_of(flags, ack):
+        made = mint_link(record, flags=flags, ack=ack)
+        got = public_conn.execute("SELECT consentvault.public_proof_view(%s, 'page') AS r", (_digest(made["link_id"]),)).fetchone()["r"]
+        return got["material"]["post"].get("body_ct_hex")
+
+    assert body_of({"show_contact": True}, share.CONTACT_ACK) is None
+    assert body_of({"show_page_url": True}, None) is None
+    assert body_of({"show_contact": True, "show_page_url": True}, share.CONTACT_ACK)
 
 
 def test_an_unknown_digest_returns_nothing_but_the_status(record, public_conn):

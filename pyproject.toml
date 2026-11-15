@@ -36,6 +36,7 @@ packages = ["src/consentvault"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "migrations" = "consentvault/_migrations"
+"edge/public-verify" = "consentvault/_public_verify"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

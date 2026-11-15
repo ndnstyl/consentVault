@@ -638,7 +638,7 @@
    "line": 9,
    "template": "consentvault erase: the fingerprint must be 64 hex characters",
    "meaning": "consentvault erase: the fingerprint must be 64 hex characters",
-   "defined_in": "0054_export_keys.sql"
+   "defined_in": "0112_record_link.sql"
   },
   {
    "code": "db_erase_contact_thryzv",
@@ -647,7 +647,7 @@
    "line": 16,
    "template": "legal_hold_active:%",
    "meaning": "legal_hold_active:%",
-   "defined_in": "0054_export_keys.sql"
+   "defined_in": "0112_record_link.sql"
   },
   {
    "code": "db_erase_contact_vsvyym",
@@ -656,7 +656,7 @@
    "line": 12,
    "template": "consentvault erase: an admin or restore token is required",
    "meaning": "consentvault erase: an admin or restore token is required",
-   "defined_in": "0054_export_keys.sql"
+   "defined_in": "0112_record_link.sql"
   },
   {
    "code": "db_erase_raw_post_key_nxtsjr",
@@ -866,6 +866,15 @@
    "defined_in": "0050_records_jobs.sql"
   },
   {
+   "code": "db_inline_code_block_rsstgn",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 4,
+   "template": "consentvault migration 0112 refused: the role consentvault_public_verify does not exist. As a superuser (or the ",
+   "meaning": "consentvault migration 0112 refused: the role consentvault_public_verify does not exist. As a superuser (or the",
+   "defined_in": "0112_record_link.sql"
+  },
+  {
    "code": "db_inline_code_block_rvwqpv",
    "function": "inline_code_block",
    "signature": "",
@@ -918,6 +927,15 @@
    "template": "consentvault migration 0050 refused: consentvault_records_jobs must be a NOLOGIN group, neither a ",
    "meaning": "consentvault migration 0050 refused: consentvault_records_jobs must be a NOLOGIN group, neither a",
    "defined_in": "0050_records_jobs.sql"
+  },
+  {
+   "code": "db_inline_code_block_yypqrx",
+   "function": "inline_code_block",
+   "signature": "",
+   "line": 10,
+   "template": "consentvault migration 0112 refused: consentvault_public_verify must be a NOLOGIN group, neither a superuser nor BYPASSRLS",
+   "meaning": "consentvault migration 0112 refused: consentvault_public_verify must be a NOLOGIN group, neither a superuser nor BYPASSRLS",
+   "defined_in": "0112_record_link.sql"
   },
   {
    "code": "db_inline_code_block_zszqpx",
@@ -1343,6 +1361,15 @@
    "defined_in": "0005_admin.sql"
   },
   {
+   "code": "db_public_proof_view_nxnwrh",
+   "function": "consentvault.public_proof_view",
+   "signature": "text,text,text",
+   "line": 15,
+   "template": "consentvault public_proof_view: kind is page, file, match or match_context",
+   "meaning": "consentvault public_proof_view: kind is page, file, match or match_context",
+   "defined_in": "0112_record_link.sql"
+  },
+  {
    "code": "db_raw_post_key_delete_guard_gkhrnq",
    "function": "consentvault.raw_post_key_delete_guard",
    "signature": "",
@@ -1530,6 +1557,15 @@
    "template": "consentvault records: a confirmation status is sent, delivered, failed, dead or skipped",
    "meaning": "consentvault records: a confirmation status is sent, delivered, failed, dead or skipped",
    "defined_in": "0044_records.sql"
+  },
+  {
+   "code": "db_record_link_material_vqwwsj",
+   "function": "consentvault.record_link_material",
+   "signature": "uuid,uuid,boolean,boolean,boolean",
+   "line": 12,
+   "template": "consentvault record_link_material: no tenant entered",
+   "meaning": "consentvault record_link_material: no tenant entered",
+   "defined_in": "0112_record_link.sql"
   },
   {
    "code": "db_record_reveal_note_wpgvky",

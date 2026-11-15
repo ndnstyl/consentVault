@@ -183,7 +183,9 @@ def test_the_0067_down_migration_leaves_nothing_behind_on_an_empty_vault(dsn, su
     down_0080 = (MIGRATIONS / "down" / "0080_request_keys_as_digests.sql").read_text()  # the guard function it added
     down_0079 = (MIGRATIONS / "down" / "0079_restored_copy_original_arrival.sql").read_text()  # the original arrivals depend on it
     down_0078 = (MIGRATIONS / "down" / "0078_request_key_on_the_post.sql").read_text()  # the request keys beside the posts depend on it
+    down_0112 = (MIGRATIONS / "down" / "0112_record_link.sql").read_text()  # the record link table points at a post
     with psycopg.connect(super_dsn, autocommit=True) as su:
+        su.execute(down_0112)
         su.execute(down_0081)
         su.execute(down_0080)
         su.execute(down_0079)

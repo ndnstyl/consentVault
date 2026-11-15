@@ -76,7 +76,6 @@ def test_a_failed_erasure_withdraws_nothing(record):
 def test_a_lapsed_organisation_still_reads(record, routes):
     made = mint_link(record)
     with record.superuser() as su:
-        su.execute("ALTER TABLE consentvault.organization DISABLE TRIGGER USER")
         su.execute("UPDATE consentvault.organization SET status = 'suspended' WHERE org_id = %s", (record.a.org_id,))
-        su.execute("ALTER TABLE consentvault.organization ENABLE TRIGGER USER")
+        assert su.execute("SELECT status FROM consentvault.organization WHERE org_id = %s", (record.a.org_id,)).fetchone()["status"] == "suspended"
     assert get(routes, made["link_id"]).status == 200

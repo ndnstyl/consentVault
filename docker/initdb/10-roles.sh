@@ -14,6 +14,8 @@
 #   consentvault_records_jobs group role for the records export worker in multi-tenant mode (migration 0050); its login is a member.
 #   consentvault_isolation_self_test group role for the nightly isolation self-test (migration 0059): canary tokens only.
 #   consentvault_restore_drill group role for the restore drill (migration 0059): appends the drill record only.
+#   consentvault_public_verify group role for the public record link page (migration 0112): executes one function and reads no table;
+#                          its login (made by the deployment) is a member.
 #   consentvault_integrity group role for the seal, verify and anchor jobs in multi-tenant mode (migration 0048): the
 #                          per-organisation token handout and the evidence-table reads and appends those jobs make
 # The owner is a member of consentvault_operator only so the migration can hand it those functions.
@@ -49,6 +51,10 @@ CREATE ROLE consentvault_isolation_self_test NOLOGIN;
 SELECT NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_restore_drill') AS make_drill \gset
 \if :make_drill
 CREATE ROLE consentvault_restore_drill NOLOGIN;
+\endif
+SELECT NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_public_verify') AS make_public_verify \gset
+\if :make_public_verify
+CREATE ROLE consentvault_public_verify NOLOGIN;
 \endif
 SELECT NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'consentvault_console') AS make_console \gset
 \if :make_console

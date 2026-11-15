@@ -130,6 +130,9 @@ ACTIONS: dict[str, str] = {
     "system.gate_credential_revoked": "Connected system gate credential revoked",
     "setup.step_skipped": "Setup step skipped",
     "setup.step_unskipped": "Setup step returned to to do",
+    "share.created": "Record link created",
+    "share.withdrawn": "Record link withdrawn",
+    "share.match_reset": "Record link match lock reset",
 }
 
 # platform-chain-only actions: never shown in a portal's filter menu (the platform chain has no organisation)

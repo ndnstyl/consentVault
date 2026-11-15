@@ -11,7 +11,9 @@ from consentvault.evidence import _open_contact_key
 
 from export.support import OTHER_PHONE, PHONE
 
-from .conftest import PAGE_URL, admin, get, mint_link, text_of
+from .conftest import admin, get, mint_link, text_of
+
+EVENT_URL = "https://alpha.example.com/signup"
 
 
 def test_defaults():
@@ -71,7 +73,7 @@ def test_each_flag_shows_only_what_it_names(record, routes):
     org = mint_link(t, flags={**off, "show_org_name": True})["link_id"]
     shown_contact, shown_page, shown_org = (_everything_public(routes, i) for i in (contact, page, org))
     assert PHONE in shown_contact and "CANARYCLICKID" not in shown_contact
-    assert PAGE_URL in shown_page and PHONE not in shown_page
+    assert EVENT_URL in shown_page and PHONE not in shown_page and "CANARYCLICKID" not in shown_page
     assert "alpha" in text_of(get(routes, org)) and "Seller" in text_of(get(routes, org))
     assert PHONE not in shown_org and "CANARYCLICKID" not in shown_org
     for shown in (shown_contact, shown_page, shown_org):

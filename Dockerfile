@@ -21,6 +21,7 @@ RUN pip install --no-cache-dir --require-hashes -r requirements-build.lock \
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 COPY migrations ./migrations
+COPY edge/public-verify ./edge/public-verify
 RUN pip install --no-cache-dir --no-deps --no-build-isolation --no-index .
 
 # The cloud migration task runs the trigger guard from the image; the sha256 is pinned here and must equal the pin in

@@ -214,6 +214,8 @@ OPERATOR_COLUMNS = {
     "sending_account": {"org_id", "account_id", "inbound_key"},
     "confirmation_link_host": {"org_id", "host", "status"},
     "confirmation_send_intent": {"org_id", "status"},
+    # the record link lookup (0112) finds a link's organization by the digest of its id: the digest and the organization, never the id
+    "proof_share": {"org_id", "link_digest"},
     "event": {"org_id", "event_id", "received_at", "seq", "source_id"},
     # an offboarding org leaves the evidence jobs once its final export is taken (0014)
     "offboarding_request": {"org_id", "state", "final_export_at"},

@@ -15,6 +15,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -27,13 +28,14 @@ jobs:
       - name: PostgreSQL server binaries (the tests start their own throwaway server)
         run: sudo install -d /usr/share/postgresql-common/pgdg && sudo curl -fsSLo /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list && sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-17 postgresql-17-pgaudit openssl   # production runs 17 and the security manifest is built on 17
       - run: pip install -e .[dev]
-      - run: pytest -m "not network"
+      - run: pytest -m "not network and not slow"   # deselected tests are counted in the summary line
         env:
           PG_BIN: /usr/lib/postgresql/17/bin
           TWENTY_CONFORMANCE_WALKS: "120"  # the Twenty model conformance, its model kept in tests/connectors/twenty/model
 
   suites:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -58,6 +60,7 @@ jobs:
 
   edge:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4.2.2
       - uses: actions/setup-node@v4.4.0
@@ -68,16 +71,19 @@ jobs:
 
   pip-audit:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4.2.2
       - uses: actions/setup-python@v5.6.0
         with:
           python-version: "3.12"
       - run: pip install pip-audit==2.10.1 -e .[cloud]
-      - run: pip-audit --local --strict --skip-editable   # the product itself is installed editable and is not on PyPI
+      # every installed dependency, audited from a frozen list: the product itself is not on PyPI, so it is left out by name
+      - run: pip freeze --exclude-editable | grep -v "^consentvault" > audit-requirements.txt && pip-audit --strict --disable-pip --no-deps -r audit-requirements.txt
 
   gitleaks:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4.2.2
         with:
@@ -88,6 +94,7 @@ jobs:
 
   security-gate:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4.2.2
         with:

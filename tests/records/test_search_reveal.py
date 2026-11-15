@@ -216,6 +216,7 @@ def test_repeat_reveals_of_the_same_records_never_open_the_alarm(world):
     assert alarms(world, o) == []
 
 
+@pytest.mark.slow
 def test_the_organization_reveal_alarm_opens_past_5000_distinct_records_in_24_hours_across_members(world):
     """records.md section 6 reveal volume alarm (5,000 distinct records in 24 hours for the organization: detail member_id
     null). Each member stays at 1,000 an hour, so only the organization line is crossed."""

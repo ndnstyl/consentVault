@@ -3,14 +3,15 @@
 
 import { MEMBER_KEY, SUBJECT_HASH_HEADER, recordMember, VAULT_UNREACHABLE_HEADER, handleAuth } from "./auth.ts";
 import { PARKED_STATUSES } from "./parked.ts";
-import { handleGateway, vaultCaller, type GatewayDeps, type GatewayEnv } from "./gateway.ts";
+import { handleGateway, vaultCaller, type GatewayDeps } from "./gateway.ts";
+import { handleAssist, isAssistPath, type AssistEnv } from "./assist.ts";
 import { cookieValue, SESSION_COOKIE, tokenClaims, type KV } from "./session.ts";
 import { sessionStoreFor } from "./session-store.ts";
 import { callWake, type WakeEnv } from "./wake.ts";
 
 export { SessionGate } from "./session-gate.ts";
 
-export interface PortalEnv extends GatewayEnv, WakeEnv {
+export interface PortalEnv extends AssistEnv, WakeEnv {
   AUTH_BASE_URL: string;
   AUTH_CLIENT_ID: string;
   PUBLIC_URL: string;
@@ -190,6 +191,8 @@ export async function handlePortal(request: Request, env: PortalEnv, deps: Gatew
     const res = await handleAuth(request, env, { fetch: deps.fetch, now, vault: vaultCaller(env, deps) });
     if (res) return path === "/auth/callback" ? afterCallback(res, env, deps, now) : res;
   }
+  // The in-app assistant: its own door, session-checked inside (assist.ts). It reads nothing but the closed list of GETs there.
+  if (isAssistPath(path)) return handleAssist(request, env, deps);
   if ((navigation || asksJson) && (await vaultParked(env, deps, now()))) return whileParked(request, env, deps, now());
   if (path.startsWith("/v1/")) {
     const res = await handleGateway(request, env, deps);

@@ -18,6 +18,9 @@ if bao operator init -status >/dev/null 2>&1; then
   [ -f "$init" ] || { echo "openbao is initialised but $init is missing; bootstrap needs the root token from it" >&2; exit 1; }
   echo "openbao is already initialised; resuming the remaining steps"
 else
+  # A fresh database has no tokens: a vault token left from an earlier stack would be refused (403) and would also stop
+  # the step below that mints a new one.
+  rm -f "$secrets/openbao-vault-token"
   bao operator init -format=json -key-shares="$shares" -key-threshold="$threshold" > "$init"
 fi
 "$here/bin/openbao-unseal.sh"

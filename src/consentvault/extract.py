@@ -382,8 +382,7 @@ def read_fields(body: bytes, content_type: str | None, fmap: FieldMap | None) ->
         else:
             raise Unreadable("a text body has no named fields")
     except Unreadable:  # loud-failure-exempt: the failure is the stored state body_unreadable on each field, and the caller raises its alarm
-        return [Reading(name, UNREADABLE) for name in FIELDS if wanted[name] or name == "consent"] + \
-            [Reading(name, UNREADABLE) for name in THIRD_PARTY_READINGS if third_party]
+        return [Reading(name, UNREADABLE) for name in FIELDS if wanted[name] or name == "consent"]
     out: list[Reading] = []
     for name in FIELDS:
         paths = wanted[name]

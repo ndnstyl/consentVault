@@ -5,4 +5,3 @@ dist/
 build/
 .pytest_cache/
 consentvault.toml
-uv.lock

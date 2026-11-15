@@ -13,8 +13,10 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 SELF = Path(__file__).resolve().relative_to(REPO).as_posix()
 
+# The macOS home-folder path is matched exactly: a lowercase "/users/" is a web API route (an identity provider's
+# user endpoint), not a machine path. Every other entry is matched in any case.
+PATH_PATTERN = re.compile(re.escape("/Users/"))
 FORBIDDEN = [
-    "/Users/",
     "oxfloors",
     "ox-floors",
     "Ox Floors",
@@ -23,7 +25,19 @@ FORBIDDEN = [
     "ox-brain",
     "msoto",
 ]
-PATTERN = re.compile("|".join(re.escape(p) for p in FORBIDDEN), re.IGNORECASE)
+NAME_PATTERN = re.compile("|".join(re.escape(p) for p in FORBIDDEN), re.IGNORECASE)
+
+
+class _Both:
+    """Both patterns as one: finditer yields every match of either, search finds either."""
+    def finditer(self, s):
+        return sorted([*PATH_PATTERN.finditer(s), *NAME_PATTERN.finditer(s)], key=lambda m: m.start())
+
+    def search(self, s):
+        return PATH_PATTERN.search(s) or NAME_PATTERN.search(s)
+
+
+PATTERN = _Both()
 
 
 def repo_files() -> list[str]:

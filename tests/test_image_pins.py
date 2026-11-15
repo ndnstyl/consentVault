@@ -163,7 +163,8 @@ def test_the_entrypoint_refuses_a_token_key_that_is_not_hex(tmp_path):
     assert res.returncode != 0 and "CV_TENANT_TOKEN_KEY_HEX" in res.stderr
 
 
-PLUGIN = Path(os.environ.get("KMS_PLUGIN_DIR") or Path("/Users/oxfloors/ConsentVault/operations/provider")) / "consentvault_kms"
+# the private KMS provider lives in the operations repository; KMS_PLUGIN_DIR names its provider folder
+PLUGIN = Path(os.environ.get("KMS_PLUGIN_DIR") or "/nonexistent-kms-plugin-dir") / "consentvault_kms"
 
 
 def _relative_imports(path: Path) -> set[str]:
@@ -179,9 +180,12 @@ def _relative_imports(path: Path) -> set[str]:
 def test_every_module_the_plugin_package_imports_reaches_the_image():
     """Everything __init__ imports, and everything those import in turn, is a module the copied package keeps: none is a
     test-only file the build removes, and every one exists. A new module therefore can never be left out of the image."""
+    import pytest
+    if not os.environ.get("KMS_PLUGIN_DIR"):
+        # the provider is private and not in this public repository; the check runs where KMS_PLUGIN_DIR is set
+        pytest.skip("KMS_PLUGIN_DIR is not set: the private KMS provider is not on this machine")
     if not PLUGIN.is_dir():
-        import pytest
-        pytest.fail(f"the KMS plugin package is not at {PLUGIN} (set KMS_PLUGIN_DIR)")
+        pytest.fail(f"the KMS plugin package is not at {PLUGIN} (KMS_PLUGIN_DIR is set but holds no consentvault_kms)")
     removed = set(re.findall(r"consentvault_kms/(\w+)\.py", CLOUD.read_text(encoding="utf-8").split("COPY --from=kmsplugin", 1)[1]))
     seen, todo = set(), ["__init__"]
     while todo:

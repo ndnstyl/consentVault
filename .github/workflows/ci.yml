@@ -28,9 +28,12 @@ jobs:
       - name: PostgreSQL server binaries (the tests start their own throwaway server)
         run: sudo install -d /usr/share/postgresql-common/pgdg && sudo curl -fsSLo /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list && sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-17 postgresql-17-pgaudit openssl   # production runs 17 and the security manifest is built on 17
       - run: pip install -e .[dev]
+      - run: pip install uv==0.11.29   # the lockfile check (same uv as the build machine) exports the lock with uv
       - run: pytest -m "not network and not slow"   # deselected tests are counted in the summary line
         env:
           PG_BIN: /usr/lib/postgresql/17/bin
+          UV: uv
+          CV_PERF_SLACK: "2"   # shared runners are slower than the build machine; see tests/test_log_scrub_fuzz.py
           TWENTY_CONFORMANCE_WALKS: "120"  # the Twenty model conformance, its model kept in tests/connectors/twenty/model
 
   suites:

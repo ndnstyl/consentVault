@@ -48,7 +48,7 @@ export function createClient(opts: ClientOptions = {}) {
   const timeoutMs = opts.timeoutMs ?? 15000;
   const rid = opts.requestId ?? (() => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : String(Date.now())));
 
-  async function request<R>(method: string, path: string, o: { query?: Query; body?: unknown } = {}): Promise<R> {
+  async function request<R>(method: string, path: string, o: { query?: Query; body?: unknown; text?: boolean } = {}): Promise<R> {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), timeoutMs);
     let res: Response;
@@ -75,6 +75,7 @@ export function createClient(opts: ClientOptions = {}) {
     if (res.status === 204) return undefined as R;
     let json: unknown = null;
     const text = await res.text();
+    if (o.text && res.ok) return text as R;
     if (text) {
       try { json = JSON.parse(text); } catch { json = null; }
     }
@@ -213,6 +214,14 @@ export function createClient(opts: ClientOptions = {}) {
       exportList: (q?: Paged) => get<T.Page<T.RecordsExportItem>>('/v1/records/exports', q),
       exportGet: (id: string) => get<T.RecordsExportDetail>(`/v1/records/exports/${enc(id)}`),
       exportLink: (id: string) => post<{ download_url: string; expires_at: string }>(`/v1/records/exports/${enc(id)}:link`),
+    },
+    // record links (competitive-builds spec, Build 1): admin session; the link itself is returned once, on create
+    recordLinks: {
+      list: (q?: Paged) => get<T.Page<T.RecordLink>>('/v1/record-links', q),
+      create: (b: T.RecordLinkBody) => post<T.RecordLinkCreated>('/v1/record-links', b),
+      preview: (b: T.RecordLinkBody) => request<string>('POST', '/v1/record-links/preview', { body: b, text: true }),
+      revoke: (share_id: string) => post<unknown>(`/v1/record-links/${enc(share_id)}/revoke`),
+      resetMatch: (share_id: string) => post<unknown>(`/v1/record-links/${enc(share_id)}/reset-match`),
     },
     // setup.md
     setup: {

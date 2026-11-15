@@ -38,13 +38,13 @@ export type Action =
   | 'brand.create' | 'source.write' | 'fieldmap.add' | 'credential.issue' | 'credential.issue.gate_read' | 'credential.issue.proof_read' | 'credential.revoke'
   | 'wording.register' | 'checklist.write' | 'evidence.erase' | 'export.build'
   | 'system.write' | 'system.redrive' | 'retention.set' | 'member.manage' | 'billing.manage' | 'offboarding.request' | 'first-event.send'
-  | 'records.search' | 'records.reveal' | 'records.export' | 'records.person' | 'setup.skip' | 'confirmations.account' | 'confirmations.manage' | 'confirmations.replies';
+  | 'records.search' | 'records.reveal' | 'records.export' | 'records.person' | 'setup.skip' | 'recordlink.manage' | 'confirmations.account' | 'confirmations.manage' | 'confirmations.replies';
 
 export const ACTION_ROLES: Record<Action, Role[]> = {
   'brand.create': A, 'source.write': AD, 'fieldmap.add': AD, 'credential.issue': AD, 'credential.issue.gate_read': A, 'credential.issue.proof_read': A,
   'credential.revoke': AD, 'wording.register': A, 'checklist.write': A, 'evidence.erase': A, 'export.build': AV,
   'system.write': AD, 'system.redrive': AD, 'retention.set': A, 'member.manage': A, 'billing.manage': A, 'offboarding.request': A, 'first-event.send': AD,
-  'records.search': AV, 'records.reveal': AV, 'records.export': AV, 'records.person': AV, 'setup.skip': AD, 'confirmations.account': AD, 'confirmations.manage': A, 'confirmations.replies': AV,
+  'records.search': AV, 'records.reveal': AV, 'records.export': AV, 'records.person': AV, 'setup.skip': AD, 'recordlink.manage': A, 'confirmations.account': AD, 'confirmations.manage': A, 'confirmations.replies': AV,
 };
 
 export function canView(role: Role | null, id: RouteId): boolean {

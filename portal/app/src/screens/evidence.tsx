@@ -10,6 +10,7 @@ import { checkContact, fmtDateTime, maskContact, prettyContact } from '../lib/fo
 import { eventOrigin, purposeWords } from '../lib/labels.ts';
 import { useToast } from '../lib/toast.tsx';
 import { ConfirmDialog } from '../components/Dialog.tsx';
+import { ShareDialog } from './record-links.tsx';
 import type { Col } from '../components/ui.tsx';
 import { Banner, Btn, Chip, CopyButton, DataTable, DeliveryChip, ErrorBlock, EvidenceChip, Icon, KV, LinkBtn, NotAvailable, PageHead, SealChip, Skeleton, StateBlock, SuccessBanner, TextField, Time } from '../components/ui.tsx';
 
@@ -101,6 +102,7 @@ export function EvidenceLookup() {
   const [proof, setProof] = useState<Proof | null>(null);
   const [lists, setLists] = useState<Lists>({ systems: null, names: new Map(), checklists: new Map() });
   const [erase, setErase] = useState(false);
+  const [shareEvent, setShareEvent] = useState<string | null>(null);
   const [eraseDone, setEraseDone] = useState(false);
   const [more, setMore] = useState<string | null>(null);
   const [invalid, setInvalid] = useState<string | null>(null);
@@ -213,7 +215,7 @@ export function EvidenceLookup() {
                     <Icon name={e.event_type === 'grant' ? 'i-found' : 'i-stop'} />
                     <div className="hd"><b>{EVENT_LABEL[e.event_type] ?? e.event_type}</b><span className="when"><Time iso={e.at} /> · seq {e.seq}</span></div>
                     <div className="body">{e.channels.map(chLabel).join(', ')} · {e.purposes.map(purposeWords).join(', ')} · Brand {eventOrigin(e, name).brand} · Source {eventOrigin(e, name).source}{w && <> · Wording <Link href={`/wording/${w.sha256}`}>{w.version_label ?? w.label}</Link></>}</div>
-                    <div className="gap-row"><SealChip sealedAt={e.sealed ? e.sealed_at : null} />{e.recorded_during_trial && <Chip tone="st-info" icon="i-info">Recorded during trial</Chip>}</div>
+                    <div className="gap-row"><SealChip sealedAt={e.sealed ? e.sealed_at : null} />{e.recorded_during_trial && <Chip tone="st-info" icon="i-info">Recorded during trial</Chip>}{canDo(role, 'recordlink.manage') && e.sealed && <Btn size="sm" onClick={() => setShareEvent(e.event_id)}>Share this record</Btn>}</div>
                     {dc && <div className="body">{`Checklist v${dc.checklist_version}: ${dc.present.length} of ${dc.present.length + dc.missing.length} present${dc.missing.length ? `, missing ${dc.missing.map((m) => `"${names?.get(m) ?? m}"`).join(', ')}` : ''}. Documentation completeness, not a legal test.`}</div>}
                   </li>
                 );
@@ -237,6 +239,7 @@ export function EvidenceLookup() {
           {lists.systems === null ? <p>Not available. <Btn size="sm" onClick={() => contact && run(contact)}>Try again</Btn></p> : lists.systems.length === 0 ? <p className="hint">No systems are connected.</p> : <Deliveries contact={contact!} systems={lists.systems} />}
         </div>
       )}
+      {shareEvent && <ShareDialog eventId={shareEvent} onClose={() => setShareEvent(null)} />}
       {erase && contact && (
         <ConfirmDialog title={`Request erasure for ${shown}?`} destructive confirmLabel="Send erasure request" busyLabel="Sending" reasonLabel="Reason (recorded in the audit log)" reasonRequired
           body={<><p>What happens: this person&apos;s contact details become unreadable. Their fingerprint and stop records are kept, with the channels each stop was recorded on. How far a stop reaches is set by the rule-set in use. Your chain still verifies. This cannot be undone.</p><p>The operator confirms every erasure before it runs. A legal hold on this contact blocks it.</p></>}

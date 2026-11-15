@@ -8,6 +8,7 @@ import { useRouter } from '../lib/router.tsx';
 import { canDo } from '../lib/roles.ts';
 import { useSession } from '../lib/session.tsx';
 import { ConfirmDialog } from '../components/Dialog.tsx';
+import { RecordLinksPanel } from './record-links.tsx';
 import { Banner, Btn, Chip, CopyButton, DataTable, ErrorBlock, Icon, KV, LinkBtn, NotAvailable, PageHead, Pager, Radio, SelectField, Skeleton, StateBlock, SuccessBanner, TextField, Tile, Time, cx } from '../components/ui.tsx';
 
 const PAGE = 50;
@@ -513,6 +514,7 @@ export function Records() {
             </>
           )}
           {canExport && <PastExports key={started ? started.id : 'none'} />}
+          <RecordLinksPanel />
         </>
       )}
 

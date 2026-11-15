@@ -277,3 +277,12 @@ export interface ConfirmationReply {
   text: string | null; verdict: string; reason: string; matched_words: string[]; state: 'to_read' | 'stop' | 'not_stop' | 'help' | 'start';
   event_id: string | null; our_reply: 'sent' | 'skipped' | 'provider_replied' | null; marked_by: { member_id: string; display_name: string } | null; marked_at: string | null; mark_reason: string | null; unread_hours: number | null;
 }
+
+// record links (competitive-builds spec, Build 1)
+export interface RecordLinkScope { show_org_name: boolean; show_contact: boolean; allow_contact_match: boolean; show_page_url: boolean; show_bot_check: boolean }
+export interface RecordLinkBody extends RecordLinkScope { event_id: string; contact_ack?: string; note?: string }
+export interface RecordLinkCreated { share_id: string; link?: string; url?: string }
+export interface RecordLink extends Partial<RecordLinkScope> {
+  share_id: string; event_id: string; note: string | null; created_at: string; created_by?: string | null;
+  view_count: number; match_locked?: boolean; withdrawn_at: string | null;
+}

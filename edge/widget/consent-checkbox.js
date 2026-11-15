@@ -18,6 +18,34 @@
     return (value || "").split(",").map(function (s) { return s.trim(); }).filter(Boolean);
   }
 
+  /** The hidden inputs an issuer's script fills (TrustedForm, Jornaya LeadiD). Names read from the issuers' own pages. */
+  var PASSTHROUGH_DEFAULT = ["xxTrustedFormCertUrl", "universal_leadid"];
+
+  /** Every non-empty value of the named hidden inputs on the host page, copied as it is (never trimmed), in document order.
+   * An empty or absent input is left out. Nothing is fetched from any issuer. */
+  function passthrough(attr) {
+    var names = attr === null ? PASSTHROUGH_DEFAULT : list(attr);
+    var found = [];
+    names.forEach(function (name, i) {
+      if (names.indexOf(name) !== i) return;
+      var els = document.getElementsByName(name);
+      for (var k = 0; k < els.length; k++) {
+        if (!found.some(function (f) { return f.el === els[k]; })) found.push({ el: els[k], name: name });
+      }
+    });
+    found.sort(function (a, b) {
+      if (typeof a.el.compareDocumentPosition !== "function") return 0;
+      var rel = a.el.compareDocumentPosition(b.el);
+      return rel & 4 ? -1 : rel & 2 ? 1 : 0;
+    });
+    var out = [];
+    found.forEach(function (f) {
+      var v = f.el.value;
+      if (typeof v === "string" && v !== "") out.push({ name: f.name, value: v });
+    });
+    return out;
+  }
+
   /** The browser's clock with its UTC offset, read at the moment of the click (for example 2026-11-03T10:04:05.120-05:00). */
   function decidedAt() {
     var d = new Date();
@@ -94,6 +122,7 @@
       var endpoint = this.getAttribute("data-endpoint");
       if (!endpoint) return Promise.reject(new Error("consentvault-consent: data-endpoint is not set"));
       var boxState = this.checked; // read at submit, sent exactly as it is
+      var certificates = passthrough(this.getAttribute("data-passthrough")); // read at submit, sent as found
       var decided = decidedAt(); // the moment of the decision, on the browser's clock, with its offset
       // Hash exactly the text on screen right now, at submit time, and send that text beside its hash.
       var shown = this._span.textContent;
@@ -109,6 +138,7 @@
           page_url: location.href,
           session: self._session,
         };
+        if (certificates.length) body.third_party = certificates;
         if (extra && extra.turnstile_token) body.turnstile_token = extra.turnstile_token;
         return fetch(endpoint, {
           method: "POST",

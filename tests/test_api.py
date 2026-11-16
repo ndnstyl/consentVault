@@ -194,12 +194,20 @@ def test_any_body_is_stored_and_answered_with_a_receipt(server, conn, body):
     assert bytes(_posts(conn)[0]["body_ct"]) == body and _events(conn) == 0
 
 
-def test_a_body_over_the_old_one_mebibyte_limit_is_stored_whole(server, conn):
-    body = b"x" * (3 * 1024 * 1024)
+def test_a_body_over_64_kib_is_refused_with_413_and_nothing_is_stored(server, conn):
+    body = b"x" * (64 * 1024 + 1)
+    status, answer, _ = _call(server + "/v1/events", "POST", body, {"Content-Type": "text/plain"})
+    server.settle()
+    assert status == 413 and answer["stored"] is False and answer["error"] == "too_large"
+    assert _posts(conn) == []
+
+
+def test_a_body_of_exactly_64_kib_is_stored_whole(server, conn):
+    body = b"x" * (64 * 1024)
     status, answer, _ = _call(server + "/v1/events", "POST", body, {"Content-Type": "text/plain"})
     server.settle()
     _stored(status, answer)
-    assert answer["body_bytes"] == len(body) and answer["unusual_size"] is True
+    assert answer["body_bytes"] == len(body)
     assert bytes(_posts(conn)[0]["body_ct"]) == body
 
 
@@ -221,9 +229,16 @@ def test_a_chunked_body_is_stored_whole(server, conn):
     assert bytes(_posts(conn)[0]["body_ct"]) == b"hello chunked world"
 
 
-@pytest.mark.parametrize("method", ["GET", "PUT", "PATCH", "DELETE"])
-def test_every_method_on_the_capture_path_is_a_post_that_is_stored(server, conn, method):
-    status, answer, _ = _call(server + "/v1/events?a=1", method, b"x" if method != "GET" else None, {})
+def test_a_get_on_the_capture_path_is_refused_with_405_and_nothing_is_stored(server, conn):
+    status, answer, headers = _call(server + "/v1/events?a=1", "GET", None, {})
+    server.settle()
+    assert status == 405 and answer["stored"] is False and headers["Allow"] == "POST, OPTIONS"
+    assert _posts(conn) == []
+
+
+@pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
+def test_every_other_method_on_the_capture_path_is_a_post_that_is_stored(server, conn, method):
+    status, answer, _ = _call(server + "/v1/events?a=1", method, b"x", {})
     server.settle()
     _stored(status, answer)
     post, = _posts(conn)

@@ -30,6 +30,7 @@ from .safelog import caller_detail, db_code, describe, refusal_code
 from . import config as config_mod
 from . import edge_envelope
 from .capture_http import (StoreRefusedRequests, Downstream, request_key, cors_headers, is_capture_path, is_preflight, read_any_body, request_headers,
+                           BodyTooLarge, body_limit, not_a_read_answer, too_large_answer,
                            transport_credentials_removed, unavailable_answer)
 from . import dbclock
 from .db import connect
@@ -227,7 +228,13 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
         from . import door
         from .rawpost import Fact, RawRequest, StoreUnavailable
 
-        body, facts = read_any_body(self)
+        limit = body_limit(self)
+        try:
+            body, facts = read_any_body(self, limit)
+        except BodyTooLarge:  # refused before the body is read: nothing is stored, the unread bytes end the connection
+            self.close_connection = True
+            status, answer = too_large_answer(limit)
+            return self._send(status, answer, cors_headers(self))
         url = urlsplit(self.path)
         ts = self.headers.get(TIMESTAMP_HEADER) or ""
         sig = (self.headers.get(SIGNATURE_HEADER) or "").strip().lower()
@@ -306,8 +313,9 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
             _log.critical("the work after an answer failed; the post is stored", error=type(exc).__name__)
 
     def do_GET(self):
-        if self._capturing():
-            return self._capture()
+        if self._capturing():  # a read of a capture route has nothing to store
+            status, answer = not_a_read_answer()
+            return self._send(status, answer, {"Allow": "POST, OPTIONS", **cors_headers(self)})
         if not self._guard():
             return
         url = urlsplit(self.path)
@@ -688,8 +696,9 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.request_id = self._rid()
-        if is_capture_path(urlsplit(self.path).path, CLOUD_CAPTURE_PREFIXES):
-            return self._capture()
+        if is_capture_path(urlsplit(self.path).path, CLOUD_CAPTURE_PREFIXES):  # a read of a capture route has nothing to store
+            status, answer = not_a_read_answer()
+            return self._send(status, answer, {"Allow": "POST, OPTIONS", **cors_headers(self)})
         if not self._host_ok():
             return self._error("invalid_request", "the Host header is not on the allowlist", 421)
         self._other_lanes("GET")
@@ -907,7 +916,13 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
         from .rawpost import Fact, RawRequest, StoreUnavailable
 
         self.request_id = self._rid()
-        body, facts = read_any_body(self)
+        limit = body_limit(self)
+        try:
+            body, facts = read_any_body(self, limit)
+        except BodyTooLarge:  # refused before the body is read: nothing is stored, the unread bytes end the connection
+            self.close_connection = True
+            status, answer = too_large_answer(limit)
+            return self._send(status, answer, cors_headers(self))
         url = urlsplit(self.path)
         headers = request_headers(self)
         preflight = is_preflight(self)

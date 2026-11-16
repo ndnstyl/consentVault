@@ -17,6 +17,15 @@ from isolation.cloud_harness import Cloud
 from test_api import SECRET, TOKEN, VERIFIED_SECRET, PURPOSES, _serve  # noqa: F401  (the single-company server fixture helpers)
 
 CASES = json.loads((Path(__file__).parent / "fixtures" / "audit_cases.json").read_text())["cases"]
+# Since the security probe of 2026-11-16 two audited requests are refused before anything is stored: a body over 64 KiB (413)
+# and a GET (405). Every other case is still stored whole.
+REFUSED = {"D3": 413, "A2": 405}
+
+
+def check_refused(case, status, answer):
+    where = f"{case['row']}: {case['name']}"
+    assert status == REFUSED[case["row"]], (where, status, answer)
+    assert answer["stored"] is False, where
 
 
 def case_body(case: dict) -> bytes:
@@ -64,10 +73,13 @@ def test_every_audited_request_is_stored_whole_by_the_single_company_server(dsn,
         for case in CASES:
             status, answer, body = send(base, case)
             base.settle()
+            if case["row"] in REFUSED:
+                check_refused(case, status, answer)
+                continue
             check_answer(case, status, answer, body)
             sent.append((case, answer, body))
         rows = {str(r["post_id"]): r for r in conn.execute("SELECT * FROM consentvault.raw_post ORDER BY seq").fetchall()}
-        assert len(rows) == len(CASES)
+        assert len(rows) == len(CASES) - len(REFUSED)
         writer = rawpost.RawPostWriter()
         home = conn.execute("SELECT consentvault.home_org() AS h").fetchone()["h"]
         for case, answer, body in sent:
@@ -93,6 +105,9 @@ def test_every_audited_request_is_stored_whole_by_the_cloud_server_with_and_with
     for case in CASES:
         for label, extra in (("with a credential", bearer), ("with none", {})):
             status, answer, body = send(cloud.base, case, extra)
+            if case["row"] in REFUSED:
+                check_refused(case, status, answer)
+                continue
             check_answer({**case, "name": f"{case['name']} {label}"}, status, answer, body)
             sent.append((case, label, answer, body))
     cloud.server.drain(120)

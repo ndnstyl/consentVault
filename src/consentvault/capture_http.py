@@ -1,7 +1,9 @@
 """What the HTTP intakes share: read any body, name the headers as presented, answer with a receipt, track what runs after.
 
-Nothing here judges a request. A body of any size and any content type is read whole (length-prefixed or chunked); a
-length header that cannot be read or a body that ends short is a fact beside the post, never a reason to refuse it.
+Nothing here judges a request's content. A body of any content type is read whole (length-prefixed or chunked) up to the
+cap (64 KiB; an edge-signed envelope may carry more because it holds the body in base64 with headers and facts); a body
+over the cap is refused with 413 before it is read and nothing is stored. A length header that cannot be read or a body that
+ends short is a fact beside the post, never a reason to refuse it.
 ``Downstream`` counts the work that runs after an answer is sent, so a test (or a shutdown) can wait for it.
 """
 
@@ -18,6 +20,26 @@ from .rawpost import Fact, StoredPost
 
 PERMISSION_METHODS = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 READ_CHUNK = 1 << 20
+MAX_BODY_BYTES = 64 * 1024
+MAX_SIGNED_BODY_BYTES = 192 * 1024  # an edge envelope: the body (at most 64 KiB) in base64, plus the headers and the edge's facts
+SIGNATURE_HEADER_NAME = "x-consentvault-signature"
+
+
+class BodyTooLarge(ConsentVaultError):
+    """The request body is over the cap. Raised before the body is read, so nothing was stored and the connection must close."""
+
+
+def body_limit(handler) -> int:
+    """The cap for this request: the envelope allowance when it carries the edge's signature header, else 64 KiB."""
+    return MAX_SIGNED_BODY_BYTES if handler.headers.get(SIGNATURE_HEADER_NAME) else MAX_BODY_BYTES
+
+
+def too_large_answer(limit: int) -> tuple[int, dict]:
+    return 413, {"stored": False, "error": "too_large", "detail": f"the request body is over {limit} bytes; nothing was stored"}
+
+
+def not_a_read_answer() -> tuple[int, dict]:
+    return 405, {"stored": False, "error": "method_not_allowed", "detail": "a capture route takes POST; nothing was stored"}
 
 
 class DownstreamNotIdle(ConsentVaultError):
@@ -240,8 +262,9 @@ def is_preflight(handler) -> bool:
     return handler.command == "OPTIONS" and handler.headers.get("Access-Control-Request-Method") is not None
 
 
-def read_any_body(handler) -> tuple[bytes, list[Fact]]:
-    """The whole request body. Never refuses: an unreadable or missing length gives an empty or short body and a fact."""
+def read_any_body(handler, limit: int = MAX_BODY_BYTES) -> tuple[bytes, list[Fact]]:
+    """The whole request body, up to ``limit`` bytes; raises ``BodyTooLarge`` before reading what would pass it (a declared
+    length over it, or a chunk that would cross it). An unreadable or missing length gives an empty or short body and a fact."""
     facts: list[Fact] = []
     te = (handler.headers.get("Transfer-Encoding") or "").lower()
     raw_len = handler.headers.get("Content-Length")
@@ -255,6 +278,8 @@ def read_any_body(handler) -> tuple[bytes, list[Fact]]:
                 break
             try:
                 size = int(line.split(b";", 1)[0].strip() or b"0", 16)
+                if size < 0:
+                    raise ValueError("negative chunk size")
             except ValueError:  # loud-failure-exempt: recorded as the fact body_short_read beside the post; the bytes read so far are kept
                 facts.append(Fact("vault", "body_short_read", "a chunk size could not be read"))
                 break
@@ -263,6 +288,8 @@ def read_any_body(handler) -> tuple[bytes, list[Fact]]:
                     if rfile.readline(65537) in (b"\r\n", b"\n", b""):
                         break
                 break
+            if len(out) + size > limit:
+                raise BodyTooLarge(f"a chunked body passes {limit} bytes")
             chunk = _read_exact(rfile, size)
             out += chunk
             if len(chunk) < size:
@@ -279,6 +306,8 @@ def read_any_body(handler) -> tuple[bytes, list[Fact]]:
     except ValueError:  # loud-failure-exempt: recorded as the fact content_length_unreadable beside the post (the header itself is stored whole)
         facts.append(Fact("vault", "content_length_unreadable", raw_len))
         return b"", facts
+    if length > limit:
+        raise BodyTooLarge(f"Content-Length {length} is over {limit} bytes")
     body = _read_exact(rfile, length)
     if len(body) < length:
         facts.append(Fact("vault", "body_short_read", f"Content-Length {length}, received {len(body)}"))

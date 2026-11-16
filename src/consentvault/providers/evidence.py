@@ -133,12 +133,15 @@ def sigv4_headers(*, method: str, host: str, path: str, query: str = "", headers
 S3Transport = Callable[[str, str, Mapping[str, str], bytes], "tuple[int, Mapping[str, str], bytes]"]
 
 
-def urllib_s3_transport(timeout_s: float = 30.0) -> S3Transport:
-    """Real transport: ``(method, url, headers, body) -> (status, lower-cased headers, body)``. Does not follow redirects."""
+def urllib_s3_transport(timeout_s: float = 30.0, read_timeout_s: float = 10.0) -> S3Transport:
+    """Real transport: ``(method, url, headers, body) -> (status, lower-cased headers, body)``. Does not follow redirects.
+    A read (GET, HEAD) waits ``read_timeout_s`` on the socket, so its three attempts take about as long as one write's
+    ``timeout_s``; the limit is per socket wait, so a download that keeps arriving is never cut."""
     def send(method: str, url: str, headers: Mapping[str, str], body: bytes):
         req = urllib.request.Request(url, data=body if body else None, method=method, headers=dict(headers))
+        wait = read_timeout_s if method in ("GET", "HEAD") else timeout_s
         try:
-            with open_no_redirect(req, timeout=timeout_s) as resp:
+            with open_no_redirect(req, timeout=wait) as resp:
                 return resp.status, {k.lower(): v for k, v in resp.headers.items()}, resp.read()
         except urllib.error.HTTPError as exc:
             return http_error_response(exc)
@@ -196,6 +199,26 @@ class S3ObjectLockEvidenceStore(EvidenceStore):
         return "/" + urllib.parse.quote(f"{self._bucket}/{self._prefix}{org_id}/{key}", safe="/-_.~")
 
     def _request(self, method: str, path: str, headers: Mapping[str, str], body: bytes = b"", query: str = ""):
+        """One request. A read (GET, HEAD) that stalls or meets S3's 500 or 503 is tried up to three times, each attempt
+        read and signed afresh (credentials and date), with 1 s then 2 s between; the last failure is raised or returned
+        as it always was. A PUT is sent once: an Object Lock put that landed would otherwise be written twice."""
+        delays = self.RETRY_BACKOFF_S if method in self.IDEMPOTENT_METHODS else ()
+        for delay in delays:
+            try:
+                status, resp_headers, resp_body = self._attempt(method, path, headers, body, query)
+            except ProviderTransportError:  # loud-failure-exempt: the final attempt below raises the same error
+                self._sleep(delay)
+                continue
+            if status not in self.RETRY_STATUSES:
+                return status, resp_headers, resp_body
+            self._sleep(delay)
+        return self._attempt(method, path, headers, body, query)
+
+    IDEMPOTENT_METHODS = ("GET", "HEAD")
+    RETRY_BACKOFF_S = (1.0, 2.0)  # three attempts in all
+    RETRY_STATUSES = (500, 503)
+
+    def _attempt(self, method: str, path: str, headers: Mapping[str, str], body: bytes, query: str):
         ak, sk, tok = self._ak, self._sk, self._token
         if self._creds is not None:
             c = self._creds.get()
@@ -206,20 +229,8 @@ class S3ObjectLockEvidenceStore(EvidenceStore):
             amz_date=self._clock().astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ"), session_token=tok)
         send_headers = {k: v for k, v in signed.items() if k != "host"}
         url = f"{self._scheme}://{self._host}{path}" + (f"?{query}" if query else "")
-        status, resp_headers, resp_body = self._send_with_retry(method, url, send_headers, body)
+        status, resp_headers, resp_body = self._send(method, url, send_headers, body)
         return status, {k.lower(): v for k, v in resp_headers.items()}, resp_body
-
-    IDEMPOTENT_METHODS = ("GET", "HEAD")  # a PUT is never retried: an Object Lock put that landed would be written twice
-    RETRY_BACKOFF_S = (1.0, 2.0)  # three attempts in all
-
-    def _send_with_retry(self, method: str, url: str, headers: Mapping[str, str], body: bytes):
-        delays = self.RETRY_BACKOFF_S if method in self.IDEMPOTENT_METHODS else ()
-        for delay in delays:
-            try:
-                return self._send(method, url, headers, body)
-            except ProviderTransportError:  # loud-failure-exempt: the final attempt below raises the same error
-                self._sleep(delay)
-        return self._send(method, url, headers, body)
 
     MAX_LIST_PAGES = 10_000  # 1,000 keys a page: ten million objects for one organisation before the listing refuses
 

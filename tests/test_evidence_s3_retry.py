@@ -88,3 +88,79 @@ def test_a_put_that_times_out_is_not_retried():
     with pytest.raises(ProviderTransportError):
         _store(send, sleeps).put("org-a", "ledger/1", b"x", retain_until=T0 + timedelta(days=400))
     assert calls == ["PUT"] and sleeps == []
+
+
+def test_each_retry_is_signed_afresh_with_the_current_credentials_and_date():
+    class Creds:
+        n = 0
+
+        def get(self):
+            Creds.n += 1
+            return type("C", (), {"access_key": f"AK{Creds.n}", "secret_key": "SK", "session_token": f"T{Creds.n}"})()
+
+    times = iter([T0, T0 + timedelta(seconds=11)])
+    seen = []
+
+    def send(method, url, headers, body):
+        seen.append((headers["authorization"], headers.get("x-amz-security-token"), headers["x-amz-date"]))
+        if len(seen) == 1:
+            _timeout()
+        return 200, {"x-amz-meta-sha256": SHA}, b"foo"
+
+    store = S3ObjectLockEvidenceStore(endpoint="https://s3.us-east-1.amazonaws.com", bucket="cv-ledger",
+                                      region="us-east-1", transport=send, clock=lambda: next(times),
+                                      credentials=Creds(), sleep=lambda _d: None)
+    assert store.get("org-a", "ledger/1") == b"foo"
+    assert seen[0][1] == "T1" and seen[1][1] == "T2" and "AK2/" in seen[1][0] and seen[0][2] != seen[1][2]
+
+
+@pytest.mark.parametrize("status", [500, 503])
+def test_a_get_that_meets_s3_slow_down_is_retried(status):
+    calls, sleeps = [], []
+
+    def send(method, url, headers, body):
+        calls.append(method)
+        return (status, {}, b"") if len(calls) == 1 else (200, {"x-amz-meta-sha256": SHA}, b"foo")
+
+    assert _store(send, sleeps).get("org-a", "ledger/1") == b"foo"
+    assert calls == ["GET", "GET"] and sleeps == [1]
+
+
+def test_a_put_that_meets_503_is_not_retried():
+    calls = []
+
+    def send(method, url, headers, body):
+        calls.append(method)
+        return 503, {}, b""
+
+    with pytest.raises(Exception):
+        _store(send, []).put("org-a", "ledger/1", b"foo", retain_until=T0 + timedelta(days=400))
+    assert calls == ["PUT"]
+
+
+def test_a_read_waits_ten_seconds_a_socket_and_a_write_thirty():
+    from consentvault.providers import evidence
+
+    waits = []
+
+    class Resp:
+        status, headers = 200, {}
+
+        def read(self):
+            return b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    real = evidence.open_no_redirect
+    evidence.open_no_redirect = lambda req, timeout: waits.append(timeout) or Resp()
+    try:
+        send = evidence.urllib_s3_transport()
+        send("GET", "https://s3.us-east-1.amazonaws.com/b/k", {}, b"")
+        send("PUT", "https://s3.us-east-1.amazonaws.com/b/k", {}, b"x")
+    finally:
+        evidence.open_no_redirect = real
+    assert waits == [10.0, 30.0]

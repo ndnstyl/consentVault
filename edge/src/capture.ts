@@ -131,7 +131,7 @@ export async function handleCapture(request: Request, env: CaptureEnv, deps: Cap
   }
   if (request.method !== "OPTIONS") {
     // Over a limit is refused with 429 before anything is stored (the one place the capture edge refuses besides size).
-    // Stops do not travel this route: the vault reads every edge capture post as a grant (edge_envelope.widget_event), so a body labelled revoke is throttled like any other; a stop arrives by the text provider, the stop page or a signed system intake.
+    // Stops do not travel this route: the vault reads every edge capture post as a grant (edge_envelope.widget_event), so a body labelled revoke is throttled like any other; a stop arrives by the text provider, the stop page, a signed system intake, or the API-key capture route (which keeps the body's event_type).
     if (ip) {
       const ipLimit = Number(env.DEFAULT_IP_RATE_LIMIT_PER_MINUTE || 120);
       if (!(await deps.rateLimiter.hit(`ip:${ip}`, ipLimit, 60))) return rateLimited(permissionHeaders(request));

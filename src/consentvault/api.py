@@ -925,8 +925,9 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
         if identity["claims"] is not None and inner is not None:
             facts.append(Fact("vault", "credential", {"state": "verified", "credential_id": str(identity["claims"].credential_id),
                                                       "scopes": list(identity["claims"].scopes), "via": "edge"}))
-        key = request_key(inner.headers if inner else headers, identity.get("signature"),
-                          identity["edge_facts"].get("request_id"), bytes(inner.body if inner is not None else body))
+        key = (edge_envelope.replay_key(bytes(inner.body)) if inner is not None else None) or request_key(
+            inner.headers if inner else headers, identity.get("signature"),
+            identity["edge_facts"].get("request_id"), bytes(inner.body if inner is not None else body))
         if key:
             facts.append(Fact("vault", "request_key", key))
         if inner is not None:  # the edge answers the browser's permission check itself; to the edge the vault answers with a receipt
@@ -1048,6 +1049,8 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
                 out["claims"] = _EdgeClaims(owner.org_id, owner.credential_id)
             origin = next((v for n, v in env.headers if n.lower() == "origin"), "")
             facts.append(Fact("vault", "origin_on_list", origin in owner.allowed_origins))
+            facts.append(Fact("vault", "bot_check_hostname_on_list", edge_envelope.bot_check_hostname_on_list(
+                env.edge_facts.get("bot_check_answer"), owner.allowed_origins)))
 
     def _after_answer(self, stored, raw, enter, identity: dict) -> None:
         """Read the stored post, then hand it to the one door's projection. Never raises: the answer is given and the post is

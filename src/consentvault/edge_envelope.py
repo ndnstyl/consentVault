@@ -15,6 +15,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -92,6 +93,30 @@ def unpack(body: bytes) -> Unpacked:
         except ValueError:  # loud-failure-exempt: the edge's own text is kept whole as the edge fact edge_received_at
             seen = None
     return Unpacked(method, path, query, tuple((n, v) for n, v in raw_headers), raw, facts, claimed, seen)
+
+
+def bot_check_hostname_on_list(answer, allowed_origins) -> bool:
+    """The bot check's own answer names the host the visitor solved it on; it counts only when that host is one of the key's
+    allowed origins. Read here from the answer, so it never rests on a flag the sender could set."""
+    host = answer.get("hostname") if isinstance(answer, dict) else None
+    if not isinstance(host, str) or not host:
+        return False
+    hosts = {(urllib.parse.urlsplit(o).hostname or "").lower() for o in allowed_origins}
+    hosts.discard("")
+    return host.lower() in hosts
+
+
+def replay_key(browser_body: bytes) -> str | None:
+    """The identity of one visitor's post: the hash of the body joined to the hash of the single-use bot-check token it carries.
+    The edge gives every request a fresh id, so a replay of the same body and token is recognised by this, never by the id.
+    None when the body carries no token (such a post makes no grant)."""
+    try:
+        token = json.loads(browser_body.decode("utf-8")).get("turnstile_token")
+    except (ValueError, UnicodeDecodeError, AttributeError):  # loud-failure-exempt: no key here, the post stays stored and the bot check fails it
+        return None
+    if not isinstance(token, str) or not token:
+        return None
+    return f"replay:{hashlib.sha256(browser_body).hexdigest()}:{hashlib.sha256(token.encode()).hexdigest()}"
 
 
 def widget_event(browser: dict, headers, edge_facts: dict, *, source_id=None, brand_ids=None, source: str | None = None) -> dict:

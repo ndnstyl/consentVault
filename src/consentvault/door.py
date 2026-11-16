@@ -178,7 +178,17 @@ def auth_from_facts(facts: Mapping[tuple[str, str], Any]) -> Auth:
             return auth("stale_timestamp", soft=True)
         if cred is None and str(vault("site_key_lookup", "")).startswith("failed:"):
             return auth("site_key_lookup_failed", pending=True)
-        return auth(None if cred is not None else "no_credential")
+        if cred is None:
+            return auth("no_credential")
+        if vault("site_key_state") is not None:   # a capture the edge forwarded under a public site key: the sender is anyone who holds the key
+            if vault("origin_on_list") is not True:
+                return auth("origin_not_allowed")
+            answer = facts.get(("edge", "bot_check_answer"))
+            if not (isinstance(answer, dict) and answer.get("success") is True):
+                return auth("bot_check_failed")
+            if vault("bot_check_hostname_on_list") is not True:
+                return auth("bot_check_hostname_not_allowed")
+        return auth(None)
     if sig is None:
         return auth("not_authenticated:unsigned")
     return auth(None)
@@ -602,6 +612,8 @@ def _resolve_site_key(writer, conn, enter, backend, view: PostView, *, field_map
                 found[("vault", TENANT_SETTINGS_FACT)] = late(conn, owner)
         origin = next((v for n, v in env.headers if n.lower() == "origin"), "")
         found[("vault", "origin_on_list")] = origin in owner.allowed_origins
+        found[("vault", "bot_check_hostname_on_list")] = edge_envelope.bot_check_hostname_on_list(
+            env.edge_facts.get("bot_check_answer"), owner.allowed_origins)
     moved_org = owner is not None and str(owner.org_id) != view.org_id
     if not moved_org:
         try:

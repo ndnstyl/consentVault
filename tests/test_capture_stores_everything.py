@@ -19,12 +19,12 @@ from test_api import SECRET, TOKEN, VERIFIED_SECRET, PURPOSES, _serve  # noqa: F
 CASES = json.loads((Path(__file__).parent / "fixtures" / "audit_cases.json").read_text())["cases"]
 # Since the security probe of 2026-11-16 two audited requests are refused before anything is stored: a body over 64 KiB (413)
 # and a GET (405). Every other case is still stored whole.
-REFUSED = {"D3": 413, "A2": 405}
+REFUSED = {"a three mebibyte body": 413, "a GET with a query string": 405}
 
 
 def check_refused(case, status, answer):
     where = f"{case['row']}: {case['name']}"
-    assert status == REFUSED[case["row"]], (where, status, answer)
+    assert status == REFUSED[case["name"]], (where, status, answer)
     assert answer["stored"] is False, where
 
 
@@ -40,7 +40,10 @@ def send(base: str, case: dict, extra_headers: dict | None = None):
     conn = http.client.HTTPConnection(host, int(port), timeout=60)
     body = case_body(case)
     headers = {**case["headers"], **(extra_headers or {})}
-    conn.request(case["method"], case["path"], body=body if case["method"] not in ("GET",) else None, headers=headers)
+    try:
+        conn.request(case["method"], case["path"], body=body if case["method"] not in ("GET",) else None, headers=headers)
+    except (BrokenPipeError, ConnectionResetError):  # a refusal that answers before the whole body is sent: the answer is still waiting
+        assert case["name"] in REFUSED, case["name"]
     res = conn.getresponse()
     raw = res.read()
     conn.close()
@@ -73,7 +76,7 @@ def test_every_audited_request_is_stored_whole_by_the_single_company_server(dsn,
         for case in CASES:
             status, answer, body = send(base, case)
             base.settle()
-            if case["row"] in REFUSED:
+            if case["name"] in REFUSED:
                 check_refused(case, status, answer)
                 continue
             check_answer(case, status, answer, body)
@@ -105,7 +108,7 @@ def test_every_audited_request_is_stored_whole_by_the_cloud_server_with_and_with
     for case in CASES:
         for label, extra in (("with a credential", bearer), ("with none", {})):
             status, answer, body = send(cloud.base, case, extra)
-            if case["row"] in REFUSED:
+            if case["name"] in REFUSED:
                 check_refused(case, status, answer)
                 continue
             check_answer({**case, "name": f"{case['name']} {label}"}, status, answer, body)

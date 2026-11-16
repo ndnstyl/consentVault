@@ -34,7 +34,7 @@ function req(body: unknown, headers: Record<string, string> = {}, method = "POST
   if (method !== "GET" && method !== "OPTIONS") init.body = body instanceof Uint8Array ? body : typeof body === "string" ? body : JSON.stringify(body);
   return new Request("https://edge.example.com" + path, init);
 }
-type Opts = { turnstile?: unknown; turnstileStatus?: number; vaultStatus?: number; vaultThrow?: boolean; durable?: Durable; alarms?: string[] };
+type Opts = { turnstile?: unknown; turnstileStatus?: number; vaultStatus?: number; vaultBody?: string; vaultThrow?: boolean; durable?: Durable; alarms?: string[] };
 type Call = { url: string; init: RequestInit };
 function mk(opts: Opts = {}) {
   const calls: Call[] = [];
@@ -49,7 +49,7 @@ function mk(opts: Opts = {}) {
         return new Response(JSON.stringify(opts.turnstile ?? { success: true, hostname: "www.acme.com" }), { status: opts.turnstileStatus ?? 200 });
       }
       if (opts.vaultThrow) throw new Error("down");
-      return new Response(JSON.stringify(RECEIPT), { status: opts.vaultStatus ?? 201 });
+      return new Response(opts.vaultBody ?? JSON.stringify(RECEIPT), { status: opts.vaultStatus ?? 201 });
     }) as unknown as typeof fetch,
   };
   return { d, calls };
@@ -396,7 +396,7 @@ for (const status of [405, 413]) {
     let n = 0;
     const d: CaptureDeps = { ...mk().d, alarm: (name) => alarms.push(name), fetch: (async (url: string, init: RequestInit) => {
       calls.push({ url: String(url), init });
-      return new Response(JSON.stringify(RECEIPT), { status: n++ === 0 ? status : 201 });
+      return n++ === 0 ? new Response(JSON.stringify({ stored: false, error: status === 413 ? "too_large" : "method_not_allowed", detail: "x" }), { status }) : new Response(JSON.stringify(RECEIPT), { status: 201 });
     }) as unknown as typeof fetch };
     const batch = sent.map(msg);
     await deliverBatch(batch, { BODY_STORE: r2, ...target }, d);
@@ -420,9 +420,25 @@ test("a 5xx from the vault is still retried and blocks the batch", async () => {
 test("the vault's own 413 on a live post is relayed as refused, not queued", async () => {
   const durable = new MemoryDurable();
   const alarms: string[] = [];
-  const { d } = mk({ vaultStatus: 413, durable, alarms });
+  const { d } = mk({ vaultStatus: 413, vaultBody: JSON.stringify({ stored: false, error: "too_large", detail: "x" }), durable, alarms });
   const res = await handleCapture(req(good()), ENV, d);
   assert.equal(res.status, 413);
   assert.equal(durable.messages.length, 0);
   assert.equal(alarms.length, 1);
 });
+
+for (const [status, body] of [[405, "<html>Method Not Allowed</html>"], [413, "<html>Request Entity Too Large</html>"], [405, JSON.stringify({ error: "other" })], [413, JSON.stringify({ stored: true, error: "too_large" })]] as [number, string][]) {
+  test(`a ${status} that is not the vault's own refusal (${body.slice(0, 20)}) is retried when queued and queued when live`, async () => {
+    const r2 = new FakeR2();
+    const sent: string[] = [];
+    const first = mk({ vaultThrow: true, durable: queued(r2, sent) });
+    await handleCapture(req(JSON.stringify(good())), ENV, first.d);
+    const batch = sent.map(msg);
+    await deliverBatch(batch, { BODY_STORE: r2, ...target }, mk({ vaultStatus: status, vaultBody: body }).d);
+    assert.deepEqual(batch.map((m) => m.log), [["retry"]]);
+    const durable = new MemoryDurable();
+    const res = await handleCapture(req(good()), ENV, mk({ vaultStatus: status, vaultBody: body, durable }).d);
+    assert.equal(res.status, 202);
+    assert.equal(durable.messages.length, 1);
+  });
+}

@@ -11,7 +11,20 @@ export const VAULT_TIMEOUT_MS = 10_000;
 /** The most a browser's body may be: the vault refuses more with 413, so the edge refuses it first and never queues it. */
 export const MAX_BROWSER_BODY_BYTES = 64 * 1024;
 /** The vault's answers that are final for a request: asking again gets the same answer (405 not a capture method, 413 too large). */
-export const FINAL_VAULT_REFUSALS = [405, 413];
+const VAULT_REFUSAL_ERRORS: Record<number, string> = { 405: "method_not_allowed", 413: "too_large" };
+
+/** True only when the vault's own JSON says it refused: ``{"stored": false, "error": "too_large" | "method_not_allowed"}`` with the matching
+ *  status. A 405 or 413 from a proxy, an access gate or a misrouted deploy is not the vault's answer and is retried like a 5xx. */
+export async function isVaultRefusal(res: Response): Promise<boolean> {
+  const expected = VAULT_REFUSAL_ERRORS[res.status];
+  if (!expected) return false;
+  try {
+    const parsed = JSON.parse(await res.clone().text()) as { stored?: unknown; error?: unknown } | null;
+    return parsed?.stored === false && parsed?.error === expected;
+  } catch {
+    return false;
+  }
+}
 
 export class VaultRefused extends Error {
   status: number;
@@ -215,7 +228,7 @@ export async function storeAndAnswer(request: Request, target: Partial<VaultTarg
   try {
     const res = await post(target as VaultTarget, deps, built.envelope);
     if (res.status === 201) reply = res;
-    else if (FINAL_VAULT_REFUSALS.includes(res.status)) {
+    else if (await isVaultRefusal(res)) {
       alarm(deps, "capture.vault_refused", `the vault refused a request with ${res.status}; it was not queued`);
       return preflight ? new Response(null, { status: 204, headers: cors }) : json(res.status, { stored: false, error: res.status === 413 ? "too_large" : "method_not_allowed", detail: "the vault refused this request; nothing was stored" }, cors);
     }
@@ -257,7 +270,7 @@ export async function deliverQueued(message: QueuedMessage, body: Uint8Array, ta
   envelope.edge_facts = facts;
   if ((await sha256HexOf(body)) !== envelope.body_sha256) throw new Error("the queued body no longer matches its fingerprint");
   const res = await post(target, deps, envelope);
-  if (FINAL_VAULT_REFUSALS.includes(res.status)) throw new VaultRefused(res.status);
+  if (await isVaultRefusal(res)) throw new VaultRefused(res.status);
   if (res.status !== 201) throw new Error(`the vault answered ${res.status}`);
 }
 

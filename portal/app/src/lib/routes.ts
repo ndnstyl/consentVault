@@ -38,6 +38,7 @@ export const ROUTES: RouteDef[] = [
   { id: 'references', pattern: '/references', title: 'Rule references', chrome: 'app' },
   { id: 'records', pattern: '/records', title: 'Records', chrome: 'app' },
   { id: 'setup', pattern: '/setup', title: 'Setup', chrome: 'app' },
+  { id: 'tutorials', pattern: '/tutorials', title: 'Tutorials', chrome: 'app' },
   { id: 'confirmations', pattern: '/confirmations', title: 'Confirmation messages', chrome: 'app' },
   { id: 'confirmation-edit', pattern: '/confirmations/:source_id/:channel', title: 'Confirmation message', chrome: 'app' },
 ];

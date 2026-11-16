@@ -11,6 +11,7 @@ import { Systems, SystemNew, SystemDetail } from './systems.tsx';
 import { Records } from './records.tsx';
 import { Setup } from './setup.tsx';
 import { Confirmations, ConfirmationEdit } from './confirmations.tsx';
+import { Tutorials } from './tutorials.tsx';
 import { Retention, Members, Audit, BillingScreen, Settings, References, CompanySignIn } from './org.tsx';
 
 export function Screen({ route, params }: { route: RouteDef; params: Record<string, string> }) {
@@ -49,6 +50,7 @@ export function Screen({ route, params }: { route: RouteDef; params: Record<stri
     case 'references': return <References />;
     case 'records': return <Records />;
     case 'setup': return <Setup />;
+    case 'tutorials': return <Tutorials />;
     case 'confirmations': return <Confirmations />;
     case 'confirmation-edit': return <ConfirmationEdit sourceId={params.source_id} channel={params.channel} />;
   }

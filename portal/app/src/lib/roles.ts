@@ -23,7 +23,7 @@ export type RouteId =
   | 'wording' | 'wording-new' | 'wording-detail'
   | 'checklists' | 'checklist-detail' | 'evidence' | 'exports' | 'export-detail'
   | 'systems' | 'system-new' | 'system-detail' | 'retention' | 'members' | 'sso' | 'audit' | 'billing' | 'settings' | 'references'
-  | 'records' | 'setup' | 'confirmations' | 'confirmation-edit';
+  | 'records' | 'setup' | 'confirmations' | 'confirmation-edit' | 'tutorials';
 
 export const VIEW_ROLES: Record<RouteId, Role[]> = {
   'sign-in': ALL, callback: ALL, invite: ALL, 'choose-org': ALL, plan: A, 'billing-return': A,
@@ -31,7 +31,7 @@ export const VIEW_ROLES: Record<RouteId, Role[]> = {
   wording: ALL, 'wording-new': A, 'wording-detail': ALL,
   checklists: ALL, 'checklist-detail': ALL, evidence: AV, exports: AV, 'export-detail': AV,
   systems: ALL, 'system-new': AD, 'system-detail': ALL, retention: AV, members: A, sso: A, audit: AV, billing: A, settings: ALL, references: ALL,
-  records: ALL, setup: AD, confirmations: ALL, 'confirmation-edit': AD,
+  records: ALL, setup: AD, confirmations: ALL, 'confirmation-edit': AD, tutorials: ALL,
 };
 
 export type Action =

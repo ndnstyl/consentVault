@@ -228,6 +228,7 @@ export function Shell() {
           <button type="button" className="pill-btn menu-btn" aria-expanded={menuOpen} aria-controls="side" onClick={() => setMenuOpen(!menuOpen)}><Icon name="i-menu" />Menu</button>
           <Brand />
           <span className="spacer" />
+          {ready && <Link className="pill-btn tutorials-btn" href="/tutorials" aria-current={router.path === '/tutorials' ? 'page' : undefined}>Tutorials</Link>}
           {assistantEnabled() && <Assistant />}
           <OrgSwitcher />
           <PersonMenu />

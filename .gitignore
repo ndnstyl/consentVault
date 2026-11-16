@@ -5,3 +5,6 @@ dist/
 build/
 .pytest_cache/
 consentvault.toml
+
+# the tutorial videos are copied in by portal/app/scripts/copy-tutorials.mjs at build time
+portal/app/public/tutorials/

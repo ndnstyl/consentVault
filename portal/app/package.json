@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "mock": "node mock/server.ts --port 4010",
-    "build": "next build && node scripts/csp-hashes.mjs",
+    "build": "node scripts/copy-tutorials.mjs && next build && node scripts/csp-hashes.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.ts test/*.test.mjs",
     "e2e": "node e2e/run.mjs",

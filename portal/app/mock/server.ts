@@ -568,10 +568,10 @@ export function createMock() {
     return E(404, 'not_found', 'No such endpoint.');
   }
 
-  const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.txt': 'text/plain' };
+  const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.txt': 'text/plain', '.mp4': 'video/mp4' };
   const DYNAMIC = ['/sources/', '/wording/', '/checklists/', '/exports/', '/systems/', '/confirmations/'];
 
-  function serveStatic(root: string, pathname: string, res: http.ServerResponse): void {
+  function serveStatic(root: string, pathname: string, res: http.ServerResponse, range?: string): void {
     const clean = path.posix.normalize(decodeURIComponent(pathname)).replace(/^(\.\.\/)+/, '');
     const cands = [clean, `${clean}.html`, path.join(clean, 'index.html')];
     let file = cands.map((x) => path.join(root, x)).find((f) => f.startsWith(root) && fs.existsSync(f) && fs.statSync(f).isFile());
@@ -588,7 +588,16 @@ export function createMock() {
     const headers: Record<string, string> = { 'content-type': MIME[ext] ?? 'application/octet-stream', 'cache-control': 'no-store' };
     if (ext === '.html' && csp) headers['content-security-policy'] = csp;
     Object.assign(headers, shipped);
-    res.writeHead(200, headers); res.end(fs.readFileSync(file));
+    const body = fs.readFileSync(file);
+    const m = ext === '.mp4' && range ? /^bytes=(\d*)-(\d*)$/.exec(range) : null;
+    if (m) {
+      const start = m[1] === '' ? Math.max(0, body.length - Number(m[2])) : Number(m[1]);
+      const end = m[1] === '' || m[2] === '' ? body.length - 1 : Math.min(Number(m[2]), body.length - 1);
+      if (start > end || start >= body.length) { res.writeHead(416, { 'content-range': `bytes */${body.length}` }); res.end(); return; }
+      res.writeHead(206, { ...headers, 'accept-ranges': 'bytes', 'content-range': `bytes ${start}-${end}/${body.length}`, 'content-length': String(end - start + 1) }); res.end(body.subarray(start, end + 1)); return;
+    }
+    if (ext === '.mp4') headers['accept-ranges'] = 'bytes';
+    res.writeHead(200, headers); res.end(body);
   }
 
   function server(staticRoot: string | null, corsOrigin: string | null) {
@@ -609,7 +618,7 @@ export function createMock() {
       } catch (e) {
         res.writeHead(500, { 'content-type': 'application/json', ...cors }); res.end(JSON.stringify({ error: 'mock_failure', detail: String(e) })); return;
       }
-      if (staticRoot) { serveStatic(staticRoot, url.pathname, res); return; }
+      if (staticRoot) { serveStatic(staticRoot, url.pathname, res, req.headers.range); return; }
       res.writeHead(404, cors); res.end();
     });
   }

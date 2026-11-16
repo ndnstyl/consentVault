@@ -4,7 +4,7 @@
 // or drop the request. A request that arrives while the vault is down waits in the edge's durable store and is told so.
 
 import {
-  alarmDeadLetters, deliverBatch, durableFrom, storeAndAnswer, type CaptureDeps as EnvelopeDeps, type Durable, type QueueLike, type QueueMessage, type R2Like,
+  alarmDeadLetters, deliverBatch, durableFrom, permissionHeaders, rateLimited, readCappedBody, storeAndAnswer, tooLarge, type CaptureDeps as EnvelopeDeps, type Durable, type QueueLike, type QueueMessage, type R2Like,
 } from "./envelope.ts";
 
 export interface SiteKeyRecord {
@@ -22,6 +22,7 @@ export interface CaptureEnv {
   ACCESS_CLIENT_ID: string;
   ACCESS_CLIENT_SECRET: string;
   DEFAULT_RATE_LIMIT_PER_MINUTE?: string;
+  DEFAULT_IP_RATE_LIMIT_PER_MINUTE?: string; // posts a minute from one client address, whatever key it sends (default 120)
   BODY_STORE?: R2Like; // optional: where a request waits while the vault is down (with CAPTURE_QUEUE)
   CAPTURE_QUEUE?: QueueLike;
   DEAD_LETTER_QUEUE?: string; // the name of the dead-letter queue: a message there raises an alarm
@@ -45,6 +46,7 @@ export class MemoryRateLimiter implements RateLimiter {
   private hits = new Map<string, { start: number; n: number }>();
   async hit(key: string, limit: number, windowSeconds: number): Promise<boolean> {
     const now = Date.now();
+    if (this.hits.size > 5000) for (const [k, v] of this.hits) if (now - v.start >= windowSeconds * 1000) this.hits.delete(k);
     const cur = this.hits.get(key);
     if (!cur || now - cur.start >= windowSeconds * 1000) {
       this.hits.set(key, { start: now, n: 1 });
@@ -117,19 +119,37 @@ export async function handleCapture(request: Request, env: CaptureEnv, deps: Cap
   const allowed = rec && Array.isArray(rec.allowed_origins) ? rec.allowed_origins : [];
   facts.origin_on_list = !!origin && allowed.includes(origin);
 
-  if (rec && facts.site_key_state === "active" && request.method !== "OPTIONS") {
-    const limit = rec.rate_limit_per_minute ?? Number(env.DEFAULT_RATE_LIMIT_PER_MINUTE || 60);
-    facts.rate_count_window = { limit, within: await deps.rateLimiter.hit(`site:${siteKey}`, limit, 60) };
+  const ip = request.headers.get("cf-connecting-ip") || "";
+  let pre: Uint8Array;
+  try {
+    const got = await readCappedBody(request);
+    if (got === null) return tooLarge(permissionHeaders(request));
+    pre = got;
+  } catch (e) {
+    pre = new Uint8Array(0);
+    facts.body_read_failed = (e as Error).name;
+  }
+  if (request.method !== "OPTIONS") {
+    // Over a limit is refused with 429 before anything is stored (the one place the capture edge refuses besides size).
+    if (ip) {
+      const ipLimit = Number(env.DEFAULT_IP_RATE_LIMIT_PER_MINUTE || 120);
+      if (!(await deps.rateLimiter.hit(`ip:${ip}`, ipLimit, 60))) return rateLimited(permissionHeaders(request));
+    }
+    if (rec && facts.site_key_state === "active") {
+      const limit = rec.rate_limit_per_minute ?? Number(env.DEFAULT_RATE_LIMIT_PER_MINUTE || 60);
+      const within = await deps.rateLimiter.hit(`site:${siteKey}`, limit, 60);
+      if (!within) return rateLimited(permissionHeaders(request));
+      facts.rate_count_window = { limit, within };
+    }
   }
   if (request.method === "POST") {
-    const text = await request.clone().text().catch(() => "");
-    const ip = request.headers.get("cf-connecting-ip") || "";
+    const text = new TextDecoder().decode(pre);
     facts.bot_check_answer = await botCheckAnswer(env, tokenOf(text), ip, deps);
     const hosts = allowed.map(hostOf).filter(Boolean);
     const answer = facts.bot_check_answer as { hostname?: unknown } | null;
     facts.bot_check_hostname_on_list = typeof answer?.hostname === "string" && hosts.includes(answer.hostname.toLowerCase());
   }
-  return storeAndAnswer(request, env, deps, facts);
+  return storeAndAnswer(request, env, deps, facts, pre);
 }
 
 const limiter = new MemoryRateLimiter();

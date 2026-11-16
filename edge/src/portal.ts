@@ -1,6 +1,7 @@
 // Portal Worker: the dashboard's one public door. /auth/* is sign-in (auth.ts), /v1/* is the gateway with session
 // cookies (gateway.ts), everything else is the dashboard's static export.
 
+import { securityTxt } from "./security-contact.ts";
 import { MEMBER_KEY, SUBJECT_HASH_HEADER, recordMember, VAULT_UNREACHABLE_HEADER, handleAuth } from "./auth.ts";
 import { PARKED_STATUSES } from "./parked.ts";
 import { handleGateway, vaultCaller, type GatewayDeps } from "./gateway.ts";
@@ -180,6 +181,8 @@ async function noteLiveMember(request: Request, env: PortalEnv, deps: GatewayDep
 }
 
 export async function handlePortal(request: Request, env: PortalEnv, deps: GatewayDeps): Promise<Response> {
+  const contactFile = securityTxt(request);
+  if (contactFile) return contactFile;
   const path = new URL(request.url).pathname;
   const now = deps.now ?? Date.now;
   const accept = request.headers.get("accept") ?? "";

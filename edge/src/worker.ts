@@ -3,7 +3,7 @@
 // with the vault's receipt. The origin list and the bot check are facts in the envelope; neither is a reason to refuse.
 
 import {
-  alarmDeadLetters, deliverBatch, durableFrom, hmacSha256Hex, sha256Hex, storeAndAnswer, type CaptureDeps as EnvelopeDeps, type Durable, type QueueLike,
+  alarmDeadLetters, deliverBatch, durableFrom, hmacSha256Hex, permissionHeaders, readCappedBody, sha256Hex, storeAndAnswer, tooLarge, type CaptureDeps as EnvelopeDeps, type Durable, type QueueLike,
   type QueueMessage, type R2Like,
 } from "./envelope.ts";
 
@@ -74,11 +74,19 @@ export async function handleConsent(request: Request, env: Env, deps: Deps): Pro
   const origin = request.headers.get("origin");
   const facts: Record<string, unknown> = { intake: "edge_single", source_label: env.SOURCE_ID || "edge" };
   facts.origin_on_list = !!origin && allowedOrigins(env).includes(origin);
-  if (request.method === "POST") {
-    const text = await request.clone().text().catch(() => "");
-    facts.bot_check_answer = await botCheckAnswer(env, tokenOf(text), request.headers.get("cf-connecting-ip") || "", deps);
+  let pre: Uint8Array;
+  try {
+    const got = await readCappedBody(request);
+    if (got === null) return tooLarge(permissionHeaders(request));
+    pre = got;
+  } catch (e) {
+    pre = new Uint8Array(0);
+    facts.body_read_failed = (e as Error).name;
   }
-  return storeAndAnswer(request, env, deps, facts);
+  if (request.method === "POST") {
+    facts.bot_check_answer = await botCheckAnswer(env, tokenOf(new TextDecoder().decode(pre)), request.headers.get("cf-connecting-ip") || "", deps);
+  }
+  return storeAndAnswer(request, env, deps, facts, pre);
 }
 
 export default {

@@ -6,6 +6,8 @@
 // Adds the Access service token toward the origin, enforces size limits and a WAF hook, and logs nothing.
 
 import { Refusal } from "./worker.ts";
+import { securityTxt } from "./security-contact.ts";
+import { permissionHeaders, rateLimited, readCappedBody, tooLarge } from "./envelope.ts";
 import { ASSERTION_HEADER, MisconfiguredError, assertionConfigError, signAssertion } from "./assertion.ts";
 import { StoreUnavailable, sessionStoreFor, type GateNamespace, type SessionStore } from "./session-store.ts";
 import {
@@ -31,6 +33,11 @@ export interface GatewayEnv {
   // Workers rate-limit bindings for the confirmation doors (wrangler [[ratelimits]]); see confirmationDoor below.
   INBOUND_LIMITER?: RateLimiter;
   PAGE_LIMITER?: RateLimiter;
+  // Per client address: capture posts a minute (over it: 429 before anything is forwarded; a permission check is not counted), and
+  // failed bearers a minute (over it: 429 for a minute; a good bearer is never counted). Absent binding: not enforced, and the
+  // Worker says so in its log at start.
+  CAPTURE_LIMITER?: RateLimiter;
+  AUTH_FAIL_LIMITER?: RateLimiter;
   // The public read class (record links): served only on this host name (a configuration value, no default), with its own per-IP limiter.
   VERIFY_HOST?: string;
   VERIFY_LIMITER?: RateLimiter;
@@ -118,6 +125,38 @@ const PAGE_MAX_BODY = 8 * 1024;
 const TENANT_LEAD_SECONDS = 20;
 const REFRESH_LEAD_SECONDS = 30;
 
+// Addresses whose failed bearers went over the limit, kept in this Worker instance for a minute (the binding counts; this remembers).
+const authBlocked = new Map<string, number>();
+const AUTH_BLOCK_MS = 60_000;
+
+function throttled(): Response {
+  const res = rateLimited({});
+  res.headers.set("access-control-allow-origin", "*");
+  return res;
+}
+
+/** True while the address is inside its one-minute block for failed bearers. */
+function authIsBlocked(request: Request, deps: GatewayDeps): boolean {
+  const ip = request.headers.get("cf-connecting-ip");
+  if (!ip) return false;
+  const until = authBlocked.get(ip);
+  if (until === undefined) return false;
+  if (until > (deps.now ?? Date.now)()) return true;
+  authBlocked.delete(ip);
+  return false;
+}
+
+/** Counts one failed bearer for the address; the 429 to answer with when that put it over the limit, else null. */
+async function countAuthFailure(request: Request, env: GatewayEnv, deps: GatewayDeps): Promise<Response | null> {
+  const ip = request.headers.get("cf-connecting-ip");
+  if (!ip || !env.AUTH_FAIL_LIMITER) return null;
+  if ((await env.AUTH_FAIL_LIMITER.limit({ key: `authfail:${ip}` })).success) return null;
+  const now = (deps.now ?? Date.now)();
+  if (authBlocked.size > 5000) for (const [k, v] of authBlocked) if (v <= now) authBlocked.delete(k);
+  authBlocked.set(ip, now + AUTH_BLOCK_MS);
+  return throttled();
+}
+
 function err(status: number, code: string, message: string, cookies: string[] = []): Response {
   const h = new Headers({ "content-type": "application/json", "cache-control": "no-store" });
   for (const c of cookies) h.append("set-cookie", c);
@@ -196,6 +235,10 @@ function scrub(h: Headers): Headers {
 // stored with the post. Only a vault that cannot be reached is answered, and then it says nothing was stored.
 async function forwardCapture(request: Request, env: GatewayEnv, deps: GatewayDeps): Promise<Response> {
   const url = new URL(request.url);
+  const cors = permissionHeaders(request);
+  // A post is limited per client address before anything is read or forwarded; a permission check is never counted.
+  const ip = request.headers.get("cf-connecting-ip");
+  if (ip && env.CAPTURE_LIMITER && request.method !== "OPTIONS" && !(await env.CAPTURE_LIMITER.limit({ key: `capture:${ip}` })).success) return rateLimited(cors);
   const auth = request.headers.get("authorization");
   let verdict: { status: number; code: string; message: string } | undefined;
   try {
@@ -212,8 +255,12 @@ async function forwardCapture(request: Request, env: GatewayEnv, deps: GatewayDe
     method: request.method,
     cookie_removed: request.headers.has("cookie"), // the one header not forwarded: the gateway's own portal session cookie
   };
-  let body: ArrayBuffer | undefined;
-  if (request.method !== "GET" && request.method !== "HEAD") body = await request.arrayBuffer();
+  let body: Uint8Array | undefined;
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    const got = await readCappedBody(request); // over 64 KiB, declared or streamed: 413, never held whole
+    if (got === null) return tooLarge(cors);
+    body = got;
+  }
   const headers = new Headers(request.headers);
   for (const h of ["cf-access-client-id", "cf-access-client-secret", "cf-access-jwt-assertion", "host", "connection", "cookie"]) headers.delete(h);
   headers.set("cf-access-client-id", env.ACCESS_CLIENT_ID);
@@ -656,6 +703,8 @@ async function publicReadDoor(request: Request, url: URL, env: GatewayEnv, deps:
 export async function handleGateway(request: Request, env: GatewayEnv, deps: GatewayDeps): Promise<Response> {
   try {
     const url = new URL(request.url);
+    const contactFile = securityTxt(request);
+    if (contactFile) return contactFile;
     if (env.VERIFY_HOST && url.hostname.toLowerCase() === env.VERIFY_HOST.toLowerCase()) {
       // The verify host answers the public read class and nothing else, on every path.
       if (url.pathname === "/p" || url.pathname.startsWith("/p/")) return await publicReadDoor(request, url, env, deps);
@@ -666,6 +715,12 @@ export async function handleGateway(request: Request, env: GatewayEnv, deps: Gat
         (deps.alarm ?? ((n, d) => console.error(`consentvault gateway alarm ${n}: ${d}`)))("capture.store_unavailable", "the gateway has no origin address or Access token; nothing was stored");
         return new Response(JSON.stringify({ stored: false, error: "store_unavailable", detail: "the record store could not be written; nothing was stored; send again" }), {
           status: 503, headers: { "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": request.headers.get("origin") || "*", vary: "origin" },
+        });
+      }
+      if (request.method === "GET" || request.method === "HEAD") {
+        // A read of a capture route carries nothing to store: refused before anything reaches the vault.
+        return new Response(JSON.stringify({ stored: false, error: "method_not_allowed", detail: "a capture route takes POST; nothing was stored" }), {
+          status: 405, headers: { "content-type": "application/json", "cache-control": "no-store", allow: "POST, OPTIONS", ...permissionHeaders(request) },
         });
       }
       return await forwardCapture(request, env, deps);
@@ -689,6 +744,7 @@ export async function handleGateway(request: Request, env: GatewayEnv, deps: Gat
     }
     if (!url.pathname.startsWith("/v1/")) throw new Refusal(404, "not_found", "no such route");
     if (!ALLOWED_METHODS.includes(request.method)) throw new Refusal(405, "method_not_allowed", "method not allowed");
+    if (request.headers.has("authorization") && authIsBlocked(request, deps)) return throttled();
 
     const auth = request.headers.get("authorization");
     const cookieHeader = request.headers.get("cookie");
@@ -698,6 +754,10 @@ export async function handleGateway(request: Request, env: GatewayEnv, deps: Gat
     const portalMode = !auth && !downloadLink && !twentyWebhook && !tokenEndpoint && !!env.SESSIONS && !!cookieValue(cookieHeader, SESSION_COOKIE);
     if (!auth && !portalMode && !downloadLink && !twentyWebhook && !tokenEndpoint) throw new Refusal(401, "bearer_missing", "an Authorization: Bearer token is required");
     if (auth && !twentyWebhook && !tokenEndpoint) {
+      if (!BEARER_RE.test(auth) || auth.slice(7).startsWith("cv_site_")) {
+        const limited = await countAuthFailure(request, env, deps);
+        if (limited) return limited;
+      }
       if (!BEARER_RE.test(auth)) throw new Refusal(401, "bearer_malformed", "Authorization header is not a well-formed bearer token");
       if (auth.slice(7).startsWith("cv_site_")) throw new Refusal(401, "site_key_not_accepted", "site keys are accepted only at the capture endpoint");
     }
@@ -776,6 +836,10 @@ export async function handleGateway(request: Request, env: GatewayEnv, deps: Gat
     } catch (e) {
       throw new Refusal(502, "origin_unreachable", `origin unreachable: ${(e as Error).name}`);
     }
+    if (res.status === 401 && auth && !portalMode && !twentyWebhook && !tokenEndpoint && !downloadLink) {
+      const limited = await countAuthFailure(request, env, deps);
+      if (limited) return limited;
+    }
     if (portal && store && request.method === "POST" && url.pathname === "/v1/session/org" && res.ok) {
       const got = tenantFrom(res, (await res.clone().json().catch(() => null)) as { org_id?: string; expires_at?: string } | null);
       if (!got || !(await store.chooseOrg(portal.sid, got.orgId, got.tenant, (deps.now ?? Date.now)()))) {
@@ -791,9 +855,18 @@ export async function handleGateway(request: Request, env: GatewayEnv, deps: Gat
   }
 }
 
+let warnedLimiters = false;
 export default {
   async fetch(request: Request, env: GatewayEnv): Promise<Response> {
-    return handleGateway(request, env, { fetch: (...a) => fetch(...a) });
+    if (!warnedLimiters && (!env.CAPTURE_LIMITER || !env.AUTH_FAIL_LIMITER)) {
+      warnedLimiters = true;
+      console.error("consentvault gateway alarm limiter.missing: CAPTURE_LIMITER or AUTH_FAIL_LIMITER is not bound; capture posts and failed bearers are not throttled");
+    }
+    const res = await handleGateway(request, env, { fetch: (...a) => fetch(...a) });
+    // nosniff on every answer, whatever the vault or the Worker sent: a body is never reinterpreted as another type.
+    const headers = new Headers(res.headers);
+    headers.set("x-content-type-options", "nosniff");
+    return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
   },
   // Every minute (wrangler [triggers] crons): deliver what the fallback door stored while the vault was away.
   async scheduled(_event: unknown, env: GatewayEnv): Promise<void> {

@@ -8,6 +8,8 @@
 
 const enc = new TextEncoder();
 export const VAULT_TIMEOUT_MS = 10_000;
+/** The most a public capture request may carry. A larger body is refused with 413 before it is read; nothing is stored. */
+export const MAX_CAPTURE_BODY_BYTES = 64 * 1024;
 
 export interface VaultTarget {
   VAULT_URL: string;
@@ -108,6 +110,43 @@ function json(status: number, body: unknown, extra: Record<string, string>): Res
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store", ...extra } });
 }
 
+/** A body over the cap: refused before it was read, so nothing was stored and nothing was sent on. */
+export function tooLarge(extra: Record<string, string>): Response {
+  return json(413, { stored: false, error: "too_large", detail: `the request body is over ${MAX_CAPTURE_BODY_BYTES} bytes; nothing was stored` }, extra);
+}
+
+/** Over a rate limit: refused before anything was stored; the sender may try again after the wait. */
+export function rateLimited(extra: Record<string, string>): Response {
+  return json(429, { stored: false, error: "rate_limited", detail: "too many requests from this address or key; nothing was stored; wait a minute and send again" }, { ...extra, "retry-after": "60" });
+}
+
+/**
+ * The request body, read at most ``max`` bytes: null when a declared length is over it or the stream runs past it (the stream
+ * is cancelled at that point, so an oversize body is never held whole). Throws what the stream throws.
+ */
+export async function readCappedBody(request: Request, max = MAX_CAPTURE_BODY_BYTES): Promise<Uint8Array | null> {
+  const declared = request.headers.get("content-length");
+  if (declared !== null && Number(declared) > max) return null;
+  if (!request.body) return new Uint8Array(0);
+  const reader = request.body.getReader();
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel();
+      return null;
+    }
+    parts.push(value);
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.byteLength; }
+  return out;
+}
+
 export function unavailable(extra: Record<string, string>): Response {
   return json(503, { stored: false, error: "store_unavailable", detail: "the record store could not be written; nothing was stored; send again" }, extra);
 }
@@ -165,11 +204,16 @@ function alarm(deps: CaptureDeps, name: string, detail: string): void {
  * Store-and-answer for one browser request: forward it whole, relay the vault's receipt; when the vault cannot be reached
  * or answers anything but a receipt, queue it durably; when that cannot be done either, say nothing was stored.
  */
-export async function storeAndAnswer(request: Request, target: Partial<VaultTarget>, deps: CaptureDeps, facts: Record<string, unknown>): Promise<Response> {
+export async function storeAndAnswer(request: Request, target: Partial<VaultTarget>, deps: CaptureDeps, facts: Record<string, unknown>, preRead?: Uint8Array): Promise<Response> {
   const cors = permissionHeaders(request);
   let body: Uint8Array;
   try {
-    body = new Uint8Array(await request.arrayBuffer());
+    if (preRead) body = preRead;
+    else {
+      const got = await readCappedBody(request);
+      if (got === null) return tooLarge(cors);
+      body = got;
+    }
   } catch (e) {
     body = new Uint8Array(0);
     facts = { ...facts, body_read_failed: (e as Error).name };

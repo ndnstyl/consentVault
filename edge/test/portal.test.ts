@@ -31,3 +31,11 @@ test("a missing static host is a named error, not a blank page", async () => {
   const res = await handlePortal(req("/brands"), { ...m.env, ASSETS: undefined as never }, m.deps);
   assert.equal(res.status, 500);
 });
+
+test("the portal answers its own security contact file (200, plain text, the security contact) and never asks the static host", async () => {
+  const m = mk();
+  const res = await handlePortal(req("/.well-known/security.txt"), m.env, m.deps);
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /^Contact: mailto:info@consentvault\.ai$/m);
+  assert.deepEqual(m.seen, []);
+});

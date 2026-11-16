@@ -150,3 +150,11 @@ test("bot check: the provider's answer is a fact exactly as given, and a failed 
   assert.equal((await handleConsent(req(good()), env, none.d)).status, 201);
   assert.equal(envelopeOf(none.calls[0]).edge_facts.bot_check_answer.error, "no_token_sent");
 });
+
+test("a body over 64 KiB is refused with 413 and nothing is sent anywhere", async () => {
+  const { d, calls } = deps();
+  const res = await handleConsent(req(null, {}, "POST", "x".repeat(64 * 1024 + 1)), ENV, d);
+  assert.equal(res.status, 413);
+  assert.equal(((await res.json()) as { error: string }).error, "too_large");
+  assert.equal(calls.length, 0);
+});

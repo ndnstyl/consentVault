@@ -108,7 +108,7 @@ const everyFormerRefusal: [string, () => Promise<{ res: Response; calls: Call[] 
   ["turnstile fails", () => run(req(good()), { turnstile: { success: false } }), (f) => assert.equal(f.bot_check_answer.success, false)],
   ["turnstile hostname mismatch", () => run(req(good()), { turnstile: { success: true, hostname: "evil.com" } }), (f) => assert.equal(f.bot_check_hostname_on_list, false)],
   ["turnstile down", () => run(req(good()), { turnstileStatus: 500 }), (f) => assert.ok(f.bot_check_answer)],
-  ["a body of 5 MiB", () => run(req(good({ pad: "x".repeat(5 * 1024 * 1024) }))), (f) => assert.equal(f.site_key_state, "active")],
+  ["a body of exactly 64 KiB", () => run(req("x".repeat(64 * 1024))), (f) => assert.equal(f.site_key_state, "active")],
   ["not JSON", () => run(req("this is {not json")), (f) => assert.equal(f.site_key_state, "active")],
   ["no client address", () => run(new Request("https://e.example.com/capture", { method: "POST", headers: { origin: "https://www.acme.com", "x-consentvault-site-key": KEY }, body: "{}" })), (f) => assert.equal(f.client_ip, undefined)],
   ["any other path", () => run(req(good(), {}, "POST", "/consent")), () => {}],
@@ -142,13 +142,46 @@ test("the box value is in the stored bytes as sent and the Worker adds none", as
   assert.equal("checked" in JSON.parse(bodyOf(vaultCalls(calls)[0]).toString()), false);
 });
 
-test("a request over the rate limit is still stored and the fact says so", async () => {
+test("a request over the site key's rate limit is refused with 429 before anything is stored", async () => {
   const { d, calls } = mk();
   const k = { "x-consentvault-site-key": "cv_site_lowlimit000" };
   assert.equal((await handleCapture(req(good(), k), ENV, d)).status, 201);
-  assert.equal((await handleCapture(req(good(), k), ENV, d)).status, 201);
-  const [a, b] = vaultCalls(calls).map((c) => envelopeOf(c).edge_facts.rate_count_window);
-  assert.deepEqual([a.within, b.within], [true, false]);
+  const res = await handleCapture(req(good(), k), ENV, d);
+  assert.equal(res.status, 429);
+  assert.equal(res.headers.get("retry-after"), "60");
+  assert.equal(res.headers.get("access-control-allow-origin"), "https://www.acme.com");
+  const body = (await res.json()) as { stored: boolean; error: string };
+  assert.deepEqual([body.stored, body.error], [false, "rate_limited"]);
+  assert.equal(vaultCalls(calls).length, 1, "the refused request never reached the vault");
+  const [a] = vaultCalls(calls).map((c) => envelopeOf(c).edge_facts.rate_count_window);
+  assert.equal(a.within, true);
+});
+
+test("a client address over its own limit is refused with 429 whatever site key or none it sends", async () => {
+  const { d, calls } = mk();
+  const env = { ...ENV, DEFAULT_IP_RATE_LIMIT_PER_MINUTE: "2" };
+  const keys = [KEY, "cv_site_unknown0000", ""];
+  const statuses: number[] = [];
+  for (const k of keys) statuses.push((await handleCapture(req(good(), { "x-consentvault-site-key": k }), env, d)).status);
+  assert.deepEqual(statuses, [201, 201, 429]);
+  assert.equal(vaultCalls(calls).length, 2);
+  const other = await handleCapture(req(good(), { "cf-connecting-ip": "198.51.100.7" }), env, d);
+  assert.equal(other.status, 201, "another address is not affected");
+  const pre = await handleCapture(req(null, { "access-control-request-method": "POST" }, "OPTIONS"), env, d);
+  assert.equal(pre.status, 204, "a permission check is never counted");
+});
+
+test("a body over 64 KiB is refused with 413 before it is read, declared or not, and nothing is stored or sent", async () => {
+  const big = "x".repeat(64 * 1024 + 1);
+  const declared = new Request("https://edge.example.com/capture", { method: "POST", headers: { origin: "https://www.acme.com", "x-consentvault-site-key": KEY, "cf-connecting-ip": "203.0.113.50", "content-length": String(big.length) }, body: "{}" });
+  const chunked = new Request("https://edge.example.com/capture", { method: "POST", headers: { origin: "https://www.acme.com", "x-consentvault-site-key": KEY, "cf-connecting-ip": "203.0.113.51" },
+    body: new ReadableStream({ start(c) { for (let i = 0; i < 20; i++) c.enqueue(new Uint8Array(8 * 1024)); c.close(); } }), duplex: "half" } as RequestInit);
+  for (const [name, request] of [["declared", declared], ["streamed, no length", chunked], ["plain", req(big, { "cf-connecting-ip": "203.0.113.52" })]] as const) {
+    const { res, calls } = await run(request);
+    assert.equal(res.status, 413, name);
+    assert.equal(((await res.json()) as { error: string }).error, "too_large", name);
+    assert.equal(calls.length, 0, `${name}: not even the bot check was called`);
+  }
 });
 
 test("a browser permission check is answered for any origin and stored as one", async () => {

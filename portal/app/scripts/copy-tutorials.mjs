@@ -1,13 +1,14 @@
 // Copies the eight tutorial videos into public/tutorials before the build, so they ship as static assets of the portal Worker.
 // The free plan's static assets cap is 25 MiB a file; a file over it, a missing file or a copy that differs from its source is an error, never a skip.
-//   node scripts/copy-tutorials.mjs [source folder]     default: the deliverables folder named below
+//   node scripts/copy-tutorials.mjs <source folder>   or set CV_TUTORIALS_DIR; there is no default, the videos live outside this repo
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const SOURCE = process.argv[2] ?? process.env.CV_TUTORIALS_DIR ?? path.resolve(here, '..', '..', '..', '..', 'tutorials');
+const SOURCE = process.argv[2] ?? process.env.CV_TUTORIALS_DIR;
+if (!SOURCE) { console.error('copy-tutorials: no source folder. Pass the folder that holds the eight videos as the first argument or set CV_TUTORIALS_DIR.'); process.exit(6); }
 const DEST = path.resolve(here, '..', 'public', 'tutorials');
 const CAP = 25 * 1024 * 1024;
 const files = fs.readFileSync(path.resolve(here, '..', 'src', 'lib', 'tutorials.ts'), 'utf8').match(/file: '([^']+\.mp4)'/g)?.map((m) => m.slice(7, -1)) ?? [];

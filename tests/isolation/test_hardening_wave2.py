@@ -43,6 +43,8 @@ def _site_key(w, co, *, retire=False, revoke=False) -> str:
         cid = o.execute("INSERT INTO consentvault.credential (org_id, source_id, kind, scope, site_key_id, site_key_hash)"
                         " VALUES (%s, %s, 'edge_site_key', ARRAY['capture'], %s, %s) RETURNING credential_id",
                         (co.org.org_id, co.org.source_id, key, hash_site_key(key))).fetchone()["credential_id"]
+        o.execute("UPDATE consentvault.capture_source SET allowed_origins = ARRAY['https://example.test']"
+                  " WHERE org_id = %s AND source_id = %s", (co.org.org_id, co.org.source_id))
         if revoke:
             o.execute("UPDATE consentvault.credential SET revoked_at = now() WHERE credential_id = %s", (cid,))
         if retire:

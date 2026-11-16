@@ -488,6 +488,7 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
             if hasattr(backend, "for_post"):
                 backend = backend.for_post(view.facts)
             reading = read_post(view.body, field_map, CODE_VERSION, intake=view.intake, context=_view_context(view))
+            view = with_hostname_check(conn, view)
             auth = replace(auth_from_facts(view.facts), org_id=view.org_id)
             if auth.pending:
                 moved = _resolve_site_key(writer, conn, enter, backend, view, field_map=field_map, raise_errors=raise_errors)
@@ -558,6 +559,26 @@ def project_view(writer: RawPostWriter, conn: psycopg.Connection, enter: Callabl
             raise InvalidEventError("a START text restores nothing; the way back is a form (verification 'otp' or none)")
         raise InvalidEventError(f"the post is stored and no event was written: {outcome.reason}")
     return outcome
+
+
+def with_hostname_check(conn, view: PostView) -> PostView:
+    """A post stored before the bot-check hostname was judged at intake carries no ``bot_check_hostname_on_list``. Judge it now from
+    the bot-check answer stored beside the post and the key's allowed origins, the way intake does, so a retried real grant is not
+    closed as a hostname that is not allowed. The answer is held in memory for this reading; nothing is written."""
+    name = ("vault", "bot_check_hostname_on_list")
+    if view.facts.get(("vault", "site_key_state")) is None or name in view.facts:
+        return view
+    try:
+        env = edge_envelope.unpack(view.body)
+    except edge_envelope.EnvelopeUnreadable:  # loud-failure-exempt: no envelope, no key to judge it against; the hostname stays unjudged and reads as not allowed
+        return view
+    from .tenancy.site_keys import resolve_site_key
+
+    site_key = next((v for n, v in env.headers if n.lower() == "x-consentvault-site-key"), None)
+    owner = resolve_site_key(conn, site_key) if site_key else None
+    allowed = owner.allowed_origins if owner is not None else ()
+    answer = view.facts.get(("edge", "bot_check_answer"))
+    return replace(view, facts={**view.facts, name: edge_envelope.bot_check_hostname_on_list(answer, allowed)})
 
 
 class _AlreadyProjected(Exception):

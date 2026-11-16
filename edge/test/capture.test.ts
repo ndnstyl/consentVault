@@ -108,7 +108,6 @@ const everyFormerRefusal: [string, () => Promise<{ res: Response; calls: Call[] 
   ["turnstile fails", () => run(req(good()), { turnstile: { success: false } }), (f) => assert.equal(f.bot_check_answer.success, false)],
   ["turnstile hostname mismatch", () => run(req(good()), { turnstile: { success: true, hostname: "evil.com" } }), (f) => assert.equal(f.bot_check_hostname_on_list, false)],
   ["turnstile down", () => run(req(good()), { turnstileStatus: 500 }), (f) => assert.ok(f.bot_check_answer)],
-  ["a body of 5 MiB", () => run(req(good({ pad: "x".repeat(5 * 1024 * 1024) }))), (f) => assert.equal(f.site_key_state, "active")],
   ["not JSON", () => run(req("this is {not json")), (f) => assert.equal(f.site_key_state, "active")],
   ["no client address", () => run(new Request("https://e.example.com/capture", { method: "POST", headers: { origin: "https://www.acme.com", "x-consentvault-site-key": KEY }, body: "{}" })), (f) => assert.equal(f.client_ip, undefined)],
   ["any other path", () => run(req(good(), {}, "POST", "/consent")), () => {}],
@@ -364,4 +363,66 @@ test("a dead letter that cannot be kept is not acknowledged", async () => {
   await alarmDeadLetters([m], {}, { ...mk({ alarms }).d });
   assert.deepEqual(m.log, ["retry"]);
   assert.deepEqual(alarms, ["capture.queue_dead_letter"]);
+});
+
+// ---- the size cap: a body over 64 KiB never queues, and a final refusal from the vault is closed, not retried ------------------
+test("the edge refuses a body over 64 KiB with 413 itself: nothing is forwarded, queued or stored", async () => {
+  const durable = new MemoryDurable();
+  const { d, calls } = mk({ durable });
+  const res = await handleCapture(req(good({ pad: "x".repeat(5 * 1024 * 1024) })), ENV, d);
+  assert.equal(res.status, 413);
+  assert.equal(((await res.json()) as { stored: boolean }).stored, false);
+  assert.equal(vaultCalls(calls).length, 0);
+  assert.equal(durable.messages.length, 0);
+  assert.equal(durable.bodies.size, 0);
+});
+
+test("a body of exactly 64 KiB is still forwarded", async () => {
+  const pad = "x".repeat(64 * 1024 - JSON.stringify(good({ pad: "" })).length);
+  const { d, calls } = mk();
+  assert.equal((await handleCapture(req(good({ pad })), ENV, d)).status, 201);
+  assert.equal(vaultCalls(calls).length, 1);
+});
+
+for (const status of [405, 413]) {
+  test(`a queued request the vault refuses with a final ${status} is acknowledged, alarmed, never retried, and does not block the one behind it`, async () => {
+    const r2 = new FakeR2();
+    const sent: string[] = [];
+    const first = mk({ vaultThrow: true, durable: queued(r2, sent) });
+    await handleCapture(req(JSON.stringify(good({ session: "one" }))), ENV, first.d);
+    await handleCapture(req(JSON.stringify(good({ session: "two" }))), ENV, first.d);
+    const alarms: string[] = [];
+    const calls: Call[] = [];
+    let n = 0;
+    const d: CaptureDeps = { ...mk().d, alarm: (name) => alarms.push(name), fetch: (async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify(RECEIPT), { status: n++ === 0 ? status : 201 });
+    }) as unknown as typeof fetch };
+    const batch = sent.map(msg);
+    await deliverBatch(batch, { BODY_STORE: r2, ...target }, d);
+    assert.deepEqual(batch.map((m) => m.log), [["ack"], ["ack"]]);
+    assert.equal(alarms.length, 1);
+    assert.match(alarms[0], /^capture\./);
+    assert.equal(calls.length, 2);
+  });
+}
+
+test("a 5xx from the vault is still retried and blocks the batch", async () => {
+  const r2 = new FakeR2();
+  const sent: string[] = [];
+  const first = mk({ vaultThrow: true, durable: queued(r2, sent) });
+  await handleCapture(req(JSON.stringify(good())), ENV, first.d);
+  const batch = sent.map(msg);
+  await deliverBatch(batch, { BODY_STORE: r2, ...target }, mk({ vaultStatus: 500 }).d);
+  assert.deepEqual(batch.map((m) => m.log), [["retry"]]);
+});
+
+test("the vault's own 413 on a live post is relayed as refused, not queued", async () => {
+  const durable = new MemoryDurable();
+  const alarms: string[] = [];
+  const { d } = mk({ vaultStatus: 413, durable, alarms });
+  const res = await handleCapture(req(good()), ENV, d);
+  assert.equal(res.status, 413);
+  assert.equal(durable.messages.length, 0);
+  assert.equal(alarms.length, 1);
 });

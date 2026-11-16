@@ -8,6 +8,23 @@
 
 const enc = new TextEncoder();
 export const VAULT_TIMEOUT_MS = 10_000;
+/** The most a browser's body may be: the vault refuses more with 413, so the edge refuses it first and never queues it. */
+export const MAX_BROWSER_BODY_BYTES = 64 * 1024;
+/** The vault's answers that are final for a request: asking again gets the same answer (405 not a capture method, 413 too large). */
+export const FINAL_VAULT_REFUSALS = [405, 413];
+
+export class VaultRefused extends Error {
+  status: number;
+  constructor(status: number) {
+    super(`the vault refused the request with ${status}`);
+    this.name = "VaultRefused";
+    this.status = status;
+  }
+}
+
+export function tooLarge(extra: Record<string, string>): Response {
+  return json(413, { stored: false, error: "too_large", detail: `the request body is over ${MAX_BROWSER_BODY_BYTES} bytes; nothing was stored` }, extra);
+}
 
 export interface VaultTarget {
   VAULT_URL: string;
@@ -167,12 +184,21 @@ function alarm(deps: CaptureDeps, name: string, detail: string): void {
  */
 export async function storeAndAnswer(request: Request, target: Partial<VaultTarget>, deps: CaptureDeps, facts: Record<string, unknown>): Promise<Response> {
   const cors = permissionHeaders(request);
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_BROWSER_BODY_BYTES) {
+    alarm(deps, "capture.body_too_large", `a request declared ${declared} bytes; the edge refused it with 413 and stored nothing`);
+    return tooLarge(cors);
+  }
   let body: Uint8Array;
   try {
     body = new Uint8Array(await request.arrayBuffer());
   } catch (e) {
     body = new Uint8Array(0);
     facts = { ...facts, body_read_failed: (e as Error).name };
+  }
+  if (body.byteLength > MAX_BROWSER_BODY_BYTES) {
+    alarm(deps, "capture.body_too_large", `a request carried ${body.byteLength} bytes; the edge refused it with 413 and stored nothing`);
+    return tooLarge(cors);
   }
   const preflight = isPreflight(request);
   const edgeReceivedAt = deps.now().toISOString();
@@ -189,6 +215,10 @@ export async function storeAndAnswer(request: Request, target: Partial<VaultTarg
   try {
     const res = await post(target as VaultTarget, deps, built.envelope);
     if (res.status === 201) reply = res;
+    else if (FINAL_VAULT_REFUSALS.includes(res.status)) {
+      alarm(deps, "capture.vault_refused", `the vault refused a request with ${res.status}; it was not queued`);
+      return preflight ? new Response(null, { status: 204, headers: cors }) : json(res.status, { stored: false, error: res.status === 413 ? "too_large" : "method_not_allowed", detail: "the vault refused this request; nothing was stored" }, cors);
+    }
   } catch {
     reply = null; // the vault could not be reached; the request is queued below
   }
@@ -227,6 +257,7 @@ export async function deliverQueued(message: QueuedMessage, body: Uint8Array, ta
   envelope.edge_facts = facts;
   if ((await sha256HexOf(body)) !== envelope.body_sha256) throw new Error("the queued body no longer matches its fingerprint");
   const res = await post(target, deps, envelope);
+  if (FINAL_VAULT_REFUSALS.includes(res.status)) throw new VaultRefused(res.status);
   if (res.status !== 201) throw new Error(`the vault answered ${res.status}`);
 }
 
@@ -306,6 +337,11 @@ export async function deliverBatch(messages: QueueMessage[], env: { BODY_STORE?:
       await deliverQueued(message, new Uint8Array(await object.arrayBuffer()), env as VaultTarget, deps);
       m.ack();
     } catch (e) {
+      if (e instanceof VaultRefused) {   // a final answer: retrying cannot change it, and it must not hold back the requests behind it
+        alarm(deps, "capture.queue_refused", `the vault refused a queued request with ${e.status}; it was closed, not retried, and the requests behind it go on (body kept at ${message.body_key})`);
+        m.ack();
+        continue;
+      }
       failed = true;
       m.retry();
       if (deps.now().getTime() - Date.parse(message.queued_at) > QUEUE_DEADLINE_MS) {

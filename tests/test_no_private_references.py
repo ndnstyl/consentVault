@@ -23,7 +23,14 @@ FORBIDDEN = [
     "ox-brain",
     "msoto",
 ]
-PATTERN = re.compile("|".join(re.escape(p) for p in FORBIDDEN), re.IGNORECASE)
+# "/Users/" is a macOS home path and is matched case-sensitively: a lowercase "/users/" is an ordinary API route
+# (for example the identity provider's /users/{id}/auth_factors) and is not a private reference.
+CASE_SENSITIVE = ["/Users/"]
+PATTERN = re.compile(
+    "|".join(["(?-i:" + "|".join(re.escape(p) for p in CASE_SENSITIVE) + ")"]
+             + [re.escape(p) for p in FORBIDDEN if p not in CASE_SENSITIVE]),
+    re.IGNORECASE,
+)
 
 
 def repo_files() -> list[str]:

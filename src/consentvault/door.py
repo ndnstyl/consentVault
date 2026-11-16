@@ -180,14 +180,14 @@ def auth_from_facts(facts: Mapping[tuple[str, str], Any]) -> Auth:
             return auth("site_key_lookup_failed", pending=True)
         if cred is None:
             return auth("no_credential")
-        if vault("site_key_state") is not None:   # a capture the edge forwarded under a public site key: the sender is anyone who holds the key
+        if vault("site_key_state") is not None:   # a capture the edge forwarded under a public site key: the sender is anyone who holds the key; soft, so a stop is still counted (decide() lets a soft reason through for a revoke), only a grant is refused
             if vault("origin_on_list") is not True:
-                return auth("origin_not_allowed")
+                return auth("origin_not_allowed", soft=True)
             answer = facts.get(("edge", "bot_check_answer"))
             if not (isinstance(answer, dict) and answer.get("success") is True):
-                return auth("bot_check_failed")
+                return auth("bot_check_failed", soft=True)
             if vault("bot_check_hostname_on_list") is not True:
-                return auth("bot_check_hostname_not_allowed")
+                return auth("bot_check_hostname_not_allowed", soft=True)
         return auth(None)
     if sig is None:
         return auth("not_authenticated:unsigned")

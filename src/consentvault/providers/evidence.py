@@ -17,6 +17,7 @@ import hmac
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -159,7 +160,8 @@ class S3ObjectLockEvidenceStore(EvidenceStore):
     def __init__(self, *, endpoint: str, bucket: str, region: str, access_key: Optional[str] = None,
                  secret_key: Optional[str] = None, transport: Optional[S3Transport] = None,
                  session_token: Optional[str] = None, clock: Clock = _utcnow, min_retention: Optional[datetime] = None,
-                 credentials=None, prefix: Optional[str] = None):
+                 credentials=None, prefix: Optional[str] = None,
+                 sleep: Callable[[float], None] = time.sleep):
         """Static keys (``access_key``/``secret_key``), or ``credentials``: an object whose ``get()`` returns the
         current keys (the task role's, ``providers.rds_iam.ContainerCredentials``), read for every request. ``prefix``
         puts every object and listing under ``<prefix>/`` (a bucket shared by writers IAM keeps apart by prefix)."""
@@ -186,6 +188,7 @@ class S3ObjectLockEvidenceStore(EvidenceStore):
         self._ak, self._sk, self._token = access_key, secret_key, session_token
         self._send = transport or urllib_s3_transport()
         self._clock = clock
+        self._sleep = sleep
 
     def _object_path(self, org_id: str, key: str) -> str:
         check_org_id(org_id, InvalidEvidenceKeyError)
@@ -203,8 +206,20 @@ class S3ObjectLockEvidenceStore(EvidenceStore):
             amz_date=self._clock().astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ"), session_token=tok)
         send_headers = {k: v for k, v in signed.items() if k != "host"}
         url = f"{self._scheme}://{self._host}{path}" + (f"?{query}" if query else "")
-        status, resp_headers, resp_body = self._send(method, url, send_headers, body)
+        status, resp_headers, resp_body = self._send_with_retry(method, url, send_headers, body)
         return status, {k.lower(): v for k, v in resp_headers.items()}, resp_body
+
+    IDEMPOTENT_METHODS = ("GET", "HEAD")  # a PUT is never retried: an Object Lock put that landed would be written twice
+    RETRY_BACKOFF_S = (1.0, 2.0)  # three attempts in all
+
+    def _send_with_retry(self, method: str, url: str, headers: Mapping[str, str], body: bytes):
+        delays = self.RETRY_BACKOFF_S if method in self.IDEMPOTENT_METHODS else ()
+        for delay in delays:
+            try:
+                return self._send(method, url, headers, body)
+            except ProviderTransportError:  # loud-failure-exempt: the final attempt below raises the same error
+                self._sleep(delay)
+        return self._send(method, url, headers, body)
 
     MAX_LIST_PAGES = 10_000  # 1,000 keys a page: ten million objects for one organisation before the listing refuses
 

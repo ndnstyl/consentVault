@@ -42,6 +42,17 @@ def not_a_read_answer() -> tuple[int, dict]:
     return 405, {"stored": False, "error": "method_not_allowed", "detail": "a capture route takes POST; nothing was stored"}
 
 
+class BadChunking(ConsentVaultError):
+    """A chunk was not followed by its line end. The framing is broken, so nothing after it can be trusted: refused with 400, nothing stored."""
+
+
+def bad_chunking_answer() -> tuple[int, dict]:
+    return 400, {"stored": False, "error": "bad_chunking", "detail": "a chunk was not followed by its line end; nothing was stored"}
+
+
+FRAMING_ALLOWANCE_BYTES = 16 * 1024  # what a chunked body may spend on size lines, extensions and trailers beyond the body cap
+
+
 class DownstreamNotIdle(ConsentVaultError):
     """Work that follows an answer did not finish inside the wait."""
 
@@ -271,8 +282,18 @@ def read_any_body(handler, limit: int = MAX_BODY_BYTES) -> tuple[bytes, list[Fac
     rfile = handler.rfile
     if "chunked" in te:
         out = bytearray()
+        wire = 0
+        budget = limit + FRAMING_ALLOWANCE_BYTES
+
+        def counted(n: int) -> None:
+            nonlocal wire
+            wire += n
+            if wire > budget:
+                raise BodyTooLarge(f"a chunked body passes {limit} bytes on the wire")
+
         for _ in range(1 << 31):  # ends at the zero-size chunk or the end of the stream
             line = rfile.readline(65537)
+            counted(len(line))
             if not line:
                 facts.append(Fact("vault", "body_short_read", "chunked body ended before its last chunk"))
                 break
@@ -285,17 +306,26 @@ def read_any_body(handler, limit: int = MAX_BODY_BYTES) -> tuple[bytes, list[Fac
                 break
             if size == 0:
                 for _ in range(1000):  # trailer lines, up to the blank line
-                    if rfile.readline(65537) in (b"\r\n", b"\n", b""):
+                    trailer = rfile.readline(65537)
+                    counted(len(trailer))
+                    if trailer in (b"\r\n", b"\n", b""):
                         break
                 break
             if len(out) + size > limit:
                 raise BodyTooLarge(f"a chunked body passes {limit} bytes")
+            counted(size)
             chunk = _read_exact(rfile, size)
             out += chunk
             if len(chunk) < size:
                 facts.append(Fact("vault", "body_short_read", f"chunk of {size} bytes ended after {len(chunk)}"))
                 break
-            rfile.readline(65537)  # the CRLF after the chunk
+            end = rfile.read(2)  # the line end after the chunk, and nothing else
+            counted(len(end))
+            if end == b"":
+                facts.append(Fact("vault", "body_short_read", "chunked body ended before the line end after a chunk"))
+                break
+            if end != b"\r\n":
+                raise BadChunking(f"a chunk of {size} bytes was followed by {end!r}, not a line end")
         return bytes(out), facts
     if raw_len is None:
         return b"", facts

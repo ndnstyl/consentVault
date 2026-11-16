@@ -30,7 +30,7 @@ from .safelog import caller_detail, db_code, describe, refusal_code
 from . import config as config_mod
 from . import edge_envelope
 from .capture_http import (StoreRefusedRequests, Downstream, request_key, cors_headers, is_capture_path, is_preflight, read_any_body, request_headers,
-                           BodyTooLarge, body_limit, not_a_read_answer, too_large_answer,
+                           BadChunking, BodyTooLarge, MAX_BODY_BYTES as MAX_CAPTURE_BODY_BYTES, bad_chunking_answer, body_limit, not_a_read_answer, too_large_answer,
                            transport_credentials_removed, unavailable_answer)
 from . import dbclock
 from .db import connect
@@ -235,12 +235,21 @@ class _Handler(StoreRefusedRequests, BaseHTTPRequestHandler):
             self.close_connection = True
             status, answer = too_large_answer(limit)
             return self._send(status, answer, cors_headers(self))
+        except BadChunking as exc:  # the framing is broken: refused and recorded, nothing is stored
+            _log.warning("a chunked capture body was refused", error=describe(exc))
+            self.close_connection = True
+            status, answer = bad_chunking_answer()
+            return self._send(status, answer, cors_headers(self))
         url = urlsplit(self.path)
         ts = self.headers.get(TIMESTAMP_HEADER) or ""
         sig = (self.headers.get(SIGNATURE_HEADER) or "").strip().lower()
         if sig.startswith("sha256="):
             sig = sig[7:]
         reason, by_verified_key = self._authentication_failure(ts, sig, body)
+        if len(body) > MAX_CAPTURE_BODY_BYTES and reason in ("unsigned", "bad_signature"):  # the larger allowance is for a signature that verifies
+            self.close_connection = True
+            status, answer = too_large_answer(MAX_CAPTURE_BODY_BYTES)
+            return self._send(status, answer, cors_headers(self))
         facts += [Fact("vault", "host_on_list", self._host_ok()), Fact("vault", "origin_header", self.headers.get("Origin")),
                   Fact("vault", "request_signature", reason or "valid"), Fact("vault", "authenticated_by", "verified_key" if by_verified_key else "shared_secret"),
                   Fact("vault", "peer_address", self.client_address[0])]
@@ -923,6 +932,17 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
             self.close_connection = True
             status, answer = too_large_answer(limit)
             return self._send(status, answer, cors_headers(self))
+        except BadChunking as exc:  # the framing is broken: refused and recorded, nothing is stored
+            _log.warning("a chunked capture body was refused", error=describe(exc))
+            self.close_connection = True
+            status, answer = bad_chunking_answer()
+            return self._send(status, answer, cors_headers(self))
+        if len(body) > MAX_CAPTURE_BODY_BYTES and not edge_envelope.verified(
+                self.settings.edge_signing_secret, self.headers.get(TIMESTAMP_HEADER) or "",
+                (self.headers.get(SIGNATURE_HEADER) or "").strip().lower(), body):   # the larger allowance is for a signature that verifies
+            self.close_connection = True
+            status, answer = too_large_answer(MAX_CAPTURE_BODY_BYTES)
+            return self._send(status, answer, cors_headers(self))
         url = urlsplit(self.path)
         headers = request_headers(self)
         preflight = is_preflight(self)
@@ -933,6 +953,9 @@ class _CloudHandler(StoreRefusedRequests, BaseHTTPRequestHandler):
         facts += list(self._extra_facts)
         identity = self._capture_identity(body, headers, url, facts)
         inner = identity["inner"]
+        if inner is not None and len(inner.body) > MAX_CAPTURE_BODY_BYTES:   # the browser's own body is capped inside an envelope too
+            status, answer = too_large_answer(MAX_CAPTURE_BODY_BYTES)
+            return self._send(status, answer, cors_headers(self))
         facts.append(Fact("vault", "tenant", True))
         if identity["owner"] is not None:
             facts.append(Fact("vault", "site_owner", {"source_id": str(identity["owner"].source_id) if identity["owner"].source_id else None,

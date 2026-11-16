@@ -116,6 +116,10 @@ def _close_all(socks: list) -> None:
             pass
 
 
+class AnswerTooLargeError(OSError):
+    """The answer passed MAX_BODY_BYTES: asking again gets the same answer, so a caller never retries it."""
+
+
 def open_no_redirect(req: urllib.request.Request, *, timeout: float, schemes=("https",), loopback_http: bool = True,
                      http_hosts=(), host_pattern: str | None = None, proxy: bool = True) -> BoundedResponse:
     """The one way an outbound request leaves this code. It checks the URL itself (``schemes``; plain http only to a
@@ -144,7 +148,7 @@ def open_no_redirect(req: urllib.request.Request, *, timeout: float, schemes=("h
                         break
                     chunks.append(chunk); size += len(chunk)
                     if size > MAX_BODY_BYTES:
-                        raise OSError("the answer is larger than the allowed size")
+                        raise AnswerTooLargeError("the answer is larger than the allowed size")
                 box["ok"] = BoundedResponse(resp.status, resp.headers, b"".join(chunks), resp.geturl())
             finally:
                 resp.close()

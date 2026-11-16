@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Optional
 
 from ..safelog import describe, http_error_response
-from ..urlguard import open_no_redirect
+from ..urlguard import open_no_redirect, AnswerTooLargeError
 from ._names import check_object_key, check_org_id
 from .errors import (
     EvidenceExistsError,
@@ -133,19 +133,25 @@ def sigv4_headers(*, method: str, host: str, path: str, query: str = "", headers
 S3Transport = Callable[[str, str, Mapping[str, str], bytes], "tuple[int, Mapping[str, str], bytes]"]
 
 
-def urllib_s3_transport(timeout_s: float = 30.0, read_timeout_s: float = 10.0) -> S3Transport:
+class S3AnswerTooLargeError(ProviderTransportError):
+    """S3 answered with more than the allowed size: a transport failure that a retry cannot change."""
+
+
+def urllib_s3_transport(timeout_s: float = 30.0) -> S3Transport:
     """Real transport: ``(method, url, headers, body) -> (status, lower-cased headers, body)``. Does not follow redirects.
-    A read (GET, HEAD) waits ``read_timeout_s`` on the socket, so its three attempts take about as long as one write's
-    ``timeout_s``; the limit is per socket wait, so a download that keeps arriving is never cut."""
+    ``timeout_s`` is one overall deadline for the whole call. An answer over the size limit raises
+    ``S3AnswerTooLargeError`` (asking again gets the same answer, so it is never retried); a stall or an unreachable host
+    raises ``ProviderTransportError``."""
     def send(method: str, url: str, headers: Mapping[str, str], body: bytes):
         req = urllib.request.Request(url, data=body if body else None, method=method, headers=dict(headers))
-        wait = read_timeout_s if method in ("GET", "HEAD") else timeout_s
         try:
-            with open_no_redirect(req, timeout=wait) as resp:
+            with open_no_redirect(req, timeout=timeout_s) as resp:
                 return resp.status, {k.lower(): v for k, v in resp.headers.items()}, resp.read()
         except urllib.error.HTTPError as exc:
             return http_error_response(exc)
         except OSError as exc:
+            if isinstance(exc, AnswerTooLargeError):
+                raise S3AnswerTooLargeError(f"S3 {method} {url} answered over the size limit") from exc
             raise ProviderTransportError(f"S3 {method} {url} unreachable: {describe(exc)}") from exc
 
     return send
@@ -206,8 +212,10 @@ class S3ObjectLockEvidenceStore(EvidenceStore):
         for delay in delays:
             try:
                 status, resp_headers, resp_body = self._attempt(method, path, headers, body, query)
-            except ProviderTransportError:  # loud-failure-exempt: the final attempt below raises the same error
-                self._sleep(delay)
+            except S3AnswerTooLargeError:
+                raise
+            except ProviderTransportError:
+                self._sleep(delay)  # loud-failure-exempt: the final attempt below raises the same error
                 continue
             if status not in self.RETRY_STATUSES:
                 return status, resp_headers, resp_body

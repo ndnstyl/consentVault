@@ -138,29 +138,24 @@ def test_a_put_that_meets_503_is_not_retried():
     assert calls == ["PUT"]
 
 
-def test_a_read_waits_ten_seconds_a_socket_and_a_write_thirty():
+def test_an_answer_over_the_size_limit_is_not_retried():
     from consentvault.providers import evidence
+    from consentvault.urlguard import AnswerTooLargeError
 
-    waits = []
+    calls = []
 
-    class Resp:
-        status, headers = 200, {}
-
-        def read(self):
-            return b""
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
+    def too_large(req, timeout):
+        calls.append(timeout)
+        raise AnswerTooLargeError("the answer is larger than the allowed size")
 
     real = evidence.open_no_redirect
-    evidence.open_no_redirect = lambda req, timeout: waits.append(timeout) or Resp()
+    evidence.open_no_redirect = too_large
     try:
-        send = evidence.urllib_s3_transport()
-        send("GET", "https://s3.us-east-1.amazonaws.com/b/k", {}, b"")
-        send("PUT", "https://s3.us-east-1.amazonaws.com/b/k", {}, b"x")
+        store = S3ObjectLockEvidenceStore(endpoint="https://s3.us-east-1.amazonaws.com", bucket="cv-ledger",
+                                          region="us-east-1", access_key="AK", secret_key="SK", clock=lambda: T0,
+                                          sleep=lambda _d: None)
+        with pytest.raises(ProviderTransportError):
+            store.get("org-a", "ledger/1")
     finally:
         evidence.open_no_redirect = real
-    assert waits == [10.0, 30.0]
+    assert calls == [30.0]

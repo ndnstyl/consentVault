@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const SOURCE = process.argv[2] ?? process.env.CV_TUTORIALS_DIR ?? '/Users/oxfloors/ConsentVault/deliverables/tutorials';
+const SOURCE = process.argv[2] ?? process.env.CV_TUTORIALS_DIR ?? path.resolve(here, '..', '..', '..', '..', 'tutorials');
 const DEST = path.resolve(here, '..', 'public', 'tutorials');
 const CAP = 25 * 1024 * 1024;
 const files = fs.readFileSync(path.resolve(here, '..', 'src', 'lib', 'tutorials.ts'), 'utf8').match(/file: '([^']+\.mp4)'/g)?.map((m) => m.slice(7, -1)) ?? [];

@@ -477,39 +477,14 @@ for (const [status, body] of [[405, "<html>Method Not Allowed</html>"], [413, "<
   });
 }
 
-// ---- a stop is never refused and never dropped: over a throttle it is queued ---------------------------------------------------
-const stopBody = () => good({ event_type: "revoke" });
-
-test("a stop over the site key's limit is queued with 202, never refused; a grant over it still gets 429", async () => {
+// ---- stops do not travel this route: a body labelled revoke is a grant to the vault, so it is throttled like one ---------------
+test("a body labelled event_type revoke over the limit gets 429, not the queue", async () => {
   const durable = new MemoryDurable();
   const { d, calls } = mk({ durable });
   const k = { "x-consentvault-site-key": "cv_site_lowlimit000" };
   assert.equal((await handleCapture(req(good(), k), ENV, d)).status, 201);
-  const res = await handleCapture(req(stopBody(), k), ENV, d);
-  assert.equal(res.status, 202);
-  assert.equal(((await res.json()) as { queued: boolean }).queued, true);
-  assert.equal(durable.messages.length, 1);
-  assert.equal(vaultCalls(calls).length, 1, "the throttled stop waited in the queue, it was not posted live");
-  assert.equal((await handleCapture(req(good(), k), ENV, d)).status, 429);
-});
-
-test("a stop over the address limit is queued, and past ten times the limit it is still queued and raises an alarm", async () => {
-  const durable = new MemoryDurable();
-  const alarms: string[] = [];
-  const { d } = mk({ durable, alarms });
-  const env = { ...ENV, DEFAULT_IP_RATE_LIMIT_PER_MINUTE: "1" };
-  assert.equal((await handleCapture(req(good()), env, d)).status, 201);
-  const statuses: number[] = [];
-  for (let i = 0; i < 12; i++) statuses.push((await handleCapture(req(stopBody()), env, d)).status);
-  assert.deepEqual(statuses, Array(12).fill(202));
-  assert.equal(durable.messages.length, 12);
-  assert.deepEqual(alarms, ["capture.stop_flood", "capture.stop_flood"]);
-  assert.equal((await handleCapture(req(good()), env, d)).status, 429);
-});
-
-test("a stop over 64 KiB is still refused with 413", async () => {
-  const durable = new MemoryDurable();
-  const res = await handleCapture(req(good({ event_type: "revoke", pad: "x".repeat(64 * 1024) })), ENV, mk({ durable }).d);
-  assert.equal(res.status, 413);
+  const res = await handleCapture(req(good({ event_type: "revoke" }), k), ENV, d);
+  assert.equal(res.status, 429);
   assert.equal(durable.messages.length, 0);
+  assert.equal(vaultCalls(calls).length, 1);
 });

@@ -228,7 +228,7 @@ function alarm(deps: CaptureDeps, name: string, detail: string): void {
  * Store-and-answer for one browser request: forward it whole, relay the vault's receipt; when the vault cannot be reached
  * or answers anything but a receipt, queue it durably; when that cannot be done either, say nothing was stored.
  */
-export async function storeAndAnswer(request: Request, target: Partial<VaultTarget>, deps: CaptureDeps, facts: Record<string, unknown>, preRead?: Uint8Array, queueFirst = false): Promise<Response> {
+export async function storeAndAnswer(request: Request, target: Partial<VaultTarget>, deps: CaptureDeps, facts: Record<string, unknown>, preRead?: Uint8Array): Promise<Response> {
   const cors = permissionHeaders(request);
   const declared = Number(request.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > MAX_CAPTURE_BODY_BYTES) {
@@ -264,7 +264,6 @@ export async function storeAndAnswer(request: Request, target: Partial<VaultTarg
   const built = await buildEnvelope(request, body, facts, true);
   let reply: Response | null = null;
   try {
-    if (queueFirst && deps.durable) throw new Error("queue first");   // a throttled stop: never refused, delivered from the queue
     const res = await post(target as VaultTarget, deps, built.envelope);
     if (res.status === 201) reply = res;
     else if (await isVaultRefusal(res)) {

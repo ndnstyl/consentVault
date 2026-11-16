@@ -103,16 +103,6 @@ function tokenOf(text: string): string | undefined {
   }
 }
 
-/** True when the body's own event_type is a stop (revoke or suppress), the same two the vault counts as a stop. */
-function isStopBody(pre: Uint8Array): boolean {
-  try {
-    const t = (JSON.parse(new TextDecoder().decode(pre)) as { event_type?: unknown } | null)?.event_type;
-    return t === "revoke" || t === "suppress";
-  } catch {
-    return false;
-  }
-}
-
 export async function handleCapture(request: Request, env: CaptureEnv, deps: CaptureDeps): Promise<Response> {
   const facts: Record<string, unknown> = { intake: "edge_site_key" };
   const origin = request.headers.get("origin");
@@ -139,37 +129,17 @@ export async function handleCapture(request: Request, env: CaptureEnv, deps: Cap
     pre = new Uint8Array(0);
     facts.body_read_failed = (e as Error).name;
   }
-  let queueStop = false;
   if (request.method !== "OPTIONS") {
     // Over a limit is refused with 429 before anything is stored (the one place the capture edge refuses besides size).
-    // A stop or revoke is never refused and never dropped: over a limit it is queued and delivered later (the vault re-reads the
-    // stored bytes itself; the edge only reads the body's own event_type, which a client could lie about, so the flood ceiling bounds it).
-    const stop = request.method === "POST" && isStopBody(pre);
-    const throttled = async (): Promise<Response | null> => {
-      if (!stop) return rateLimited(permissionHeaders(request));
-      facts.throttled_stop_queued = true;
-      const ipLimit = Number(env.DEFAULT_IP_RATE_LIMIT_PER_MINUTE || 120);
-      if (ip && !(await deps.rateLimiter.hit(`ipstop:${ip}`, ipLimit * 10, 60))) {
-        (deps.alarm ?? ((n, d) => console.error(`consentvault edge alarm ${n}: ${d}`)))("capture.stop_flood", `a stop was queued over ten times the per-minute limit from one address (${ip})`);
-      }
-      return null;
-    };
+    // Stops do not travel this route: the vault reads every edge capture post as a grant (edge_envelope.widget_event), so a body labelled revoke is throttled like any other; a stop arrives by the text provider, the stop page or a signed system intake.
     if (ip) {
       const ipLimit = Number(env.DEFAULT_IP_RATE_LIMIT_PER_MINUTE || 120);
-      if (!(await deps.rateLimiter.hit(`ip:${ip}`, ipLimit, 60))) {
-        const refused = await throttled();
-        if (refused) return refused;
-        queueStop = true;
-      }
+      if (!(await deps.rateLimiter.hit(`ip:${ip}`, ipLimit, 60))) return rateLimited(permissionHeaders(request));
     }
     if (rec && facts.site_key_state === "active") {
       const limit = rec.rate_limit_per_minute ?? Number(env.DEFAULT_RATE_LIMIT_PER_MINUTE || 60);
       const within = await deps.rateLimiter.hit(`site:${siteKey}`, limit, 60);
-      if (!within) {
-        const refused = await throttled();
-        if (refused) return refused;
-        queueStop = true;
-      }
+      if (!within) return rateLimited(permissionHeaders(request));
       facts.rate_count_window = { limit, within };
     }
   }
@@ -180,7 +150,7 @@ export async function handleCapture(request: Request, env: CaptureEnv, deps: Cap
     const answer = facts.bot_check_answer as { hostname?: unknown } | null;
     facts.bot_check_hostname_on_list = typeof answer?.hostname === "string" && hosts.includes(answer.hostname.toLowerCase());
   }
-  return storeAndAnswer(request, env, deps, facts, pre, queueStop);
+  return storeAndAnswer(request, env, deps, facts, pre);
 }
 
 const limiter = new MemoryRateLimiter();

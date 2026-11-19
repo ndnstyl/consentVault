@@ -5,6 +5,8 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 
+import psycopg
+
 from consentvault import db
 from consentvault.ledger import record_tenant_event
 from consentvault.notify.base import InMemorySendLog
@@ -85,7 +87,10 @@ class FlakyLog(InMemorySendLog):
 
     def append(self, record) -> None:
         if self.fail:
-            raise SendLogError("the send log row could not be written")
+            try:  # as notify/pg_log.py does: the log error is raised from inside a database-error handler
+                raise psycopg.OperationalError("the database is unreachable")
+            except psycopg.Error as exc:
+                raise SendLogError(f"the send log row could not be written: {type(exc).__name__}") from exc
         super().append(record)
 
 

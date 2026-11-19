@@ -268,14 +268,12 @@ class StopNoticeSender:
             log.error("a stop-notice email was not sent", error_class=exc.kind)
             return [], group
         except SendLogError as exc:
-            # the send log row could not be written. If it followed a failed send the rows are failed (never left unknown); if the
-            # email had gone out they are sent (never sent twice). Either way the log failure is its own alarm.
+            # the email went out but its send log row could not be written: the rows are sent (never sent twice) and the log failure
+            # is its own alarm. (A failed send whose log row also fails arrives as SendFailed: Notifier.send raises its own alarm.)
             self._notifier.alarm.raise_alarm(ALARM_STOP_NOTICE_LOG_FAILED, "a stop notice send-log row could not be written")
             report.failed += 1
             report.errors.append("send log row not written")
             log.error("a stop-notice send log row was not written", error=type(exc).__name__)
-            if isinstance(exc.__context__, SendFailed):
-                return [], group
             report.emails_sent += 1
             report.stops_listed += len(group)
             return group, []

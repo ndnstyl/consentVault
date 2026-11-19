@@ -358,11 +358,12 @@ def test_a_send_log_that_cannot_be_written_never_leaves_a_row_unknown_or_sent_tw
     with pytest.raises(StopNoticeSendError):
         mail.run()
     assert {r["status"] for r in _mail_rows(vault, org_id)} == {"failed"}  # failed, not left in flight
-    assert "notify.stop_notice_log_failed" in {n for n, _ in mail.alarms.raised}
+    assert {"notify.send_log_failed", "notify.send_failed"} <= {n for n, _ in mail.alarms.raised}
     mail.sender.fail = False  # now the email goes out but its log row cannot be written
     with pytest.raises(StopNoticeSendError):
         mail.run()
     assert {r["status"] for r in _mail_rows(vault, org_id)} == {"sent"} and len(mail.sender.sent) == 2  # one per admin, once
+    assert "notify.stop_notice_log_failed" in {n for n, _ in mail.alarms.raised}
 
 
 def test_a_queued_row_whose_admin_is_gone_is_closed_with_a_reason_and_an_alarm(vault, acme, mail):

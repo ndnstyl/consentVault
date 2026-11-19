@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from .base import Alarm, Message, SendLog, SendRecord, Sender
-from .errors import NotifyRefused, SendFailed
+from .errors import NotifyRefused, SendFailed, SendLogError
 from .templates import refuse_control, render
 
 ALARM_SEND_FAILED = "notify.send_failed"
 ALARM_BOUNCE = "notify.bounce"
+ALARM_LOG_FAILED = "notify.send_log_failed"
 REFUSED_DOMAIN = "refused-address.invalid"
 
 
@@ -35,7 +36,11 @@ class Notifier:
         except SendFailed as exc:
             # type and provider code only: a provider's message can quote the recipient's address
             safe = f"{exc.kind}" + (f" code {exc.code}" if exc.code is not None else "")
-            self._log.append(SendRecord(template, domain, "failed", self._sender.provider, None, safe))
+            try:
+                self._log.append(SendRecord(template, domain, "failed", self._sender.provider, None, safe))
+            except SendLogError:
+                # the send failure is the answer the caller needs; the log failure is its own alarm, never a replacement for it
+                self._alarm.raise_alarm(ALARM_LOG_FAILED, f"{template} to {domain}: the failed-send log row could not be written")
             self._alarm.raise_alarm(ALARM_SEND_FAILED, f"{template} to {domain} failed: {safe}")
             raise
         self._log.append(SendRecord(template, domain, "sent", self._sender.provider, msg_id))

@@ -97,3 +97,24 @@ def test_a_claim_committed_between_another_runs_snapshot_and_its_lock_is_refused
         blocker.close()
     assert result["rows"] == []  # B re-checks the newer row version and refuses it
     assert _attempts(vault, str(org_id)) == [("sending", 1)]
+
+
+def test_a_recipient_another_run_holds_is_skipped_so_the_pass_reaches_the_others(vault, pg_server):
+    vault.app._crypto = SHARED
+    org, boss = vault.org_with_admin("Duo", "boss@duo.example")
+    vault.add_member(boss, "two@duo.example", "admin")
+    record_stop(vault, org["org_id"], PHONE)
+    org_id = uuid.UUID(org["org_id"])
+    dsn = make_login_role(pg_server["port"], vault.super_dsn.rsplit("/", 1)[1], "consentvault_worker")
+    a, b = db.connect(dsn), db.connect(dsn)
+    try:
+        hold = org_transaction(a, _token(a, org_id))
+        hold.__enter__()
+        first = a.execute(CLAIM).fetchall()
+        with org_transaction(b, _token(b, org_id)):
+            second = b.execute(CLAIM).fetchall()  # the oldest recipient is held by A: B takes the other one, not nothing
+        hold.__exit__(None, None, None)
+    finally:
+        a.close()
+        b.close()
+    assert len(first) == 1 and len(second) == 1 and first[0]["address"] != second[0]["address"]

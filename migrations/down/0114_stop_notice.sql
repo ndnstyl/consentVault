@@ -85,7 +85,6 @@ DROP FUNCTION consentvault.stop_notice_unacknowledged(integer);
 DROP FUNCTION consentvault.stop_notice_member();
 DROP FUNCTION consentvault.stop_notice_delivery(uuid[]);
 DROP FUNCTION consentvault.stop_notice_mail_done(uuid[], boolean, integer);
-DROP FUNCTION consentvault.stop_notice_mail_release(uuid[]);
 DROP FUNCTION consentvault.stop_notice_claim(integer, integer, integer, integer, uuid[]);
 DROP FUNCTION consentvault.stop_notice_sweep(integer);
 DROP FUNCTION consentvault.stop_notice_record(uuid, uuid, text, bytea, text, text[], text[], jsonb, timestamptz);

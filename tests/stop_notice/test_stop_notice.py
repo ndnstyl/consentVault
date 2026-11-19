@@ -324,6 +324,7 @@ def test_an_added_recipient_gets_the_next_notice_and_admins_always_do(vault, acm
 def test_an_admin_address_the_refuser_rejects_never_strands_the_rest_of_the_batch(vault, acme, mail):
     org_id, boss, second, dev = acme
     record_stop(vault, org_id, PHONE)
+    record_stop(vault, org_id, PHONE_2)  # two stops queued for the refused address: it fails once, not once per stop
     with vault.superuser() as su:  # the second admin's address is one the notifier refuses (no dot in the domain)
         su.execute("UPDATE consentvault.member SET email_norm = 'admin@localhost' WHERE member_id = %s", (second.member_id,))
         su.execute("UPDATE consentvault.stop_notice_mail SET queued_at = queued_at - interval '1 hour' WHERE member_id = %s", (second.member_id,))
@@ -331,9 +332,37 @@ def test_an_admin_address_the_refuser_rejects_never_strands_the_rest_of_the_batc
         mail.run()
     assert [m.to for m in mail.sender.sent] == ["boss@acme.example"]  # the good address was still emailed
     by_status = {str(r["member_id"]): r["status"] for r in _mail_rows(vault, org_id)}
-    assert by_status == {boss.member_id: "sent", second.member_id: "failed"}  # the refused row is failed, not stranded in flight
-    assert "notify.stop_notice_refused" in {n for n, _ in mail.alarms.raised}
-    assert any(r.outcome == "failed" and "refused" in (r.detail or "") for r in mail.log.records)
+    assert [s for m, s in by_status.items() if m == second.member_id] == ["failed"]  # failed, not stranded in flight
+    assert {r["status"] for r in _mail_rows(vault, org_id) if str(r["member_id"]) == boss.member_id} == {"sent"}
+    assert [n for n, _ in mail.alarms.raised].count("notify.stop_notice_refused") == 1
+    assert [r.outcome for r in mail.log.records].count("failed") == 1
+
+
+def test_a_removed_recipients_queued_email_is_closed_quietly_and_the_run_succeeds(vault, acme, mail):
+    org_id, boss, *_ = acme
+    added = boss.ok("POST", "/v1/stop-notices/recipients", body={"email": "legal@acme.example"})
+    record_stop(vault, org_id, PHONE)
+    boss.ok("DELETE", f"/v1/stop-notices/recipients/{added['recipient_id']}")  # removed while its email is queued
+    report = mail.run()  # must not raise
+    assert report.failed == 0 and mail.alarms.raised == []
+    assert {m.to for m in mail.sender.sent} == {"boss@acme.example", "two@acme.example"}
+    closed = [r for r in _mail_rows(vault, org_id) if r["recipient_id"] is not None]
+    assert [(r["status"], r["failure_reason"], r["mask_text"]) for r in closed] == [("failed", "recipient_removed", None)]
+
+
+def test_a_send_log_that_cannot_be_written_never_leaves_a_row_unknown_or_sent_twice(vault, acme, mail):
+    org_id, *_ = acme
+    record_stop(vault, org_id, PHONE)
+    mail.sender.fail = True
+    mail.log.fail = True  # the failed send cannot even be logged
+    with pytest.raises(StopNoticeSendError):
+        mail.run()
+    assert {r["status"] for r in _mail_rows(vault, org_id)} == {"failed"}  # failed, not left in flight
+    assert "notify.stop_notice_log_failed" in {n for n, _ in mail.alarms.raised}
+    mail.sender.fail = False  # now the email goes out but its log row cannot be written
+    with pytest.raises(StopNoticeSendError):
+        mail.run()
+    assert {r["status"] for r in _mail_rows(vault, org_id)} == {"sent"} and len(mail.sender.sent) == 2  # one per admin, once
 
 
 def test_a_queued_row_whose_admin_is_gone_is_closed_with_a_reason_and_an_alarm(vault, acme, mail):

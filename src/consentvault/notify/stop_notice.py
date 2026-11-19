@@ -36,7 +36,7 @@ from ..alarms import AlarmWriteError, raise_operator_alarm
 from ..safelog import describe
 from ..tenancy import crypto as tc
 from ..tenancy.errors import FieldCryptoError, KeyProviderError, TenantTokenError
-from .errors import NotifyError, NotifyRefused, SendFailed
+from .errors import NotifyError, NotifyRefused, SendFailed, SendLogError
 from .service import Notifier
 
 log = safelog.get("consentvault.notify.stop_notice")
@@ -57,6 +57,7 @@ ALARM_STOP_NOTICE_UNKNOWN = "notify.stop_notice_unknown"
 ALARM_STOP_NOTICE_ORPHANED = "notify.stop_notice_orphaned"
 ALARM_STOP_NOTICE_LEASE_LOST = "notify.stop_notice_lease_lost"
 ALARM_MASK_NOT_SEALED = "stop_notice.mask_not_sealed"
+ALARM_STOP_NOTICE_LOG_FAILED = "notify.stop_notice_log_failed"
 RUN_SECONDS = 240
 
 
@@ -216,6 +217,8 @@ class StopNoticeSender:
             self._notifier.alarm.raise_alarm(ALARM_STOP_NOTICE_ORPHANED, f"{swept['orphaned']} stop notice email(s) have no address to go to")
             report.failed += 1
             report.errors.append(f"organisation {org_id}: {swept['orphaned']} email(s) with no address")
+        if swept["removed"]:  # an admin removed that address on purpose: the queued email is closed quietly, never an alarm
+            log.info("queued stop notices to a removed recipient were closed", org_id=str(org_id), count=int(swept["removed"]))
         handled: list[uuid.UUID] = []
         deadline = time.monotonic() + RUN_SECONDS
         while time.monotonic() < deadline:  # one recipient per claim: one send, always inside its lease
@@ -234,36 +237,23 @@ class StopNoticeSender:
         log.warning("the stop-notice pass reached its time limit; the rest waits for the next pass", org_id=str(org_id))
 
     def _deliver(self, conn, token: str, rows: list[DueMail], delivery: dict, report: StopNoticeReport, org_transaction: Callable) -> None:
-        groups = group_by_recipient(rows)
-        in_flight: list[DueMail] | None = None
-        finished = 0
-        try:
-            for group in groups:
-                in_flight = group
-                ok, bad = self._send_group(group, delivery, report)
-                with org_transaction(conn, token):
-                    moved = 0
-                    if ok:
-                        moved += conn.execute("SELECT consentvault.stop_notice_mail_done(%s, true, %s) AS n",
-                                              ([r.mail_id for r in ok], self._max_attempts)).fetchone()["n"]
-                    if bad:
-                        moved += conn.execute("SELECT consentvault.stop_notice_mail_done(%s, false, %s) AS n",
-                                              ([r.mail_id for r in bad], self._max_attempts)).fetchone()["n"]
-                in_flight = None
-                finished += 1
-                if moved != len(group):  # a lease ran out under this send: its outcome was not recorded
-                    self._notifier.alarm.raise_alarm(ALARM_STOP_NOTICE_LEASE_LOST, f"{len(group) - moved} stop notice row(s) lost their claim")
-                    report.failed += 1
-                    report.errors.append(f"{len(group) - moved} row(s) lost their claim")
-                for r in bad:
-                    if r.attempts >= self._max_attempts:
-                        self._notifier.record_failure("stop_notice", r.address, "attempts_exhausted", ALARM_STOP_NOTICE_GAVE_UP)
-        finally:
-            # rows never attempted go back to the queue; only the row actually in flight may turn unknown
-            never = [r.mail_id for g in groups[finished:] if g is not in_flight for r in g]
-            if never:
-                with org_transaction(conn, token):
-                    conn.execute("SELECT consentvault.stop_notice_mail_release(%s)", (never,))
+        for group in group_by_recipient(rows):  # one claim is one recipient, so one group
+            ok, bad = self._send_group(group, delivery, report)
+            with org_transaction(conn, token):
+                moved = 0
+                if ok:
+                    moved += conn.execute("SELECT consentvault.stop_notice_mail_done(%s, true, %s) AS n",
+                                          ([r.mail_id for r in ok], self._max_attempts)).fetchone()["n"]
+                if bad:
+                    moved += conn.execute("SELECT consentvault.stop_notice_mail_done(%s, false, %s) AS n",
+                                          ([r.mail_id for r in bad], self._max_attempts)).fetchone()["n"]
+            if moved != len(group):  # a lease ran out under this send: its outcome was not recorded
+                self._notifier.alarm.raise_alarm(ALARM_STOP_NOTICE_LEASE_LOST, f"{len(group) - moved} stop notice row(s) lost their claim")
+                report.failed += 1
+                report.errors.append(f"{len(group) - moved} row(s) lost their claim")
+            for r in bad:
+                if r.attempts >= self._max_attempts:
+                    self._notifier.record_failure("stop_notice", r.address, "attempts_exhausted", ALARM_STOP_NOTICE_GAVE_UP)
 
     def _send_group(self, group: list[DueMail], delivery: dict, report: StopNoticeReport) -> tuple[list[DueMail], list[DueMail]]:
         first = group[0]
@@ -277,9 +267,21 @@ class StopNoticeSender:
             report.errors.append(f"send failed: {exc.kind}")
             log.error("a stop-notice email was not sent", error_class=exc.kind)
             return [], group
+        except SendLogError as exc:
+            # the send log row could not be written. If it followed a failed send the rows are failed (never left unknown); if the
+            # email had gone out they are sent (never sent twice). Either way the log failure is its own alarm.
+            self._notifier.alarm.raise_alarm(ALARM_STOP_NOTICE_LOG_FAILED, "a stop notice send-log row could not be written")
+            report.failed += 1
+            report.errors.append("send log row not written")
+            log.error("a stop-notice send log row was not written", error=type(exc).__name__)
+            if isinstance(exc.__context__, SendFailed):
+                return [], group
+            report.emails_sent += 1
+            report.stops_listed += len(group)
+            return group, []
         except NotifyRefused as exc:
             log.error("a stop-notice email was refused before sending", error_code=exc.code)
-            if len(group) == 1:
+            if len(group) == 1 or exc.code == "notify_recipient_not_email":  # the address is the problem: one failure for the group
                 self._notifier.record_failure("stop_notice", first.address, f"refused {exc.code}", ALARM_STOP_NOTICE_REFUSED)
                 report.failed += 1
                 report.errors.append(f"refused before sending: {exc.code}")

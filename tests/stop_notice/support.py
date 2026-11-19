@@ -8,7 +8,7 @@ from datetime import timedelta
 from consentvault import db
 from consentvault.ledger import record_tenant_event
 from consentvault.notify.base import InMemorySendLog
-from consentvault.notify.errors import SendFailed
+from consentvault.notify.errors import SendFailed, SendLogError
 from consentvault.notify.service import Notifier
 from consentvault.notify.stop_notice import StopNoticeSender
 from consentvault.tenancy.crypto import TenantCrypto
@@ -76,6 +76,19 @@ class FakeSender:
         return f"msg-{len(self.sent)}"
 
 
+class FlakyLog(InMemorySendLog):
+    """An in-memory send log that can be told to fail every write, as a database outage would."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail = False
+
+    def append(self, record) -> None:
+        if self.fail:
+            raise SendLogError("the send log row could not be written")
+        super().append(record)
+
+
 class Alarms:
     def __init__(self) -> None:
         self.raised: list = []
@@ -90,7 +103,7 @@ class Mailroom:
     def __init__(self, vault, pg_server, *, window_seconds: int = 0) -> None:
         dbname = vault.super_dsn.rsplit("/", 1)[1]
         self.dsn = make_login_role(pg_server["port"], dbname, "consentvault_worker")
-        self.sender, self.log, self.alarms = FakeSender(), InMemorySendLog(), Alarms()
+        self.sender, self.log, self.alarms = FakeSender(), FlakyLog(), Alarms()
         self.sender_job = StopNoticeSender(Notifier(self.sender, self.log, self.alarms), portal_url=PORTAL,
                                            batch_window=timedelta(seconds=window_seconds))
 

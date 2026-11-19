@@ -140,37 +140,41 @@ GRANT EXECUTE ON FUNCTION consentvault.stop_notice_record(uuid, uuid, text, byte
 -- Worker side (scope worker:sync).
 -- The sweep, run before each pass: (1) a claimed row whose lease ran out with no answer becomes 'unknown' (it may have been sent, so
 -- it is never sent again) and its mask text is blanked; (2) a queued row whose admin was deleted or whose address was cleared can
--- never be sent: it is marked failed with a reason and its attempts are spent, and a row of a removed recipient is closed the same
--- way. Answers how many rows THIS call moved, so the caller alarms once, not on every later pass.
-CREATE FUNCTION consentvault.stop_notice_sweep(p_max_attempts integer) RETURNS TABLE (lost integer, orphaned integer)
+-- never be sent: it is marked failed with a reason and its attempts are spent, and a row of a removed recipient is closed too, quietly (the person removed that address on purpose). Answers how many rows THIS call moved, so the caller alarms once, not on every later pass.
+CREATE FUNCTION consentvault.stop_notice_sweep(p_max_attempts integer) RETURNS TABLE (lost integer, orphaned integer, removed integer)
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 #variable_conflict use_column
 DECLARE
     org uuid := consentvault.sync_org(ARRAY['worker:sync']);
     a   integer;
     b   integer;
+    c   integer;
 BEGIN
     UPDATE consentvault.stop_notice_mail x SET status = 'unknown', claimed_until = NULL, mask_text = NULL
      WHERE x.org_id = org AND x.status = 'sending' AND x.claimed_until < clock_timestamp();
     GET DIAGNOSTICS a = ROW_COUNT;
     UPDATE consentvault.stop_notice_mail x
-       SET status = 'failed', attempts = p_max_attempts, mask_text = NULL,
-           failure_reason = CASE WHEN x.recipient_id IS NOT NULL THEN 'recipient_removed' ELSE 'no_address' END
+       SET status = 'failed', attempts = p_max_attempts, mask_text = NULL, failure_reason = 'no_address'
      WHERE x.org_id = org AND x.status IN ('pending', 'failed') AND x.attempts < p_max_attempts
-       AND ((x.member_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM consentvault.member m WHERE m.org_id = x.org_id
-                                                      AND m.member_id = x.member_id AND m.email_norm IS NOT NULL))
-         OR (x.recipient_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM consentvault.stop_notice_recipient r WHERE r.org_id = x.org_id
-                                                         AND r.recipient_id = x.recipient_id AND r.removed_at IS NULL)));
+       AND x.member_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM consentvault.member m WHERE m.org_id = x.org_id
+                                                    AND m.member_id = x.member_id AND m.email_norm IS NOT NULL);
     GET DIAGNOSTICS b = ROW_COUNT;
+    UPDATE consentvault.stop_notice_mail x
+       SET status = 'failed', attempts = p_max_attempts, mask_text = NULL, failure_reason = 'recipient_removed'
+     WHERE x.org_id = org AND x.status IN ('pending', 'failed') AND x.attempts < p_max_attempts
+       AND x.recipient_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM consentvault.stop_notice_recipient r WHERE r.org_id = x.org_id
+                                                       AND r.recipient_id = x.recipient_id AND r.removed_at IS NULL);
+    GET DIAGNOSTICS c = ROW_COUNT;
     lost := a;
     orphaned := b;
+    removed := c;
     RETURN NEXT;
 END;
 $$;
 REVOKE ALL ON FUNCTION consentvault.stop_notice_sweep(integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION consentvault.stop_notice_sweep(integer) TO consentvault_worker;
 
--- A claim: ONE recipient's due emails (the recipient whose oldest waiting email is oldest, once that is at least p_window seconds
+-- A claim: ONE recipient's due emails (the first recipient no other run holds, by oldest waiting email, once that is at least p_window seconds
 -- old, so a burst of stops merges into one email), so one claim is one send and the lease always covers it. Rows are taken with FOR
 -- UPDATE SKIP LOCKED and the picked filter repeats the status and attempts test, so a row another run committed between this
 -- statement's snapshot and its lock is re-checked and refused. Each claim counts as an attempt. p_skip names rows this run has
@@ -197,7 +201,12 @@ BEGIN
     due AS (
         SELECT w.wid, w.addr, w.oldest FROM waiting w
          WHERE clock_timestamp() - w.oldest >= make_interval(secs => p_window_seconds)),
-    target AS (SELECT d.addr FROM due d ORDER BY d.oldest, d.addr LIMIT 1),
+    -- the first recipient, by oldest waiting email, that no other run holds: a try-lock on the address is taken in order and the walk stops
+    -- at the first one it gets, so a recipient another run is sending to is skipped and the pass goes on to the next
+    target AS (
+        SELECT o.addr FROM (SELECT d.addr, min(d.oldest) AS oldest FROM due d GROUP BY d.addr
+                             ORDER BY min(d.oldest), d.addr OFFSET 0) o
+         WHERE pg_try_advisory_xact_lock(hashtextextended(org::text || o.addr, 0)) LIMIT 1),
     picked AS (
         SELECT q.mail_id AS pid FROM consentvault.stop_notice_mail q JOIN due d ON d.wid = q.mail_id
          WHERE q.org_id = org AND d.addr = (SELECT t.addr FROM target t)
@@ -222,23 +231,6 @@ END;
 $$;
 REVOKE ALL ON FUNCTION consentvault.stop_notice_claim(integer, integer, integer, integer, uuid[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION consentvault.stop_notice_claim(integer, integer, integer, integer, uuid[]) TO consentvault_worker;
-
--- Rows claimed and never attempted (an earlier send in the same pass failed hard) go back to the queue with their attempt returned.
-CREATE FUNCTION consentvault.stop_notice_mail_release(p_mail_ids uuid[]) RETURNS integer
-    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
-DECLARE
-    org uuid := consentvault.sync_org(ARRAY['worker:sync']);
-    n   integer;
-BEGIN
-    UPDATE consentvault.stop_notice_mail q
-       SET status = 'pending', claimed_until = NULL, attempts = greatest(q.attempts - 1, 0)
-     WHERE q.org_id = org AND q.mail_id = ANY (p_mail_ids) AND q.status = 'sending';
-    GET DIAGNOSTICS n = ROW_COUNT;
-    RETURN n;
-END;
-$$;
-REVOKE ALL ON FUNCTION consentvault.stop_notice_mail_release(uuid[]) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION consentvault.stop_notice_mail_release(uuid[]) TO consentvault_worker;
 
 -- The outcome of a send, for rows this run still holds ('sending'). Answers how many it moved: fewer than asked means a lease ran out
 -- under the run. The text of a sent row, and of a failed row whose attempts are spent, is blanked.

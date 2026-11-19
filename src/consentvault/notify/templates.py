@@ -99,11 +99,12 @@ _FOOT = "ConsentVault, consentvault.ai. This is a service message about your acc
 
 
 # ---- the stop notice: a list of stops, each already masked --------------------------------------------------------------
+UNSHOWN_CONTACT = "contact not shown"
 STOP_LINE_SINGLE = "ConsentVault has recorded this stop. Acting on it in your own systems is up to you."
 STOP_LINE_MANY = "ConsentVault has recorded these stops. Acting on them in your own systems is up to you."
 CHANNEL_WORDS = {"sms": "Text message", "voice": "Phone call", "artificial_voice": "Automated phone call", "email": "Email"}
 DELIVERY_WORDS = {"delivered": "delivered", "waiting": "waiting", "refused": "refused"}
-_MASKED_EMAIL = re.compile(r"[A-Za-z0-9]\*\*\*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_MASKED_EMAIL = re.compile(r"[^@\s<>]\*\*\*@[^@\s<>]+\.[^@\s<>]{2,}")
 _MASKED_PHONE = re.compile(r"[+()\d\s*-]{3,40}")
 _TOKEN = re.compile(r"[a-z0-9_*]{1,100}")
 _DIGIT_RUN = re.compile(r"\d{5,}")
@@ -114,6 +115,8 @@ def check_masked_contact(value: str) -> str:
     A full phone number or a full email address never reaches a body (the whole point of the notice is that it carries none)."""
     text = str(value)
     refuse_control("a stop's contact", text)
+    if text == UNSHOWN_CONTACT:
+        return text
     if "@" in text:
         if not _MASKED_EMAIL.fullmatch(text):
             raise NotifyRefused("a stop's contact looks like a full email address; only first letter plus domain may be sent",
@@ -121,7 +124,7 @@ def check_masked_contact(value: str) -> str:
         return text
     digits = re.sub(r"\D", "", text)
     if not _MASKED_PHONE.fullmatch(text) or _DIGIT_RUN.search(re.sub(r"[\s()+-]", "", text)) \
-            or len(digits) > 7 or (digits and "*" not in text):
+            or len(digits) > 4 or (digits and "*" not in text):
         raise NotifyRefused("a stop's contact looks like a full phone number; only the last four digits may be sent",
                             code='notify_stop_contact_looks_like_phone')
     return text

@@ -171,7 +171,7 @@ def test_a_hold_blocks_destroying_the_old_version_and_the_block_is_visible(rot):
     assert out["remaining"] == 0 and out["old_version_destroyed"] is False
     assert rot.env.custody.versions(str(org)) == {1: "retired", 2: "active"}
     assert rot.sql("SELECT status FROM consentvault.org_key WHERE org_id = %s AND version = 1", org)[0]["status"] == "retired"
-    assert rot.sql("SELECT name FROM consentvault.operator_alarm WHERE org_id = %s", org)[0]["name"] == kr.ALARM_BLOCKED
+    assert rot.sql("SELECT name FROM consentvault.operator_alarm WHERE org_id = %s AND name NOT LIKE 'stop_notice.%%'", org)[0]["name"] == kr.ALARM_BLOCKED
     assert "org_key.rotation_blocked" in rot.actions(org)
     assert rot.read_all(org) == PHONES
     with rot.env.operator() as c:
@@ -201,7 +201,7 @@ def test_a_failing_key_service_blocks_the_rotation_by_name_and_raises_an_alarm(r
     assert blocked.value.org_ids == (str(org),)  # the organisation travels as a field, so a report never searches the text
     state = kr.get_rotation_state(rot.env.operator, rot.t.key, org)
     assert state["status"] == "blocked" and state["blocked_reason"].startswith("rewrap_failed:")
-    assert rot.sql("SELECT name, error_class FROM consentvault.operator_alarm WHERE org_id = %s", org)[0] == {
+    assert rot.sql("SELECT name, error_class FROM consentvault.operator_alarm WHERE org_id = %s AND name NOT LIKE 'stop_notice.%%'", org)[0] == {
         "name": kr.ALARM_FAILED, "error_class": "KeyRotationError"}
     assert rot.read_all(org) == PHONES  # nothing half-written: every key still opens
     monkeypatch.setattr(rot.env.custody, "wrap", real)

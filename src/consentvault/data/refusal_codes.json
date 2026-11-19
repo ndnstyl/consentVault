@@ -638,7 +638,7 @@
    "line": 9,
    "template": "consentvault erase: the fingerprint must be 64 hex characters",
    "meaning": "consentvault erase: the fingerprint must be 64 hex characters",
-   "defined_in": "0112_record_link.sql"
+   "defined_in": "0114_stop_notice.sql"
   },
   {
    "code": "db_erase_contact_thryzv",
@@ -647,7 +647,7 @@
    "line": 16,
    "template": "legal_hold_active:%",
    "meaning": "legal_hold_active:%",
-   "defined_in": "0112_record_link.sql"
+   "defined_in": "0114_stop_notice.sql"
   },
   {
    "code": "db_erase_contact_vsvyym",
@@ -656,7 +656,7 @@
    "line": 12,
    "template": "consentvault erase: an admin or restore token is required",
    "meaning": "consentvault erase: an admin or restore token is required",
-   "defined_in": "0112_record_link.sql"
+   "defined_in": "0114_stop_notice.sql"
   },
   {
    "code": "db_erase_raw_post_key_nxtsjr",
@@ -1989,6 +1989,15 @@
    "template": "consentvault sso: that sign-in-service organization is already bound to another organization",
    "meaning": "consentvault sso: that sign-in-service organization is already bound to another organization",
    "defined_in": "0042_sso_binding_guards.sql"
+  },
+  {
+   "code": "db_stop_notice_member_hstkry",
+   "function": "consentvault.stop_notice_member",
+   "signature": "",
+   "line": 7,
+   "template": "consentvault stop notice: this call needs a portal session",
+   "meaning": "consentvault stop notice: this call needs a portal session",
+   "defined_in": "0114_stop_notice.sql"
   },
   {
    "code": "db_sync_advance_state_rhgvsy",

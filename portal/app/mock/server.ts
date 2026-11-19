@@ -200,7 +200,7 @@ const STOP_NOTE = 'ConsentVault has recorded this stop. Acting on it in your own
 function stopNotices(st: Store): T.StopNotice[] {
   if (!st.ext.stopNotices) {
     st.ext.stopNotices = st.scenario.stopNotices === 'waiting' ? [
-      { notice_id: 'sn_1', contact: '(555) ***-0142', channels: ['sms'], purposes: ['marketing'], stopped_at: new Date().toISOString(), records_path: '/records?has_stop=true',
+      { notice_id: 'sn_1', contact: '***-0177', channels: ['sms'], purposes: ['marketing'], stopped_at: new Date().toISOString(), records_path: '/records?has_stop=true',
         delivery: [{ system: 'CRM', status: 'delivered' }, { system: 'Dialer', status: 'waiting' }] },
     ] : [];
   }
@@ -208,7 +208,7 @@ function stopNotices(st: Store): T.StopNotice[] {
 }
 route('GET', '/v1/stop-notices', (c) => {
   const x = allow(c, 'admin'); if (x) return x;
-  return OK({ note: STOP_NOTE, notices: stopNotices(c.st) });
+  return OK({ note: STOP_NOTE, remaining: stopNotices(c.st).length, notices: stopNotices(c.st) });
 });
 route('POST', '/v1/stop-notices\\:acknowledge', (c) => {
   const x = allow(c, 'admin'); if (x) return x;

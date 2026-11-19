@@ -30,7 +30,7 @@ for (const [label, width, height] of [['desktop', 1280, 900], ['phone', 390, 844
   const dialog = page.getByRole('alertdialog');
   await dialog.waitFor({ timeout: 8000 });
   const text = await dialog.innerText();
-  check(`${label}: masked phone shown`, text.includes('(555) ***-0142'));
+  check(`${label}: masked phone shown`, text.includes('***-0177'));
   check(`${label}: the notify-only line shown`, text.includes(NOTE));
   check(`${label}: delivery words shown`, /CRM \(delivered\)/.test(text) && /Dialer \(waiting\)/.test(text) && /Text message/.test(text) && !/\bsms\b/.test(text) );
   check(`${label}: no full contact point`, !/\d{10}/.test(text) && !/[a-z]{2,}@example\.com/.test(text));

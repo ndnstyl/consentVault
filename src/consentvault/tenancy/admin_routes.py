@@ -527,7 +527,7 @@ class AdminApp:
         return {"download_url": url, "expires_at": iso(exp)}
 
     def h_stop_notices_list(self, ctx, p, q, b):
-        return stop_notices.list_unacknowledged(ctx)
+        return stop_notices.list_unacknowledged(ctx, self.crypto)
 
     def h_stop_notices_acknowledge(self, ctx, p, q, b):
         return stop_notices.acknowledge(ctx, b)

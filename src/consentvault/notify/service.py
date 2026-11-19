@@ -47,3 +47,10 @@ class Notifier:
         self._log.append(SendRecord(template, domain, "bounced", self._sender.provider, provider_message_id,
                                     reason[:200] or None))
         self._alarm.raise_alarm(alarm, f"{template} to {domain} bounced (message {provider_message_id})")
+
+    def record_failure(self, template: str, to: str, detail: str, alarm: str) -> None:
+        """A message that was refused before any send, or given up on after its last attempt: one ``failed`` send-log row and one
+        alarm, so it never ends quietly. Domain only, never the address."""
+        domain = recipient_domain(to)
+        self._log.append(SendRecord(template, domain, "failed", self._sender.provider, None, detail[:200]))
+        self._alarm.raise_alarm(alarm, f"{template} to {domain}: {detail}")

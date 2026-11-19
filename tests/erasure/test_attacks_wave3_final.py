@@ -106,7 +106,7 @@ def _platform_reasons(env, rotation_id):
 
 
 def _alarms(env, org):
-    return _sql(env, "SELECT name, ref_kind, ref_id, error_class FROM consentvault.operator_alarm WHERE org_id = %s"
+    return _sql(env, "SELECT name, ref_kind, ref_id, error_class FROM consentvault.operator_alarm WHERE org_id = %s AND name NOT LIKE 'stop_notice.%%'"
                      " ORDER BY raised_at", org)
 
 

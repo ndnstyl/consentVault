@@ -315,8 +315,8 @@ def test_a_preparation_failure_goes_dead_when_the_window_ends_and_leaves_an_alar
             break
     row = env.outbox(a)[0]
     assert (row["status"], row["last_error_class"]) == ("dead", "prepare_failed") and row["attempts"] > 1
-    alarms = env.q("SELECT name, ref_kind, ref_id, error_class FROM consentvault.operator_alarm WHERE org_id = %s",
-                   (a.org_id,))
+    alarms = env.q("SELECT name, ref_kind, ref_id, error_class FROM consentvault.operator_alarm WHERE org_id = %s"
+                   " AND name NOT LIKE 'stop_notice.%%'", (a.org_id,))
     assert alarms == [{"name": "sync.dead", "ref_kind": "system", "ref_id": s.system_id, "error_class": "prepare_failed"}]
     assert env.transport.sent == []
 

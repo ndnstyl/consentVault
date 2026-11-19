@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 
 from consentvault import db
 from consentvault.ledger import record_tenant_event
@@ -16,15 +17,17 @@ from consentvault.tenancy.tokens import mint_org_token, org_transaction
 from isolation.harness import FakeKeyProvider, make_login_role
 
 PORTAL = "https://app.example.test"
-_CRYPTO: dict = {}
+_PROVIDER = FakeKeyProvider()
+
+
+SHARED = TenantCrypto(_PROVIDER)  # one key service for every organisation a test makes: writer, sender and portal read the same keys
 
 
 def _crypto(org_id) -> TenantCrypto:
-    if str(org_id) not in _CRYPTO:
-        p = FakeKeyProvider()
-        p.add_org(uuid.UUID(str(org_id)))
-        _CRYPTO[str(org_id)] = TenantCrypto(p)
-    return _CRYPTO[str(org_id)]
+    oid = uuid.UUID(str(org_id))
+    if oid not in _PROVIDER.wrap_keys:
+        _PROVIDER.add_org(oid)
+    return SHARED
 
 
 def record_stop(vault, org_id, contact: str, *, event_type="revoke", channels=("sms",), purposes=("marketing",), then=None):
@@ -69,11 +72,12 @@ class Alarms:
 class Mailroom:
     """The worker login, the notifier over a fake sender, and the in-memory send log."""
 
-    def __init__(self, vault, pg_server) -> None:
+    def __init__(self, vault, pg_server, *, window_seconds: int = 0) -> None:
         dbname = vault.super_dsn.rsplit("/", 1)[1]
         self.dsn = make_login_role(pg_server["port"], dbname, "consentvault_worker")
         self.sender, self.log, self.alarms = FakeSender(), InMemorySendLog(), Alarms()
-        self.sender_job = StopNoticeSender(Notifier(self.sender, self.log, self.alarms), portal_url=PORTAL)
+        self.sender_job = StopNoticeSender(Notifier(self.sender, self.log, self.alarms), portal_url=PORTAL,
+                                           batch_window=timedelta(seconds=window_seconds))
 
     def run(self, **kw):
         with db.connect(self.dsn) as w:

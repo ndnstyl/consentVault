@@ -7,11 +7,11 @@ import type { StopNotice } from './api/types.ts';
 
 export type PopupState =
   | { phase: 'loading' | 'failed'; notices: StopNotice[]; error: string | null }
-  | { phase: 'open'; notices: StopNotice[]; busy: boolean; error: string | null }
+  | { phase: 'open'; notices: StopNotice[]; remaining: number; busy: boolean; error: string | null }
   | { phase: 'clear'; notices: StopNotice[]; error: null };
 
 export type PopupAction =
-  | { type: 'loaded'; notices: StopNotice[] }
+  | { type: 'loaded'; notices: StopNotice[]; remaining?: number }
   | { type: 'load_failed'; error: string }
   | { type: 'dismiss_attempt' }
   | { type: 'acknowledging' }
@@ -22,7 +22,7 @@ export const initialPopup: PopupState = { phase: 'loading', notices: [], error: 
 
 export function popupReducer(s: PopupState, a: PopupAction): PopupState {
   switch (a.type) {
-    case 'loaded': return a.notices.length ? { phase: 'open', notices: a.notices, busy: false, error: null } : { phase: 'clear', notices: [], error: null };
+    case 'loaded': return a.notices.length ? { phase: 'open', notices: a.notices, remaining: a.remaining ?? a.notices.length, busy: false, error: null } : { phase: 'clear', notices: [], error: null };
     case 'load_failed': return { phase: 'failed', notices: [], error: a.error };
     case 'dismiss_attempt': return s;
     case 'acknowledging': return s.phase === 'open' ? { ...s, busy: true, error: null } : s;
@@ -30,7 +30,7 @@ export function popupReducer(s: PopupState, a: PopupAction): PopupState {
     case 'acknowledged': {
       if (s.phase !== 'open') return s;
       const left = s.notices.filter((n) => !a.ids.includes(n.notice_id));
-      return left.length ? { phase: 'open', notices: left, busy: false, error: null } : { phase: 'clear', notices: [], error: null };
+      return left.length ? { phase: 'open', notices: left, remaining: Math.max(s.remaining - a.ids.length, left.length), busy: false, error: null } : { phase: 'clear', notices: [], error: null };
     }
   }
 }

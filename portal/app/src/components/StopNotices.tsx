@@ -15,7 +15,7 @@ export function StopNotices() {
     if (!admin) return;
     let live = true;
     s.api.stopNotices.list().then(
-      (r) => { if (live) dispatch({ type: 'loaded', notices: r.notices }); },
+      (r) => { if (live) dispatch({ type: 'loaded', notices: r.notices, remaining: r.remaining }); },
       (e) => { if (live) dispatch({ type: 'load_failed', error: e instanceof ApiError ? e.detail || e.code : 'The stop notices could not be read.' }); },
     );
     return () => { live = false; };
@@ -29,7 +29,11 @@ export function StopNotices() {
   const ack = async () => {
     dispatch({ type: 'acknowledging' });
     const ids = st.notices.map((n) => n.notice_id);
-    try { await s.api.stopNotices.acknowledge(ids); dispatch({ type: 'acknowledged', ids }); }
+    try {
+      const done = await s.api.stopNotices.acknowledge(ids);
+      if (done.remaining > 0) { const next = await s.api.stopNotices.list(); dispatch({ type: 'loaded', notices: next.notices, remaining: next.remaining }); }
+      else dispatch({ type: 'acknowledged', ids });
+    }
     catch (e) { dispatch({ type: 'acknowledge_failed', error: e instanceof ApiError ? e.detail || e.code : 'The acknowledgement was not saved.' }); }
   };
   const many = st.notices.length > 1;
@@ -44,6 +48,7 @@ export function StopNotices() {
           </li>
         ))}
       </ul>
+      {st.remaining > st.notices.length && <p>{`${st.remaining - st.notices.length} more are waiting; they show after you acknowledge these.`}</p>}
       <p>{stopNote(st.notices.length)}</p>
       {st.error && <p role="alert">{`Your acknowledgement was not saved: ${st.error} Try again.`}</p>}
       <div className="actions">

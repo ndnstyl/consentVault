@@ -1,10 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initialPopup, popupReducer, deliveryLines, channelWords, stopNote, STOP_NOTE } from '../src/lib/stop-notices.ts';
+import { initialPopup, popupReducer, deliveryLines, stopNote, STOP_NOTE } from '../src/lib/stop-notices.ts';
 import type { StopNotice } from '../src/lib/api/types.ts';
 
 const n = (id: string, delivery: StopNotice['delivery'] = []): StopNotice => ({
-  notice_id: id, contact: '(555) ***-0177', channels: ['sms'], purposes: ['marketing'], stopped_at: '2026-11-19T12:00:00Z', delivery, records_path: '/records?has_stop=true',
+  notice_id: id, contact: '***-0177', channels: ['sms'], purposes: ['marketing'], stopped_at: '2026-11-19T12:00:00Z', delivery, records_path: '/records?has_stop=true',
+});
+
+test('a long list is answered a page at a time: acknowledging one page brings the next, and it clears only when none remain', () => {
+  let s = popupReducer(initialPopup, { type: 'loaded', notices: [n('a'), n('b')], remaining: 5 });
+  assert.equal(s.phase, 'open');
+  assert.equal((s as { remaining: number }).remaining, 5);
+  s = popupReducer(s, { type: 'loaded', notices: [n('c'), n('d')], remaining: 3 });  // the next page after an acknowledgement
+  assert.deepEqual(s.notices.map((x) => x.notice_id), ['c', 'd']);
+  s = popupReducer(s, { type: 'acknowledged', ids: ['c', 'd'] });
+  assert.equal(s.phase, 'clear');
 });
 
 test('the pop-up opens when notices exist, stays open through every attempt to dismiss it, and clears only when they are acknowledged', () => {
@@ -33,5 +43,4 @@ test('a notice only notifies: the words say acting is the customer\'s, and each 
   assert.doesNotMatch(stopNote(1) + stopNote(2), /we (have )?(blocked|removed|stopped|updated)/i);
   assert.deepEqual(deliveryLines(n('a', [{ system: 'CRM', status: 'delivered' }, { system: 'Dialer', status: 'refused' }])), ['CRM (delivered)', 'Dialer (refused)']);
   assert.deepEqual(deliveryLines(n('a', [{ system: null, status: 'none_connected' }])), ['none connected']);
-  assert.equal(channelWords(['sms', 'voice', 'email']), 'Text message, Phone call, Email');
 });

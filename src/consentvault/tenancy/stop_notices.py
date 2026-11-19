@@ -12,11 +12,13 @@ from typing import Any
 
 import psycopg
 
+from ..notify.stop_notice import read_mask
 from ..safelog import describe
 from .admin_base import (ROLE_ADMIN, ApiError, Ctx, body_dict, clean_email, email_hint, iso, need_list, require_not_closed,
                          to_uuid)
 
 ACK_MAX = 500
+PAGE_LIMIT = 500
 RECIPIENTS_MAX = 20
 _ORG = "(SELECT consentvault.current_org())"
 NOTE = "ConsentVault has recorded this stop. Acting on it in your own systems is up to you."
@@ -30,30 +32,32 @@ def _delivery(ctx: Ctx, ids: list) -> dict:
     return out
 
 
-def list_unacknowledged(ctx: Ctx) -> dict:
+def list_unacknowledged(ctx: Ctx, crypto) -> dict:
+    """At most ``PAGE_LIMIT`` of the signed-in admin's unacknowledged stops (only those recorded after the admin joined), oldest
+    first; ``remaining`` counts them all, so the pop-up asks again after each acknowledgement until it is clear."""
     ctx.actor.require(ROLE_ADMIN)
-    me = ctx.actor.member_uuid
-    rows = ctx.conn.execute("SELECT * FROM consentvault.stop_notice_unacknowledged(%s)", (me,)).fetchall()
+    rows = ctx.conn.execute("SELECT * FROM consentvault.stop_notice_unacknowledged(%s)", (PAGE_LIMIT,)).fetchall()
+    org = ctx.org_id()
     delivery = _delivery(ctx, [r["notice_id"] for r in rows])
-    return {"note": NOTE, "notices": [
-        {"notice_id": str(r["notice_id"]), "contact": r["masked_contact"], "channels": list(r["channels"]),
-         "purposes": list(r["purposes"]), "stopped_at": iso(r["stopped_at"]),
+    return {"note": NOTE, "remaining": rows[0]["total"] if rows else 0, "notices": [
+        {"notice_id": str(r["notice_id"]), "contact": read_mask(crypto, org, r["notice_id"], r["masked_ct"]),
+         "channels": list(r["channels"]), "purposes": list(r["purposes"]), "stopped_at": iso(r["stopped_at"]),
          "delivery": delivery[r["notice_id"]] or [{"system": None, "status": "none_connected"}],
          "records_path": "/records?has_stop=true"} for r in rows]}
 
 
 def acknowledge(ctx: Ctx, body: Any) -> dict:
+    """Acknowledge the named notices for the signed-in admin (the database reads who that is from the session token)."""
     ctx.actor.require(ROLE_ADMIN)
     b = body_dict(body)
     ids = [to_uuid(x, "notice") for x in need_list(b, "notice_ids", min_items=1, max_items=ACK_MAX)]
-    me = ctx.actor.member_uuid
     try:
-        done = ctx.conn.execute("SELECT consentvault.stop_notice_acknowledge(%s, %s) AS done", (me, ids)).fetchone()["done"]
+        done = ctx.conn.execute("SELECT consentvault.stop_notice_acknowledge(%s) AS done", (ids,)).fetchone()["done"]
     except psycopg.Error as exc:
         raise ApiError("service_unavailable", f"the acknowledgement could not be written; nothing was changed ({describe(exc)})") from exc
     if done:
         ctx.audit("stop_notice.acknowledged", "stop_notice", None, detail={"count": len(done), "notice_ids": [str(d) for d in done]})
-    left = ctx.conn.execute("SELECT count(*) AS n FROM consentvault.stop_notice_unacknowledged(%s)", (me,)).fetchone()["n"]
+    left = ctx.conn.execute("SELECT coalesce(max(total), 0) AS n FROM consentvault.stop_notice_unacknowledged(1)").fetchone()["n"]
     return {"acknowledged": len(done), "remaining": left}
 
 

@@ -1299,7 +1299,8 @@
       "required": true,
       "used_by": [
         "vault",
-        "job:projection-rebuild"
+        "job:projection-rebuild",
+        "job:stop-notices-send"
       ],
       "read_by": "product",
       "deployments": [

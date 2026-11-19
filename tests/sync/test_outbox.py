@@ -250,3 +250,22 @@ def test_build_body_is_canonical_and_names_only_what_the_contract_lists(env):
     assert body == json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode()
     with pytest.raises(OutboxError):
         build_body(org_id=env.t.a.org_id, contact="x", contact_fp="a" * 64, contact_form="carrier-pigeon", change=change)
+
+
+def test_the_channel_state_is_denied_while_any_purpose_on_the_channel_is_denied_and_its_version_never_decreases(env):
+    a = env.t.a
+    env.add_system(a, "crm", contact_form="plaintext")
+    servicing = env.register_wording(a, "alpha: service texts about your order.", purposes=["servicing"])
+    env.grant(a, A_PHONE)                                                        # marketing granted
+    env.stop(a, A_PHONE)                                                         # marketing stopped
+    env.grant(a, A_PHONE, purposes=["servicing"], disclosure_sha256=servicing)   # servicing granted while marketing is stopped
+    bodies = [_open_payload(env, a, r) for r in env.outbox(a)]
+    by_purpose = {b["purpose"]: b for b in bodies}
+    assert by_purpose["servicing"]["state"] == "permitted" and by_purpose["servicing"]["channel_state"] == "denied", bodies
+    versions = [b["channel_version"] for b in sorted(bodies, key=lambda b: b["at"])]
+    assert versions == sorted(versions) and len(set(versions)) == len(versions), versions
+    # a second person with every purpose on the channel granted reads permitted
+    env.grant(a, B_PHONE)
+    env.grant(a, B_PHONE, purposes=["servicing"], disclosure_sha256=servicing)
+    mine = [_open_payload(env, a, r) for r in env.outbox(a, contact_fp=env.fp(a, B_PHONE))]
+    assert mine[-1]["channel_state"] == "permitted"

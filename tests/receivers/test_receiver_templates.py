@@ -21,7 +21,8 @@ pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node is no
 
 def body_of(**over) -> str:
     base = {"basis_event_id": "e1", "at": "2026-11-19T10:00:00.000Z", "channel": "sms", "contact": "Jane@Example.com", "org_id": "o1",
-            "purpose": "marketing", "reason": "revoke", "state": "denied", "version": 3}
+            "purpose": "marketing", "reason": "revoke", "state": "denied", "version": 3,
+            "channel_state": "denied", "channel_version": 3}
     base.update(over)
     return json.dumps(base, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
@@ -99,7 +100,7 @@ def test_a_delivery_is_remembered_only_by_the_step_after_the_crm_work():
     assert r["staticData"]["seenKeys"] == ["k1", "k9"]
 
 
-MSG = {"state": "denied", "version": 5, "channel": "sms", "contact": "+14075550123", "stateField": "consentvault_texts",
+MSG = {"state": "denied", "version": 5, "channelState": "denied", "channelVersion": 5, "channel": "sms", "contact": "+14075550123", "stateField": "consentvault_texts",
        "versionField": "consentvault_texts_version", "useBlanket": False, "at": "t"}
 
 
@@ -122,26 +123,38 @@ def test_every_matching_contact_is_updated_not_just_the_first():
     assert [o["id"] for o in out] == ["1", "2", "3"] and {o["action"] for o in out} == {"update"}
 
 
+def grant(**over):
+    return {"state": "permitted", "channelState": "permitted", **over}
+
+
 def test_a_late_grant_never_overwrites_a_newer_stop():
     stopped = hubspot_contact("1", version=9, state="denied")
-    assert decide([stopped], state="permitted", version=2)[0]["action"] == "stale"
-    assert decide([stopped], state="permitted", version=9)[0]["action"] == "stale"
-    assert decide([stopped], state="permitted", version=10)[0]["action"] == "update"
+    assert decide([stopped], **grant(version=2, channelVersion=2))[0]["action"] == "stale"
+    assert decide([stopped], **grant(version=9, channelVersion=9))[0]["action"] == "stale"
+    assert decide([stopped], **grant(version=10, channelVersion=10))[0]["action"] == "update"
 
 
-def test_a_stop_is_always_applied_whatever_version_is_stored_and_keeps_the_highest_version():
+def test_a_denied_channel_is_always_applied_whatever_version_is_stored_and_keeps_the_highest_version():
     newer = hubspot_contact("1", version=9, state="permitted")
-    out = decide([newer], state="denied", version=2)[0]
+    out = decide([newer], state="denied", channelState="denied", version=2, channelVersion=2)[0]
     assert out["action"] == "update"
     assert out["properties"]["consentvault_texts"] == "denied" and out["properties"]["consentvault_texts_version"] == "9"
 
 
-def test_a_stop_for_one_purpose_after_a_grant_for_another_leaves_the_channel_denied():
-    contact = hubspot_contact("1")
-    grant = decide([contact], state="permitted", version=3, purpose="service")[0]
-    contact = {"id": "1", "properties": grant["properties"]}
-    stop = decide([contact], state="denied", version=2, purpose="marketing")[0]
-    assert stop["properties"]["consentvault_texts"] == "denied"
+def test_a_grant_for_one_purpose_never_clears_the_channel_while_another_purpose_is_stopped():
+    # reminders texts at version 5 with the CRM storing 4, marketing texts stopped at version 2, then reminders granted at version 5:
+    # ConsentVault reports the channel as denied (marketing is stopped), so the field stays denied.
+    contact = hubspot_contact("1", version=4, state="permitted")
+    stop = decide([contact], state="denied", channelState="denied", version=2, channelVersion=2, purpose="marketing")[0]
+    contact = {"id": "1", "properties": stop["properties"]}
+    assert contact["properties"]["consentvault_texts"] == "denied"
+    after = decide([contact], state="permitted", channelState="denied", version=5, channelVersion=5, purpose="reminders")[0]
+    assert after["properties"]["consentvault_texts"] == "denied"
+
+
+def test_a_message_without_the_channel_fields_is_refused_not_guessed():
+    b = json.dumps({k: v for k, v in json.loads(body_of()).items() if not k.startswith("channel_")}, sort_keys=True, separators=(",", ":"))
+    assert verify(b)["refuse"]
 
 
 def test_nobody_matched_creates_nothing_and_a_stop_is_the_one_that_alerts():
@@ -155,7 +168,7 @@ def test_nobody_matched_creates_nothing_and_a_stop_is_the_one_that_alerts():
 
 
 def test_a_grant_never_lifts_the_blanket_field():
-    assert decide([hubspot_contact("1")], useBlanket=True, state="permitted")[0]["action"] == "logged"
+    assert decide([hubspot_contact("1")], useBlanket=True, **grant())[0]["action"] == "logged"
 
 
 def test_a_phone_is_searched_on_both_the_phone_and_the_mobile_field():

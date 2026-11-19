@@ -76,8 +76,11 @@ def iso_z(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def build_body(*, org_id, contact: str, contact_fp: str, contact_form: str, change: StateChange) -> bytes:
-    """The exact bytes that are signed and sent (suppression-sync.md): keys sorted, no whitespace."""
+def build_body(*, org_id, contact: str, contact_fp: str, contact_form: str, change: StateChange,
+               channel_state: str | None = None, channel_version: int | None = None) -> bytes:
+    """The exact bytes that are signed and sent (suppression-sync.md): keys sorted, no whitespace. ``channel_state`` (denied while any
+    purpose on the channel is denied) and ``channel_version`` (the sum of that channel's per-purpose versions, which never decreases)
+    are additive: a receiver that keeps one field per channel reads them instead of the per-purpose ``state`` and ``version``."""
     if contact_form not in ("plaintext", "fingerprint"):
         raise OutboxError(f"unknown contact_form {contact_form!r}")
     body = {
@@ -91,6 +94,9 @@ def build_body(*, org_id, contact: str, contact_fp: str, contact_form: str, chan
         "reason": change.reason,
         "at": iso_z(change.at),
     }
+    if channel_state is not None:
+        body["channel_state"] = channel_state
+        body["channel_version"] = int(channel_version)
     return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
@@ -126,6 +132,11 @@ def enqueue_event_pushes(
                               tc.encrypt_field(data_key, org, str(outbox_id), PAYLOAD_COLUMN, b'{"kind":"refresh"}')))
             return EnqueueResult((), ())
         targets = conn.execute("SELECT * FROM consentvault.sync_targets()").fetchall()
+        # read after the advance loop, inside the same transaction, so each channel's state includes every purpose that just moved
+        channel_now = {}
+        for ch in sorted({c.channel for c in changes}):
+            row = conn.execute("SELECT * FROM consentvault.sync_channel_state(%s, %s)", (contact_fp, ch)).fetchone()
+            channel_now[ch] = (row["channel_state"], row["channel_version"])
         queued: list[Queued] = []
         for change in changes:
             for target in targets:
@@ -133,7 +144,8 @@ def enqueue_event_pushes(
                     continue
                 outbox_id = uuid.uuid4()
                 body = build_body(org_id=org, contact=contact, contact_fp=contact_fp,
-                                  contact_form=target["contact_form"], change=change)
+                                  contact_form=target["contact_form"], change=change,
+                                  channel_state=channel_now[change.channel][0], channel_version=channel_now[change.channel][1])
                 payload_ct = tc.encrypt_field(data_key, org, str(outbox_id), PAYLOAD_COLUMN, body)
                 got = conn.execute(
                     "SELECT consentvault.sync_enqueue(%s, %s, %s, %s, %s, %s, %s) AS id",

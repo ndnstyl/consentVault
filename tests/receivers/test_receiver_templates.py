@@ -187,3 +187,13 @@ def test_the_template_has_no_step_that_creates_a_contact():
         if t == "n8n-nodes-base.httpRequest":
             assert prm["method"] == "PATCH" and "/contacts/{{ $json.id }}" in prm["url"], n["name"]
     assert any(n["type"] == "n8n-nodes-base.httpRequest" for n in wf["nodes"])
+
+
+def test_a_grant_matched_on_one_phone_cannot_lift_a_stop_when_the_contact_holds_another_number_but_a_stop_still_applies():
+    two_numbers = {"id": "1", "properties": {"mobilephone": "(407) 555-0123", "phone": "+14075559999"}}
+    held = decide([two_numbers], contactKind="phone", **grant(version=5, channelVersion=5))
+    assert [o["action"] for o in held] == ["held"]
+    stop = decide([two_numbers], contactKind="phone", state="denied", channelState="denied", version=6, channelVersion=6)
+    assert stop[0]["action"] == "update" and stop[0]["properties"]["consentvault_texts"] == "denied"
+    one_number = {"id": "2", "properties": {"mobilephone": "+14075550123"}}
+    assert decide([one_number], contactKind="phone", **grant(version=5, channelVersion=5))[0]["action"] == "update"

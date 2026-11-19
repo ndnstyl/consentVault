@@ -269,3 +269,21 @@ def test_the_channel_state_is_denied_while_any_purpose_on_the_channel_is_denied_
     env.grant(a, B_PHONE, purposes=["servicing"], disclosure_sha256=servicing)
     mine = [_open_payload(env, a, r) for r in env.outbox(a, contact_fp=env.fp(a, B_PHONE))]
     assert mine[-1]["channel_state"] == "permitted"
+
+
+def test_a_stop_recorded_by_the_console_role_for_an_erasure_or_a_restore_still_queues_its_push_with_the_channel_state(env):
+    from consentvault.tenancy.erasure import ERASURE_SOURCE, erasure_stop_marker
+    a = env.t.a
+    env.add_system(a, "crm", contact_form="plaintext")
+    env.grant(a, A_PHONE)
+    env.grant(a, B_PHONE)
+    cases = [(A_PHONE, dict(event_type="suppress", channels=["sms"], purposes=["*"], method="written", origin="consumer",
+                            source=ERASURE_SOURCE, recorded_by=erasure_stop_marker(uuid.uuid4(), 1))),
+             (B_PHONE, dict(event_type="revoke", channels=["sms"], purposes=["marketing"], method="keyword", origin="consumer"))]
+    from consentvault.ledger import record_tenant_event
+    for phone, kw in cases:
+        with env.t.operator() as op, org_transaction(op, env.t.admin_token(a.org_id)):
+            res = record_tenant_event(op, env.t.crypto, contact=phone, **kw).pushes  # the stop commits only if its push was queued
+        assert res.queued, phone
+        body = _open_payload(env, a, env.outbox(a, contact_fp=env.fp(a, phone))[-1])
+        assert body["state"] == "denied" and body["channel_state"] == "denied"

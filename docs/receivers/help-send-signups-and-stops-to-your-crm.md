@@ -37,6 +37,7 @@ ConsentVault delivers each signed message, retries it, and alerts you if your re
 - **Finds the person by email or phone**, after making the email lowercase and the phone number international format (E.164, for example +14075550123). A phone is searched on both the phone and mobile phone fields. **Every** matching contact is updated, not only the first.
 - **Never creates a contact.** If no one matches, nothing in the CRM changes. A **stop** that matches nobody goes to an optional alert step in your own tool (email or Slack, yours to keep, change or remove; it is a convenience, not a ConsentVault duty), titled "Stop for someone not in your CRM; check your dialer and texting tool". A sign-up that matches nobody is only logged, with "not in CRM, add by hand".
 - **Keeps order.** Each message carries `channel_state` (denied while any purpose on that channel is denied) and `channel_version` (the sum of that channel's purpose versions, which never decreases). The template writes `channel_state` to the channel's field and stores the highest `channel_version` applied. A denied channel is always applied, whatever the stored version. A sign-up is applied only when its version is newer, so a late or repeated sign-up can never lift a newer stop, and a sign-up for one purpose can never clear a stop on another purpose of the same channel.
+- **A late stop is always applied and fails safe.** A stop that arrives late is still written to the channel's field, and the channel stays stopped until the next change for that person says otherwise.
 - **Ignores repeats.** The same delivery can arrive twice. The template remembers the `Idempotency-Key` header of each delivery it finished and answers a repeat with success without changing anything.
 - **Refuses Fingerprint only.** If the system was connected that way, the template answers 422 and says what to change, so nothing is silently lost.
 
@@ -44,7 +45,7 @@ ConsentVault delivers each signed message, retries it, and alerts you if your re
 
 A sign-up or stop is for one channel: calls, prerecorded calls, texts or email. Create a separate CRM field for each (for example calls, texts, email), plus a "version" companion field for each, and map each channel to its field in the template. A stop for texts must not block email.
 
-Use **one blanket do-not-contact field only if your CRM has nothing finer**. The template then applies stops only and never lets a sign-up lift it.
+A sign-up matched on a phone is applied only when the contact holds no other phone number than the one matched; a stop always applies. Use **one blanket do-not-contact field only if your CRM has nothing finer**. The template then applies stops only and never lets a sign-up lift it.
 
 ## Check it
 

@@ -17,3 +17,5 @@ END;
 $$;
 REVOKE ALL ON FUNCTION consentvault.sync_channel_state(text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION consentvault.sync_channel_state(text, text) TO consentvault_app;
+-- The console records stops too (erasure, restore re-ingest) through the same hook, as in 0019: it needs the same reader.
+GRANT EXECUTE ON FUNCTION consentvault.sync_channel_state(text, text) TO consentvault_console;

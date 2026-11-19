@@ -53,4 +53,11 @@ PYTHON_REFUSALS: dict[str, str] = {
     "notify_unknown_template": "a notification names a template that does not exist",
     "notify_unexpected_variable": "a notification passes a variable its template does not take",
     "notify_missing_variable": "a notification leaves out a variable its template needs",
+    "notify_stop_contact_looks_like_email": "a stop notice is refused before sending: contact looks like email",
+    "notify_stop_contact_looks_like_phone": "a stop notice is refused before sending: contact looks like phone",
+    "notify_stop_no_stops": "a stop notice is refused before sending: it lists no stops",
+    "notify_stop_missing_variable": "a stop notice is refused before sending: it leaves out a variable",
+    "notify_stop_word_not_plain": "a stop notice is refused before sending: a channel or purpose is not a plain word",
+    "notify_stop_unknown_delivery_status": "a stop notice is refused before sending: a delivery status is unknown",
+    "notify_stop_unexpected_variable": "a stop notice is refused before sending: it passes a variable the template does not take",
 }

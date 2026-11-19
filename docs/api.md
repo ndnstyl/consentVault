@@ -116,3 +116,18 @@ records what was sent and never decides it.
 ---
 
 [Back to the README](../README.md) · [Architecture](../ARCHITECTURE.md)
+
+## Stop notices (portal, admin role)
+
+ConsentVault records a stop and tells the organisation's admins. It does not act on the customer's systems: acting on a stop
+in their own systems is up to them.
+
+| Route | What it does |
+|---|---|
+| `GET /v1/stop-notices` | The stops the signed-in admin has not acknowledged: masked contact, channels, purposes, time, the delivery status of each connected system (`delivered`, `waiting`, `refused`, or `none_connected`). Reading never clears a notice. |
+| `POST /v1/stop-notices:acknowledge` | `{"notice_ids": [...]}`. Clears those notices for the caller only and writes one audit row (`stop_notice.acknowledged`: who, when, which notices). |
+| `GET/POST /v1/stop-notices/recipients`, `DELETE /v1/stop-notices/recipients/{id}` | Extra email recipients beside the admins. Admins always receive notices; there is no switch to turn them off. |
+
+Each stop also queues one email per admin and per added recipient in the stop's own transaction. Stops queued within 60
+seconds of each other leave as one email. Contact points are masked everywhere: the last four digits of a number, or the first
+letter and domain of an email address.

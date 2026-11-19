@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Protocol
 
-TEMPLATE_TYPES = ("invite", "security_alert", "delivery_failure", "billing_notice")
+TEMPLATE_TYPES = ("invite", "security_alert", "delivery_failure", "billing_notice", "stop_notice")
 
 
 @dataclass(frozen=True)

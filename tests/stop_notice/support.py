@@ -1,0 +1,83 @@
+"""A recorded stop, a worker login and a fake mail line for the stop-notice tests. No network: the sender is injected."""
+
+from __future__ import annotations
+
+import uuid
+
+from consentvault import db
+from consentvault.ledger import record_tenant_event
+from consentvault.notify.base import InMemorySendLog
+from consentvault.notify.errors import SendFailed
+from consentvault.notify.service import Notifier
+from consentvault.notify.stop_notice import StopNoticeSender
+from consentvault.tenancy.crypto import TenantCrypto
+from consentvault.tenancy.tokens import mint_org_token, org_transaction
+
+from isolation.harness import FakeKeyProvider, make_login_role
+
+PORTAL = "https://app.example.test"
+_CRYPTO: dict = {}
+
+
+def _crypto(org_id) -> TenantCrypto:
+    if str(org_id) not in _CRYPTO:
+        p = FakeKeyProvider()
+        p.add_org(uuid.UUID(str(org_id)))
+        _CRYPTO[str(org_id)] = TenantCrypto(p)
+    return _CRYPTO[str(org_id)]
+
+
+def record_stop(vault, org_id, contact: str, *, event_type="revoke", channels=("sms",), purposes=("marketing",), then=None):
+    """A stop recorded the way the capture code records one: the ledger writer, inside the entered tenant. ``then`` runs inside
+    the same transaction after the write (a test uses it to abort the transaction)."""
+    token = mint_org_token(vault.key, org_id, ["capture"], credential_id=None)
+    with vault.appconn() as c, org_transaction(c, token):
+        ev = record_tenant_event(c, _crypto(org_id), contact=contact, event_type=event_type, channels=list(channels),
+                                 purposes=list(purposes), method="keyword", origin="consumer")
+        if then is not None:
+            then()
+    return ev
+
+
+def count(vault, sql: str, *params) -> int:
+    with vault.superuser() as su:
+        return su.execute(sql, params).fetchone()["n"]
+
+
+class FakeSender:
+    provider = "fake"
+
+    def __init__(self) -> None:
+        self.sent: list = []
+        self.fail = False
+
+    def send(self, message) -> str:
+        if self.fail:
+            raise SendFailed(self.provider, "ConnectionError", 503)
+        self.sent.append(message)
+        return f"msg-{len(self.sent)}"
+
+
+class Alarms:
+    def __init__(self) -> None:
+        self.raised: list = []
+
+    def raise_alarm(self, name: str, detail: str) -> None:
+        self.raised.append((name, detail))
+
+
+class Mailroom:
+    """The worker login, the notifier over a fake sender, and the in-memory send log."""
+
+    def __init__(self, vault, pg_server) -> None:
+        dbname = vault.super_dsn.rsplit("/", 1)[1]
+        self.dsn = make_login_role(pg_server["port"], dbname, "consentvault_worker")
+        self.sender, self.log, self.alarms = FakeSender(), InMemorySendLog(), Alarms()
+        self.sender_job = StopNoticeSender(Notifier(self.sender, self.log, self.alarms), portal_url=PORTAL)
+
+    def run(self, **kw):
+        with db.connect(self.dsn) as w:
+            return self.sender_job.run_once(w, **kw)
+
+    def to(self, address: str) -> list:
+        return [m for m in self.sender.sent if m.to == address]

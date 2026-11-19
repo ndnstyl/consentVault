@@ -10,6 +10,7 @@ import { Banner, Btn, ErrorBlock, Icon, LinkBtn, PageHead, Skeleton, Sprite, Sta
 import { Dialog } from './Dialog.tsx';
 import { Screen } from '../screens/index.tsx';
 import { Assistant } from './Assistant.tsx';
+import { StopNotices } from './StopNotices.tsx';
 import { assistantEnabled } from '../lib/assist.ts';
 
 function Brand() {
@@ -165,6 +166,7 @@ function Overlays() {
     <>
       {!online && <div className="offline-bar" role="status"><Icon name="i-warn" /> You are offline. What is on screen may be out of date. Changes are not sent until you are back online.</div>}
       {s.signOutError && <div className="offline-bar" role="alert"><Icon name="i-warn" /> {s.signOutError} <Btn size="sm" onClick={s.dismissSignOutError}>Dismiss</Btn></div>}
+      <StopNotices />
       {s.sessionEnding && (
         <Dialog title="Your session ends in 2 minutes" onClose={s.dismissEnding} alert>
           <p>Sessions last 8 hours. Sign in again to keep working. Unsaved form entries are kept on this device.</p>

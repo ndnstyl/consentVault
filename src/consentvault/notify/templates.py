@@ -14,6 +14,7 @@ VARIABLES = {
     "security_alert": ("company", "event", "when", "review_url"),
     "delivery_failure": ("company", "failed_count", "period", "details_url"),
     "billing_notice": ("company", "notice", "amount", "invoice_url"),
+    "stop_notice": ("company", "stops", "review_url"),
 }
 
 _EMAIL = re.compile(r"[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}")
@@ -97,8 +98,91 @@ _TEXT = {
 _FOOT = "ConsentVault, consentvault.ai. This is a service message about your account."
 
 
+# ---- the stop notice: a list of stops, each already masked --------------------------------------------------------------
+STOP_LINE_SINGLE = "ConsentVault has recorded this stop. Acting on it in your own systems is up to you."
+STOP_LINE_MANY = "ConsentVault has recorded these stops. Acting on them in your own systems is up to you."
+DELIVERY_WORDS = {"delivered": "delivered", "waiting": "waiting", "refused": "refused"}
+_MASKED_EMAIL = re.compile(r"[A-Za-z0-9]\*\*\*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_MASKED_PHONE = re.compile(r"[+()\d\s*-]{3,40}")
+_TOKEN = re.compile(r"[a-z0-9_*]{1,100}")
+_DIGIT_RUN = re.compile(r"\d{5,}")
+
+
+def check_masked_contact(value: str) -> str:
+    """The masked contact point, or ``NotifyRefused``: the last four digits of a number, or first letter plus domain of an email.
+    A full phone number or a full email address never reaches a body (the whole point of the notice is that it carries none)."""
+    text = str(value)
+    refuse_control("a stop's contact", text)
+    if "@" in text:
+        if not _MASKED_EMAIL.fullmatch(text):
+            raise NotifyRefused("a stop's contact looks like a full email address; only first letter plus domain may be sent",
+                                code='notify_stop_contact_looks_like_email')
+        return text
+    digits = re.sub(r"\D", "", text)
+    if not _MASKED_PHONE.fullmatch(text) or _DIGIT_RUN.search(re.sub(r"[\s()+-]", "", text)) \
+            or len(digits) > 7 or (digits and "*" not in text):
+        raise NotifyRefused("a stop's contact looks like a full phone number; only the last four digits may be sent",
+                            code='notify_stop_contact_looks_like_phone')
+    return text
+
+
+def _stop_blocks(stops: list) -> list[dict]:
+    if not isinstance(stops, (list, tuple)) or not stops:
+        raise NotifyRefused("template 'stop_notice' needs at least one stop", code='notify_stop_no_stops')
+    out = []
+    for s in stops:
+        check_masked_contact(s["contact"])
+        for word in list(s["channels"]) + list(s["purposes"]):
+            if not _TOKEN.fullmatch(str(word)):
+                raise NotifyRefused("a stop's channel or purpose is not a plain word", code='notify_stop_word_not_plain')
+        delivery = []
+        for name, status in s["delivery"]:
+            check_variable("system", name)
+            if status not in DELIVERY_WORDS:
+                raise NotifyRefused(f"unknown delivery status '{status}'", code='notify_stop_unknown_delivery_status')
+            delivery.append((str(name), DELIVERY_WORDS[status]))
+        check_variable("when", s["when"])
+        out.append({"contact": s["contact"], "channels": ", ".join(s["channels"]), "purposes": ", ".join(s["purposes"]),
+                    "when": str(s["when"]), "delivery": delivery})
+    return out
+
+
+def _render_stop_notice(variables: dict) -> tuple[str, str, str]:
+    allowed = VARIABLES["stop_notice"]
+    extra = sorted(set(variables) - set(allowed))
+    if extra:
+        raise NotifyRefused(f"template 'stop_notice' does not take variable '{extra[0]}'", code='notify_stop_unexpected_variable')
+    missing = [k for k in allowed if k not in variables or variables[k] in (None, "", [])]
+    if missing:
+        raise NotifyRefused(f"template 'stop_notice' is missing variable '{missing[0]}'", code='notify_stop_missing_variable')
+    company, review = str(variables["company"]), str(variables["review_url"])
+    check_variable("company", company)
+    check_variable("review_url", review)
+    blocks = _stop_blocks(variables["stops"])
+    many = len(blocks) > 1
+    subject = refuse_control("the subject", f"{len(blocks)} stops recorded for {company} on ConsentVault" if many
+                             else f"A stop was recorded for {company} on ConsentVault")
+    line = STOP_LINE_MANY if many else STOP_LINE_SINGLE
+    intro = f"{len(blocks)} stops were recorded for {company}." if many else f"A stop was recorded for {company}."
+    text_parts, html_parts = [intro, ""], [f"<p>{escape(intro)}</p>"]
+    for b in blocks:
+        delivery = [f"{n}: {w}" for n, w in b["delivery"]] or ["none connected"]
+        lines = [f"Contact: {b['contact']}", f"Channel: {b['channels']}", f"Purpose: {b['purposes']}", f"When: {b['when']}",
+                 "Your connected systems: " + "; ".join(delivery)]
+        text_parts += lines + [""]
+        html_parts.append("<p>" + "<br>".join(escape(x) for x in lines) + "</p>")
+    text_parts += [f"Review the records: {review}", "", line]
+    html_parts.append(f'<p>Review the records: <a href="{escape(review, quote=True)}">{escape(review)}</a></p><p>{escape(line)}</p>')
+    text = "\n".join(text_parts) + "\n\n" + _FOOT + "\n"
+    html = ('<div style="font-family:Arial,sans-serif;font-size:15px;color:#1a1a1a;max-width:560px">'
+            + "".join(html_parts) + f"<p style=\"color:#666;font-size:12px\">{escape(_FOOT)}</p></div>")
+    return subject, text, html
+
+
 def render(template: str, variables: dict) -> tuple[str, str, str]:
     """Return (subject, text, html). Raises NotifyRefused on any bad template or variable."""
+    if template == "stop_notice":
+        return _render_stop_notice(variables)
     clean = _inv_check(template, variables)
     subject = refuse_control("the subject", _SUBJECT[template].format(**clean))
     text = _TEXT[template].format(**clean) + "\n" + _FOOT + "\n"

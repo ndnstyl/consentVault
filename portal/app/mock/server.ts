@@ -195,6 +195,16 @@ route('GET', '/v1/audit/actions', (c) => {
   return OK(page(names.map((n) => ({ action: n, label: n })), c.query));
 });
 
+// ---- stop notices: none waiting in the mock, so the pop-up never shows in a demo ----
+route('GET', '/v1/stop-notices', (c) => {
+  const x = allow(c, 'admin'); if (x) return x;
+  return OK({ note: 'ConsentVault has recorded this stop. Acting on it in your own systems is up to you.', notices: [] });
+});
+route('POST', '/v1/stop-notices:acknowledge', (c) => {
+  const x = allow(c, 'admin'); if (x) return x;
+  return OK({ acknowledged: 0, remaining: 0 });
+});
+
 // ---- brands, sources, credentials ----
 route('GET', '/v1/brands', (c) => {
   const x = allow(c, 'admin', 'developer'); if (x) return x;

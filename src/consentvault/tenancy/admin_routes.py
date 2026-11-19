@@ -30,7 +30,7 @@ from typing import Any, Callable, Optional
 import psycopg
 
 from .. import records_exports
-from . import admin, admin_policy as pol, invite as invite_mod, records_admin as rec, session as session_mod, setup as setup_mod
+from . import admin, admin_policy as pol, invite as invite_mod, records_admin as rec, session as session_mod, setup as setup_mod, stop_notices
 from .admin_base import (ROLE_ADMIN, ROLE_DEVELOPER, ROLE_VIEWER, ApiError, Ctx, body_dict, iso)
 from .errors import TenantTokenError
 from .tokens import TENANT_TOKEN_HEADER, TokenKey, org_transaction, token_expires_at
@@ -132,6 +132,12 @@ ROUTES: tuple[Route, ...] = (
     _r("GET", "/v1/records/exports/{export_id}", "tenant", (A, V), 200, "records_exports_get"),
     _r("POST", "/v1/records/exports/{export_id}:link", "tenant", (A, V), 200, "records_exports_link"),
     _r("GET", "/v1/records/exports/{export_id}/download", "download", (), 200, "records_exports_download"),
+    # stop notices: the pop-up an admin sees on sign-in, its acknowledgement, and the extra recipients
+    _r("GET", "/v1/stop-notices", "tenant", (A,), 200, "stop_notices_list"),
+    _r("POST", "/v1/stop-notices:acknowledge", "tenant", (A,), 200, "stop_notices_acknowledge"),
+    _r("GET", "/v1/stop-notices/recipients", "tenant", (A,), 200, "stop_notices_recipients_list"),
+    _r("POST", "/v1/stop-notices/recipients", "tenant", (A,), 201, "stop_notices_recipients_add"),
+    _r("DELETE", "/v1/stop-notices/recipients/{recipient_id}", "tenant", (A,), 204, "stop_notices_recipients_remove"),
     # setup progress (setup.md): derived from facts; only a skip of an optional step is stored
     _r("GET", "/v1/setup", "tenant", (A, D, V), 200, "setup_get"),
     _r("POST", "/v1/setup/steps/{step}:skip", "tenant", (A, D), 200, "setup_skip"),
@@ -519,6 +525,21 @@ class AdminApp:
             raise ApiError("export_not_ready", "the file is not ready")
         url, exp = self._links.mint(ctx.conn, job["org_id"], job["export_id"], ctx.actor.id, now)
         return {"download_url": url, "expires_at": iso(exp)}
+
+    def h_stop_notices_list(self, ctx, p, q, b):
+        return stop_notices.list_unacknowledged(ctx)
+
+    def h_stop_notices_acknowledge(self, ctx, p, q, b):
+        return stop_notices.acknowledge(ctx, b)
+
+    def h_stop_notices_recipients_list(self, ctx, p, q, b):
+        return stop_notices.list_recipients(ctx)
+
+    def h_stop_notices_recipients_add(self, ctx, p, q, b):
+        return stop_notices.add_recipient(ctx, b)
+
+    def h_stop_notices_recipients_remove(self, ctx, p, q, b):
+        return stop_notices.remove_recipient(ctx, p["recipient_id"])
 
     def h_setup_get(self, ctx, p, q, b):
         return setup_mod.get_setup(ctx)

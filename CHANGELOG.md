@@ -4,6 +4,16 @@ All notable changes are listed here. Format follows Keep a Changelog; versions f
 
 ## Unreleased
 
+- Stop notices (migration 0114): the moment a stop is recorded, every admin of the organisation is emailed and sees a pop-up on
+  their next sign-in listing every stop they have not acknowledged. The notice is written in the stop's own transaction (one
+  queued email per admin and per added recipient); stops queued within 60 seconds of each other leave as one email; each email
+  and pop-up shows the masked contact (last four digits, or first letter plus domain), channel, purpose, time, the delivery
+  status of each connected system (delivered, waiting, refused, none connected), a link to the records and one line saying
+  ConsentVault has recorded the stop and acting on it in the customer's own systems is theirs. The pop-up cannot be closed except
+  by acknowledging; each acknowledgement is one audit row (who, when, which notices) and clears the notices for that admin only.
+  Notices cannot be switched off; an admin may add recipients (`/v1/stop-notices/recipients`), and admins always receive them.
+  A failed send is a send-log row and an alarm, and the queued email is retried. `StopNoticeSender` (worker role) sends the
+  queue; it is not yet scheduled as a job.
 - One door, review fixes: no replay claim is made at intake (a resend after a failed store is stored and the fold counts a signed
   request once); a passing database or store fault is retried by the projection and never stored as "not derived" (only a refusal
   that repeats on the same bytes is final); the projection catches up across every intake in arrival order and a person's history

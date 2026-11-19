@@ -532,6 +532,11 @@ def record_tenant_event(
             from .records import write_event_records
             write_event_records(conn, crypto, org=org, event_id=rid, contact_fp=fp, contact_kind=kind, contact_norm=norm,
                                 display=display)
+            # stop notice: the organisation's admins are told, by email and a pop-up, in this same transaction (ConsentVault only
+            # notifies); a stop that moved no state (one already standing) queues nothing
+            from .notify.stop_notice import record_stop_notice
+            record_stop_notice(conn, event_id=rid, contact_fp=fp, contact_kind=kind, contact_norm=norm, event_type=event_type,
+                               changes=pushes.changes, stopped_at=received)
             # confirmations.md section 5 (core change R1): one send intent per enabled rule of this grant's source, in the
             # event's own transaction, so the event and its intents commit together or not at all
             # (only a grant is confirmed; a stop, a release or an erasure's stop enqueues nothing, and the operator console role

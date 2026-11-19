@@ -89,6 +89,13 @@ export interface MemberRow {
   kind: 'member' | 'invite'; id: string; display_name: string | null; email: string; role: Role;
   status: 'active' | 'invited'; created_at: string; last_sign_in_at: string | null; expires_at: string | null; invited_by_name: string | null;
 }
+export interface StopNoticeDelivery { system: string | null; status: 'delivered' | 'waiting' | 'refused' | 'none_connected' }
+export interface StopNotice {
+  notice_id: string; contact: string; channels: string[]; purposes: string[]; stopped_at: string; delivery: StopNoticeDelivery[]; records_path: string;
+}
+export interface StopNoticeList { note: string; notices: StopNotice[] }
+export interface StopNoticeAck { acknowledged: number; remaining: number }
+export interface StopNoticeRecipients { admins_always_receive: boolean; admin_count: number; recipients: { recipient_id: string; email_hint: string; created_at: string }[] }
 export interface AuditRow {
   audit_id: string; at: string; action: string;
   actor: { kind: 'member' | 'credential' | 'operator' | 'system'; id: string; display_name: string | null };

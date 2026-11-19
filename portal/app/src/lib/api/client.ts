@@ -223,6 +223,14 @@ export function createClient(opts: ClientOptions = {}) {
       revoke: (share_id: string) => post<unknown>(`/v1/record-links/${enc(share_id)}/revoke`),
       resetMatch: (share_id: string) => post<unknown>(`/v1/record-links/${enc(share_id)}/reset-match`),
     },
+    // stop notices: the pop-up an admin sees on sign-in, cleared only by acknowledging
+    stopNotices: {
+      list: () => get<T.StopNoticeList>('/v1/stop-notices'),
+      acknowledge: (notice_ids: string[]) => post<T.StopNoticeAck>('/v1/stop-notices:acknowledge', { notice_ids }),
+      recipients: () => get<T.StopNoticeRecipients>('/v1/stop-notices/recipients'),
+      addRecipient: (email: string) => post<{ recipient_id: string; email_hint: string }>('/v1/stop-notices/recipients', { email }),
+      removeRecipient: (recipient_id: string) => del(`/v1/stop-notices/recipients/${enc(recipient_id)}`),
+    },
     // setup.md
     setup: {
       get: () => get<T.SetupAnswer>('/v1/setup'),

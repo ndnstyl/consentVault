@@ -1,4 +1,4 @@
-// The eight how-to videos shown on the Tutorials screen. The files are copied into public/tutorials by scripts/copy-tutorials.mjs at build time
+// The nine how-to videos shown on the Tutorials screen. The files are copied into public/tutorials by scripts/copy-tutorials.mjs at build time
 // (see that script for the source folder and the size checks); the summaries are short readings of each video's script. Every string passes the
 // portal copy check (test/tutorials.test.ts).
 import type { RouteId } from './roles.ts';
@@ -41,11 +41,14 @@ export const TUTORIALS: Tutorial[] = [
   { id: 'integrity-jobs', number: 8, title: 'Integrity jobs: seal, anchor and verify', tagline: 'The four checks behind every record.', voiced: false, seconds: 47,
     file: 'T8-integrity-jobs-seal-anchor-and-verify-captions-only.mp4', screen: { id: 'references', href: '/references', label: 'Rule references' },
     summary: 'Four jobs check the record on a schedule, and each can be run by hand. Seal adds an outside timestamp, Anchor records the chain position outside ConsentVault, Verify chain checks each event links to the one before, and Verify seals checks each seal still matches its event.' },
+  { id: 'send-sign-ups-and-stops-to-your-crm', number: 9, title: 'Send sign-ups and stops to your CRM', tagline: 'Connect a system, then let your automation tool update the CRM.', voiced: false, seconds: 91,
+    file: 'T9-send-sign-ups-and-stops-to-your-crm-captions-only.mp4', screen: { id: 'systems', href: '/systems', label: 'Connected systems' },
+    summary: 'Connect a system and paste the web address your automation tool gave you, whether n8n, Zapier or Make. Choose Plain contact point so a CRM can find the person, a choice recorded in the audit log. The template checks each signature and updates an existing contact only. A stop for someone not in your CRM raises an alert.' },
 ];
 
 export const TUTORIALS_COPY = {
   title: 'Tutorials',
-  lede: 'Eight short videos, each about one screen. Captions are on screen in every video.',
+  lede: 'Nine short videos, each about one screen. Captions are on screen in every video.',
   silent: 'Captions only. This video has no voice-over yet.',
   voiced: 'Voice-over and captions.',
   open: (label: string) => `Open ${label}`,

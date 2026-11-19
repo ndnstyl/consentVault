@@ -9,11 +9,18 @@ import { ROUTES, matchRoute } from '../src/lib/routes.ts';
 import { VIEW_ROLES, canView } from '../src/lib/roles.ts';
 import { scanCopy } from '../src/lib/copycheck.ts';
 
-test('eight tutorials, numbered one to eight, each with a distinct video file', () => {
-  assert.equal(TUTORIALS.length, 8);
-  assert.deepEqual(TUTORIALS.map((t) => t.number), [1, 2, 3, 4, 5, 6, 7, 8]);
-  assert.equal(new Set(TUTORIALS.map((t) => t.file)).size, 8);
-  assert.equal(new Set(TUTORIALS.map((t) => t.id)).size, 8);
+test('tutorials are numbered in order from one, each with a distinct video file and id', () => {
+  const n = TUTORIALS.length;
+  assert.deepEqual(TUTORIALS.map((t) => t.number), Array.from({ length: n }, (_, i) => i + 1));
+  assert.equal(new Set(TUTORIALS.map((t) => t.file)).size, n);
+  assert.equal(new Set(TUTORIALS.map((t) => t.id)).size, n);
+});
+
+test('a tutorial covers sending sign-ups and stops to a CRM and points at the Connected systems screen', () => {
+  const t = TUTORIALS.find((x) => x.id === 'send-sign-ups-and-stops-to-your-crm');
+  assert.ok(t);
+  assert.equal(t.screen.id, 'systems');
+  assert.match(t.summary, /Plain contact point/);
 });
 
 test('the Tutorials route exists, is open to every role and is not in the side menu', () => {
@@ -39,11 +46,11 @@ test('the screen renders every video once, with a captions note, a summary, and 
     assert.ok(admin.includes(`src="${tutorialSrc(t)}"`), t.id);
     assert.ok(admin.includes(t.summary), t.id);
   }
-  assert.equal((admin.match(/<video /g) ?? []).length, 8);
-  assert.equal((admin.match(/This video has no voice-over yet/g) ?? []).length, 4);
+  assert.equal((admin.match(/<video /g) ?? []).length, TUTORIALS.length);
+  assert.equal((admin.match(/This video has no voice-over yet/g) ?? []).length, TUTORIALS.filter((t) => !t.voiced).length);
   assert.match(admin, /<a href="\/sources">Open Capture sources<\/a>/);
   const viewer = render('compliance_viewer');
-  assert.equal((viewer.match(/<video /g) ?? []).length, 8);
+  assert.equal((viewer.match(/<video /g) ?? []).length, TUTORIALS.length);
   assert.doesNotMatch(viewer, /Open Capture sources/);
   assert.match(viewer, /<a href="\/records">Open Records<\/a>/);
 });
@@ -54,7 +61,7 @@ test('the compliance viewer is not offered a link to a screen the role cannot op
   assert.equal(canView('admin', t.screen.id), true);
 });
 
-test('the build copies the eight videos and refuses a missing or oversized one', () => {
+test('the build copies every video and refuses a missing or oversized one', () => {
   const s = fs.readFileSync('scripts/copy-tutorials.mjs', 'utf8');
   assert.match(s, /25 \* 1024 \* 1024/);
   assert.match(s, /process\.exit\(3\)/);

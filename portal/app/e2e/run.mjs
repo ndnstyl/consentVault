@@ -298,7 +298,7 @@ async function flows() {
   ok('05-1 the checklist is the seven steps the service reports, one primary button', (await page.locator('ol.steps > li').count()) === 7 && (await page.locator('ol.steps .btn-primary').count()) === 1);
   ok('05-1 primary is the first not-done item', (await page.locator('ol.steps .btn-primary').innerText()) === 'Register your consent wording');
   const stepLis = await page.locator('ol.steps > li').allInnerTexts();
-  ok('05-1 the checklist names the two optional steps and each step status word', /Done/.test(stepLis[0]) && /Done/.test(stepLis[1]) && /To do/.test(stepLis[2]) && /Connect a system that receives stops \(optional\)/.test(stepLis[5]) && /Turn on confirmation messages \(optional\)/.test(stepLis[6]), stepLis.join(' | '));
+  ok('05-1 the checklist names the two optional steps and each step status word', /Done/.test(stepLis[0]) && /Done/.test(stepLis[1]) && /To do/.test(stepLis[2]) && /Connect a system that receives sign-ups and stops \(optional\)/.test(stepLis[5]) && /Turn on confirmation messages \(optional\)/.test(stepLis[6]), stepLis.join(' | '));
   ok('05-1 the checklist is driven by GET /v1/setup and not by five separate list reads', (await log()).filter((r) => r.url === '/v1/setup').length === 1 && (await log()).filter((r) => /^\/v1\/(brands|sources|credentials|disclosures)(\?|$)/.test(r.url)).length === 0);
   await go('/', { role: 'compliance_viewer', setup: 'new', firstEvent: 'none' });
   ok('05-4 a compliance viewer sees the same seven steps read only, with no button', (await page.locator('ol.steps > li').count()) === 7 && (await page.locator('ol.steps .btn-primary').count()) === 0 && (await page.locator('ol.steps a').count()) === 0);

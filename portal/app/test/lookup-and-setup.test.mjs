@@ -116,3 +116,15 @@ test('setup has no policy step', () => {
   assert.equal(ORDER.includes('policy'), false);
   assert.equal(ORDER.length, 7);
 });
+
+test('the connect-a-system step says the system hears sign-ups as well as stops, and explains the contact choice', async () => {
+  const { SYSTEM_STEP_COPY } = await import('../src/screens/setup.tsx');
+  const { scanCopy } = await import('../src/lib/copycheck.ts');
+  const text = Object.values(SYSTEM_STEP_COPY).join(' ');
+  assert.deepEqual(scanCopy(text), []);
+  assert.match(text, /sign-up/i);
+  assert.match(text, /stop/i);
+  assert.match(text, /Plain contact point/);
+  assert.match(text, /Fingerprint only/);
+  assert.doesNotMatch(text, /[–—]/);
+});

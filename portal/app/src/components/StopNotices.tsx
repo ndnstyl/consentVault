@@ -4,7 +4,7 @@ import { fmtDateTime } from '../lib/format.ts';
 import { Btn, LinkBtn } from './ui.tsx';
 import { Dialog } from './Dialog.tsx';
 import { ApiError } from '../lib/api/client.ts';
-import { deliveryLine, initialPopup, popupReducer, stopNote } from '../lib/stop-notices.ts';
+import { channelWords, deliveryLines, initialPopup, popupReducer, stopNote } from '../lib/stop-notices.ts';
 
 /** The stop-notice pop-up: shown on load to an admin while any stop is unacknowledged. There is no close button and Escape does nothing. */
 export function StopNotices() {
@@ -34,12 +34,13 @@ export function StopNotices() {
   };
   const many = st.notices.length > 1;
   return (
-    <Dialog title={many ? `${st.notices.length} stops were recorded` : 'A stop was recorded'} onClose={() => dispatch({ type: 'dismiss_attempt' })} alert wide initialFocus="[data-ack]">
+    <Dialog title={many ? `${st.notices.length} stops were recorded` : 'A stop was recorded'} onClose={() => dispatch({ type: 'dismiss_attempt' })} alert wide dim initialFocus="[data-ack]">
       <ul>
         {st.notices.map((n) => (
           <li key={n.notice_id}>
-            <strong>{n.contact}</strong>{` ${n.channels.join(', ')} (${n.purposes.join(', ')}), ${fmtDateTime(n.stopped_at)}`}<br />
-            <small>{`Your connected systems: ${deliveryLine(n)}`}</small>
+            <strong>{n.contact}</strong>{`: ${channelWords(n.channels)} (${n.purposes.join(', ')}), ${fmtDateTime(n.stopped_at)}`}
+            <div><small>Your connected systems</small></div>
+            <ul>{deliveryLines(n).map((l) => <li key={l}><small>{l}</small></li>)}</ul>
           </li>
         ))}
       </ul>

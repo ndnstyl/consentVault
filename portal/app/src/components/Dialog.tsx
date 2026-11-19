@@ -6,7 +6,7 @@ import { Btn, ErrorBlock, TextArea } from './ui.tsx';
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
 /** Modal dialog: labelled by its heading, focus trapped, Esc closes (unless `confirmEsc`), focus returns to the opener. */
-export function Dialog({ title, children, onClose, alert, wide, confirmEsc, initialFocus }: { title: string; children: React.ReactNode; onClose: () => void; alert?: boolean; wide?: boolean; confirmEsc?: () => void; initialFocus?: string }) {
+export function Dialog({ title, children, onClose, alert, wide, dim, confirmEsc, initialFocus }: { title: string; children: React.ReactNode; onClose: () => void; alert?: boolean; wide?: boolean; dim?: boolean; confirmEsc?: () => void; initialFocus?: string }) {
   const titleId = useId();
   const box = useRef<HTMLDivElement>(null);
   const opener = useRef<Element | null>(null);
@@ -36,7 +36,7 @@ export function Dialog({ title, children, onClose, alert, wide, confirmEsc, init
   }, []);
   const root = typeof document !== 'undefined' ? document.getElementById('dialog-root') : null;
   const node = (
-    <div className="overlay">
+    <div className={dim ? 'overlay dim' : 'overlay'}>
       <div ref={box} className={wide ? 'dialog wide' : 'dialog'} role={alert ? 'alertdialog' : 'dialog'} aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
         <h2 id={titleId}>{title}</h2>
         {children}

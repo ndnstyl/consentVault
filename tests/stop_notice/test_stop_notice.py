@@ -109,7 +109,7 @@ def test_each_connected_system_shows_its_delivery_status(vault, acme, mail):
                    " WHERE org_id = %s AND system_id = (SELECT system_id FROM consentvault.connected_system WHERE name = 'dialer')", (org_id,))
     mail.run()
     text = mail.sender.sent[-1].text
-    assert "crm: delivered" in text and "dialer: refused" in text and "texting: waiting" in text
+    assert "crm (delivered)" in text and "dialer (refused)" in text and "texting (waiting)" in text
 
 
 def test_a_failed_send_is_a_loud_alarm_and_a_log_row_and_is_retried(vault, acme, mail):

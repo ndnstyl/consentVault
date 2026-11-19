@@ -253,6 +253,7 @@ tbody tr:hover td{background:var(--color-surface-sunken)}
 .fontroot{--font-display:var(--font-montserrat),'Montserrat',system-ui,sans-serif;--font-body:var(--font-geist),'Geist',system-ui,-apple-system,'Segoe UI',sans-serif;--font-serif:var(--font-cormorant),'Cormorant Garamond',Georgia,serif;min-height:100vh}
 .fontroot fieldset.contents{display:contents}
 .overlay{position:fixed;inset:0;z-index:100;margin:0;border-radius:0;overflow:auto;padding:var(--space-4);display:grid;place-items:center}
+.overlay.dim{background:rgba(16,24,32,.6)}
 .sr-live{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .menu-btn{display:none}
 @media(max-width:759px){.menu-btn{display:inline-flex}.side{display:none}.side.open{display:block;position:fixed;inset:var(--top-h) 0 0 0;max-height:none;z-index:60;border-right:0}}

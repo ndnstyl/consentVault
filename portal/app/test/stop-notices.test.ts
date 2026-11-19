@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initialPopup, popupReducer, deliveryLine, stopNote, STOP_NOTE } from '../src/lib/stop-notices.ts';
+import { initialPopup, popupReducer, deliveryLines, channelWords, stopNote, STOP_NOTE } from '../src/lib/stop-notices.ts';
 import type { StopNotice } from '../src/lib/api/types.ts';
 
 const n = (id: string, delivery: StopNotice['delivery'] = []): StopNotice => ({
@@ -31,6 +31,7 @@ test('a notice only notifies: the words say acting is the customer\'s, and each 
   assert.equal(stopNote(1), STOP_NOTE);
   assert.match(stopNote(3), /up to you/);
   assert.doesNotMatch(stopNote(1) + stopNote(2), /we (have )?(blocked|removed|stopped|updated)/i);
-  assert.equal(deliveryLine(n('a', [{ system: 'CRM', status: 'delivered' }, { system: 'Dialer', status: 'refused' }])), 'CRM: delivered; Dialer: refused');
-  assert.equal(deliveryLine(n('a', [{ system: null, status: 'none_connected' }])), 'none connected');
+  assert.deepEqual(deliveryLines(n('a', [{ system: 'CRM', status: 'delivered' }, { system: 'Dialer', status: 'refused' }])), ['CRM (delivered)', 'Dialer (refused)']);
+  assert.deepEqual(deliveryLines(n('a', [{ system: null, status: 'none_connected' }])), ['none connected']);
+  assert.equal(channelWords(['sms', 'voice', 'email']), 'Text message, Phone call, Email');
 });

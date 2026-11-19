@@ -101,6 +101,7 @@ _FOOT = "ConsentVault, consentvault.ai. This is a service message about your acc
 # ---- the stop notice: a list of stops, each already masked --------------------------------------------------------------
 STOP_LINE_SINGLE = "ConsentVault has recorded this stop. Acting on it in your own systems is up to you."
 STOP_LINE_MANY = "ConsentVault has recorded these stops. Acting on them in your own systems is up to you."
+CHANNEL_WORDS = {"sms": "Text message", "voice": "Phone call", "artificial_voice": "Automated phone call", "email": "Email"}
 DELIVERY_WORDS = {"delivered": "delivered", "waiting": "waiting", "refused": "refused"}
 _MASKED_EMAIL = re.compile(r"[A-Za-z0-9]\*\*\*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _MASKED_PHONE = re.compile(r"[+()\d\s*-]{3,40}")
@@ -142,7 +143,7 @@ def _stop_blocks(stops: list) -> list[dict]:
                 raise NotifyRefused(f"unknown delivery status '{status}'", code='notify_stop_unknown_delivery_status')
             delivery.append((str(name), DELIVERY_WORDS[status]))
         check_variable("when", s["when"])
-        out.append({"contact": s["contact"], "channels": ", ".join(s["channels"]), "purposes": ", ".join(s["purposes"]),
+        out.append({"contact": s["contact"], "channels": ", ".join(CHANNEL_WORDS.get(c, c) for c in s["channels"]), "purposes": ", ".join(s["purposes"]),
                     "when": str(s["when"]), "delivery": delivery})
     return out
 
@@ -166,11 +167,11 @@ def _render_stop_notice(variables: dict) -> tuple[str, str, str]:
     intro = f"{len(blocks)} stops were recorded for {company}." if many else f"A stop was recorded for {company}."
     text_parts, html_parts = [intro, ""], [f"<p>{escape(intro)}</p>"]
     for b in blocks:
-        delivery = [f"{n}: {w}" for n, w in b["delivery"]] or ["none connected"]
+        delivery = [f"  {n} ({w})" for n, w in b["delivery"]] or ["  none connected"]
         lines = [f"Contact: {b['contact']}", f"Channel: {b['channels']}", f"Purpose: {b['purposes']}", f"When: {b['when']}",
-                 "Your connected systems: " + "; ".join(delivery)]
+                 "Your connected systems"] + delivery
         text_parts += lines + [""]
-        html_parts.append("<p>" + "<br>".join(escape(x) for x in lines) + "</p>")
+        html_parts.append("<p>" + "<br>".join(escape(x).replace("  ", "&nbsp;&nbsp;", 1) if x.startswith("  ") else escape(x) for x in lines) + "</p>")
     text_parts += [f"Review the records: {review}", "", line]
     html_parts.append(f'<p>Review the records: <a href="{escape(review, quote=True)}">{escape(review)}</a></p><p>{escape(line)}</p>')
     text = "\n".join(text_parts) + "\n\n" + _FOOT + "\n"

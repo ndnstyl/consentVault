@@ -37,9 +37,13 @@ export function popupReducer(s: PopupState, a: PopupAction): PopupState {
 
 export const DELIVERY_WORD: Record<string, string> = { delivered: 'delivered', waiting: 'waiting', refused: 'refused', none_connected: 'none connected' };
 
-export function deliveryLine(n: StopNotice): string {
-  return n.delivery.map((d) => (d.system ? `${d.system}: ${DELIVERY_WORD[d.status]}` : DELIVERY_WORD[d.status])).join('; ');
+/** One line per connected system, with its status; a stop with none connected says so in one line. */
+export function deliveryLines(n: StopNotice): string[] {
+  return n.delivery.map((d) => (d.system ? `${d.system} (${DELIVERY_WORD[d.status]})` : DELIVERY_WORD[d.status]));
 }
+
+export const CHANNEL_WORD: Record<string, string> = { sms: 'Text message', voice: 'Phone call', artificial_voice: 'Automated phone call', email: 'Email' };
+export const channelWords = (channels: string[]) => channels.map((c) => CHANNEL_WORD[c] ?? c).join(', ');
 
 export const STOP_NOTE = 'ConsentVault has recorded this stop. Acting on it in your own systems is up to you.';
 export const STOP_NOTE_MANY = 'ConsentVault has recorded these stops. Acting on them in your own systems is up to you.';

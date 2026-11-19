@@ -43,6 +43,7 @@ JOBS: dict[str, str | None] = {
     "projection-rebuild": "projection-rebuild",
     # the confirmation service's periodic passes (cmd_confirmations.py)
     "confirmations-send": "confirmations-send",
+    "stop-notices-send": "stop-notices-send",
     "confirmations-alarms": "confirmations-alarms",
     "confirmations-link-hosts": "confirmations-link-hosts",
     "confirmations-purge": "confirmations-purge",
@@ -54,7 +55,7 @@ EXIT_HEARTBEAT = cli.EXIT_ERROR
 # run on demand and is not scheduled, so it has none).
 HEARTBEAT_JOBS = ("seal", "anchor", "verify-chain", "verify-seals", "erasure-resume", "usage-daily", "usage-retry",
                   "replay-sweep", "erasure-commit-sweep", "records-exports", "key-lifecycle", "isolation-self-test",
-                  "restore-drill", "twenty-reconcile", "twenty-workflow-reminders", "projection-rebuild", "confirmations-send",
+                  "restore-drill", "twenty-reconcile", "twenty-workflow-reminders", "projection-rebuild", "confirmations-send", "stop-notices-send",
                   "confirmations-alarms", "confirmations-link-hosts", "confirmations-purge")
 
 

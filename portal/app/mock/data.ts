@@ -24,11 +24,12 @@ export interface Scenario {
   inviteMode: 'ok' | 'expired' | 'used' | 'withdrawn' | 'wrong_account';
   records: 'full' | 'none';
   confirmations: 'full' | 'empty' | 'texts_off' | 'awaiting' | 'link_unset' | 'failing';
+  stopNotices: 'none' | 'waiting';
 }
 
 export const DEFAULT_SCENARIO: Scenario = {
   role: 'admin', orgStatus: 'active', orgs: 'one', preselected: true, signedOut: false, noSecondFactor: false, setup: 'full',
-  firstEvent: 'sealed', empty: [], nulls: [], alarms: [], sso: 'none', fail: {}, delayMs: 0, offboarding: false, exportMode: 'normal', inviteMode: 'ok', records: 'full', confirmations: 'full',
+  firstEvent: 'sealed', empty: [], nulls: [], alarms: [], sso: 'none', fail: {}, delayMs: 0, offboarding: false, exportMode: 'normal', inviteMode: 'ok', records: 'full', confirmations: 'full', stopNotices: 'none',
 };
 
 const iso = (d: string) => new Date(d).toISOString();

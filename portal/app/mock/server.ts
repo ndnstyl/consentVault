@@ -195,14 +195,27 @@ route('GET', '/v1/audit/actions', (c) => {
   return OK(page(names.map((n) => ({ action: n, label: n })), c.query));
 });
 
-// ---- stop notices: none waiting in the mock, so the pop-up never shows in a demo ----
+// ---- stop notices: none waiting unless the scenario says so, so the pop-up never covers the other screens ----
+const STOP_NOTE = 'ConsentVault has recorded this stop. Acting on it in your own systems is up to you.';
+function stopNotices(st: Store): T.StopNotice[] {
+  if (!st.ext.stopNotices) {
+    st.ext.stopNotices = st.scenario.stopNotices === 'waiting' ? [
+      { notice_id: 'sn_1', contact: '(555) ***-0142', channels: ['sms'], purposes: ['marketing'], stopped_at: new Date().toISOString(), records_path: '/records?has_stop=true',
+        delivery: [{ system: 'CRM', status: 'delivered' }, { system: 'Dialer', status: 'waiting' }] },
+    ] : [];
+  }
+  return st.ext.stopNotices;
+}
 route('GET', '/v1/stop-notices', (c) => {
   const x = allow(c, 'admin'); if (x) return x;
-  return OK({ note: 'ConsentVault has recorded this stop. Acting on it in your own systems is up to you.', notices: [] });
+  return OK({ note: STOP_NOTE, notices: stopNotices(c.st) });
 });
-route('POST', '/v1/stop-notices:acknowledge', (c) => {
+route('POST', '/v1/stop-notices\\:acknowledge', (c) => {
   const x = allow(c, 'admin'); if (x) return x;
-  return OK({ acknowledged: 0, remaining: 0 });
+  const ids: string[] = (c.body as any)?.notice_ids ?? [];
+  const before = stopNotices(c.st);
+  c.st.ext.stopNotices = before.filter((n) => !ids.includes(n.notice_id));
+  return OK({ acknowledged: before.length - c.st.ext.stopNotices.length, remaining: c.st.ext.stopNotices.length });
 });
 
 // ---- brands, sources, credentials ----

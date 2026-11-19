@@ -125,6 +125,7 @@
         "vault",
         "job:alarm-relay",
         "job:twenty-workflow-reminders",
+        "job:stop-notices-send",
         "job:projection-rebuild"
       ],
       "read_by": "product",
@@ -845,6 +846,7 @@
       "used_by": [
         "vault",
         "job:twenty-workflow-reminders",
+        "job:stop-notices-send",
         "job:projection-rebuild"
       ],
       "read_by": "product",
@@ -877,6 +879,7 @@
       "used_by": [
         "vault",
         "job:twenty-workflow-reminders",
+        "job:stop-notices-send",
         "job:projection-rebuild"
       ],
       "read_by": "product",
@@ -1105,6 +1108,7 @@
       "used_by": [
         "vault",
         "job:twenty-workflow-reminders",
+        "job:stop-notices-send",
         "job:projection-rebuild"
       ],
       "read_by": "product",

@@ -11,7 +11,7 @@ from consentvault import cli, jobs
 
 SCHEDULED = ("seal", "anchor", "verify-chain", "verify-seals", "isolation-self-test", "key-lifecycle", "erasure-resume",
              "replay-sweep", "erasure-commit-sweep", "alarm-relay", "usage-daily", "usage-retry", "usage-acknowledge", "restore-drill", "records-exports", "records-backfill",
-             "twenty-reconcile", "twenty-workflow-reminders", "projection-rebuild", "confirmations-send", "confirmations-alarms", "confirmations-link-hosts", "confirmations-purge")
+             "twenty-reconcile", "twenty-workflow-reminders", "projection-rebuild", "confirmations-send", "stop-notices-send", "confirmations-alarms", "confirmations-link-hosts", "confirmations-purge")
 
 
 def test_every_scheduled_job_name_is_known():
@@ -31,6 +31,7 @@ def test_every_scheduled_job_name_is_known():
                                          ("twenty-workflow-reminders", "twenty-workflow-reminders"),
                                          ("projection-rebuild", "projection-rebuild"),
                                          ("confirmations-send", "confirmations-send"),
+                                         ("stop-notices-send", "stop-notices-send"),
                                          ("confirmations-alarms", "confirmations-alarms"),
                                          ("confirmations-link-hosts", "confirmations-link-hosts"),
                                          ("confirmations-purge", "confirmations-purge")])

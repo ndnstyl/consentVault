@@ -81,3 +81,13 @@ class Mailroom:
 
     def to(self, address: str) -> list:
         return [m for m in self.sender.sent if m.to == address]
+
+
+class JobNotifier:
+    """What ``CONSENTVAULT_NOTIFIER`` names in the job test: the notifier over the shared fake sender, no network."""
+
+    shared: "Mailroom | None" = None
+
+    @classmethod
+    def from_environment(cls, env):
+        return Notifier(cls.shared.sender, cls.shared.log, cls.shared.alarms)

@@ -57,6 +57,8 @@ CREATE TABLE consentvault.stop_notice_mail (
     status       text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sending', 'sent', 'failed', 'unknown')),
     attempts     integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     claimed_until timestamptz,
+    -- why a row was given up on without a send (no_address: its admin or address is gone; recipient_removed)
+    failure_reason text CHECK (failure_reason IN ('no_address', 'recipient_removed')),
     -- the masked contact as text, for the send job, which holds no key: blanked when the email is sent and by erase_contact
     mask_text    text,
     sent_at      timestamptz,
@@ -135,11 +137,46 @@ REVOKE ALL ON FUNCTION consentvault.stop_notice_record(uuid, uuid, text, bytea, 
 GRANT EXECUTE ON FUNCTION consentvault.stop_notice_record(uuid, uuid, text, bytea, text, text[], text[], jsonb, timestamptz) TO consentvault_app, consentvault_console;
 -- the operator console writes an erasure's stop through the same ledger writer, so it calls the same hook
 
--- Worker side (scope worker:sync). A claim: the queued emails whose recipient's oldest waiting email is at least p_window seconds
--- old (so a burst of stops merges into one email), taken with FOR UPDATE SKIP LOCKED and leased for p_lease seconds, so two
--- overlapping runs never take the same row. Each claim counts as an attempt. A row whose lease ran out with no answer becomes
--- 'unknown' (it may have been sent) and is never sent again; stop_notice_unknown counts them so the caller can alarm.
-CREATE FUNCTION consentvault.stop_notice_claim(p_limit integer, p_max_attempts integer, p_window_seconds integer, p_lease_seconds integer)
+-- Worker side (scope worker:sync).
+-- The sweep, run before each pass: (1) a claimed row whose lease ran out with no answer becomes 'unknown' (it may have been sent, so
+-- it is never sent again) and its mask text is blanked; (2) a queued row whose admin was deleted or whose address was cleared can
+-- never be sent: it is marked failed with a reason and its attempts are spent, and a row of a removed recipient is closed the same
+-- way. Answers how many rows THIS call moved, so the caller alarms once, not on every later pass.
+CREATE FUNCTION consentvault.stop_notice_sweep(p_max_attempts integer) RETURNS TABLE (lost integer, orphaned integer)
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+#variable_conflict use_column
+DECLARE
+    org uuid := consentvault.sync_org(ARRAY['worker:sync']);
+    a   integer;
+    b   integer;
+BEGIN
+    UPDATE consentvault.stop_notice_mail x SET status = 'unknown', claimed_until = NULL, mask_text = NULL
+     WHERE x.org_id = org AND x.status = 'sending' AND x.claimed_until < clock_timestamp();
+    GET DIAGNOSTICS a = ROW_COUNT;
+    UPDATE consentvault.stop_notice_mail x
+       SET status = 'failed', attempts = p_max_attempts, mask_text = NULL,
+           failure_reason = CASE WHEN x.recipient_id IS NOT NULL THEN 'recipient_removed' ELSE 'no_address' END
+     WHERE x.org_id = org AND x.status IN ('pending', 'failed') AND x.attempts < p_max_attempts
+       AND ((x.member_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM consentvault.member m WHERE m.org_id = x.org_id
+                                                      AND m.member_id = x.member_id AND m.email_norm IS NOT NULL))
+         OR (x.recipient_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM consentvault.stop_notice_recipient r WHERE r.org_id = x.org_id
+                                                         AND r.recipient_id = x.recipient_id AND r.removed_at IS NULL)));
+    GET DIAGNOSTICS b = ROW_COUNT;
+    lost := a;
+    orphaned := b;
+    RETURN NEXT;
+END;
+$$;
+REVOKE ALL ON FUNCTION consentvault.stop_notice_sweep(integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION consentvault.stop_notice_sweep(integer) TO consentvault_worker;
+
+-- A claim: ONE recipient's due emails (the recipient whose oldest waiting email is oldest, once that is at least p_window seconds
+-- old, so a burst of stops merges into one email), so one claim is one send and the lease always covers it. Rows are taken with FOR
+-- UPDATE SKIP LOCKED and the picked filter repeats the status and attempts test, so a row another run committed between this
+-- statement's snapshot and its lock is re-checked and refused. Each claim counts as an attempt. p_skip names rows this run has
+-- already handled, so a failed row waits for the next run.
+CREATE FUNCTION consentvault.stop_notice_claim(p_limit integer, p_max_attempts integer, p_window_seconds integer,
+                                               p_lease_seconds integer, p_skip uuid[])
     RETURNS TABLE (mail_id uuid, notice_id uuid, address text, queued_at timestamptz, attempts integer, org_name text,
                    mask_text text, channels text[], purposes text[], stopped_at timestamptz, record_id uuid)
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -147,8 +184,6 @@ CREATE FUNCTION consentvault.stop_notice_claim(p_limit integer, p_max_attempts i
 DECLARE
     org uuid := consentvault.sync_org(ARRAY['worker:sync']);
 BEGIN
-    UPDATE consentvault.stop_notice_mail x SET status = 'unknown', claimed_until = NULL
-     WHERE x.org_id = org AND x.status = 'sending' AND x.claimed_until < clock_timestamp();
     RETURN QUERY
     WITH waiting AS (
         SELECT q.mail_id AS wid, coalesce(m.email_norm, r.email_norm) AS addr,
@@ -157,15 +192,18 @@ BEGIN
           LEFT JOIN consentvault.member m ON m.org_id = q.org_id AND m.member_id = q.member_id
           LEFT JOIN consentvault.stop_notice_recipient r ON r.org_id = q.org_id AND r.recipient_id = q.recipient_id
          WHERE q.org_id = org AND q.status IN ('pending', 'failed') AND q.attempts < p_max_attempts
-           AND coalesce(m.email_norm, r.email_norm) IS NOT NULL),
+           AND coalesce(m.email_norm, r.email_norm) IS NOT NULL
+           AND q.mail_id <> ALL (coalesce(p_skip, ARRAY[]::uuid[]))),
     due AS (
-        SELECT w.wid FROM waiting w
+        SELECT w.wid, w.addr, w.oldest FROM waiting w
          WHERE clock_timestamp() - w.oldest >= make_interval(secs => p_window_seconds)),
+    target AS (SELECT d.addr FROM due d ORDER BY d.oldest, d.addr LIMIT 1),
     picked AS (
-        SELECT q.mail_id AS pid FROM consentvault.stop_notice_mail q
-         WHERE q.org_id = org AND q.mail_id IN (SELECT wid FROM due)
+        SELECT q.mail_id AS pid FROM consentvault.stop_notice_mail q JOIN due d ON d.wid = q.mail_id
+         WHERE q.org_id = org AND d.addr = (SELECT t.addr FROM target t)
+           AND q.status IN ('pending', 'failed') AND q.attempts < p_max_attempts
          ORDER BY q.queued_at, q.mail_id LIMIT p_limit
-         FOR UPDATE SKIP LOCKED),
+         FOR UPDATE OF q SKIP LOCKED),
     took AS (
         UPDATE consentvault.stop_notice_mail q
            SET status = 'sending', attempts = q.attempts + 1,
@@ -182,37 +220,45 @@ BEGIN
      ORDER BY t.queued_at, t.mail_id;
 END;
 $$;
-REVOKE ALL ON FUNCTION consentvault.stop_notice_claim(integer, integer, integer, integer) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION consentvault.stop_notice_claim(integer, integer, integer, integer) TO consentvault_worker;
+REVOKE ALL ON FUNCTION consentvault.stop_notice_claim(integer, integer, integer, integer, uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION consentvault.stop_notice_claim(integer, integer, integer, integer, uuid[]) TO consentvault_worker;
 
--- How many emails of the organisation are in 'unknown' (claimed, lease ran out, outcome never recorded).
-CREATE FUNCTION consentvault.stop_notice_unknown() RETURNS integer
-    LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
-DECLARE
-    org uuid := consentvault.sync_org(ARRAY['worker:sync']);
-BEGIN
-    RETURN (SELECT count(*) FROM consentvault.stop_notice_mail q WHERE q.org_id = org AND q.status = 'unknown');
-END;
-$$;
-REVOKE ALL ON FUNCTION consentvault.stop_notice_unknown() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION consentvault.stop_notice_unknown() TO consentvault_worker;
-
-CREATE FUNCTION consentvault.stop_notice_mail_done(p_mail_ids uuid[], p_sent boolean) RETURNS integer
+-- Rows claimed and never attempted (an earlier send in the same pass failed hard) go back to the queue with their attempt returned.
+CREATE FUNCTION consentvault.stop_notice_mail_release(p_mail_ids uuid[]) RETURNS integer
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
     org uuid := consentvault.sync_org(ARRAY['worker:sync']);
     n   integer;
 BEGIN
     UPDATE consentvault.stop_notice_mail q
-       SET status = CASE WHEN p_sent THEN 'sent' ELSE 'failed' END, claimed_until = NULL, mask_text = CASE WHEN p_sent THEN NULL ELSE q.mask_text END,
+       SET status = 'pending', claimed_until = NULL, attempts = greatest(q.attempts - 1, 0)
+     WHERE q.org_id = org AND q.mail_id = ANY (p_mail_ids) AND q.status = 'sending';
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN n;
+END;
+$$;
+REVOKE ALL ON FUNCTION consentvault.stop_notice_mail_release(uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION consentvault.stop_notice_mail_release(uuid[]) TO consentvault_worker;
+
+-- The outcome of a send, for rows this run still holds ('sending'). Answers how many it moved: fewer than asked means a lease ran out
+-- under the run. The text of a sent row, and of a failed row whose attempts are spent, is blanked.
+CREATE FUNCTION consentvault.stop_notice_mail_done(p_mail_ids uuid[], p_sent boolean, p_max_attempts integer) RETURNS integer
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+    org uuid := consentvault.sync_org(ARRAY['worker:sync']);
+    n   integer;
+BEGIN
+    UPDATE consentvault.stop_notice_mail q
+       SET status = CASE WHEN p_sent THEN 'sent' ELSE 'failed' END, claimed_until = NULL,
+           mask_text = CASE WHEN p_sent OR q.attempts >= p_max_attempts THEN NULL ELSE q.mask_text END,
            sent_at = CASE WHEN p_sent THEN clock_timestamp() END
      WHERE q.org_id = org AND q.mail_id = ANY (p_mail_ids) AND q.status = 'sending';
     GET DIAGNOSTICS n = ROW_COUNT;
     RETURN n;
 END;
 $$;
-REVOKE ALL ON FUNCTION consentvault.stop_notice_mail_done(uuid[], boolean) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION consentvault.stop_notice_mail_done(uuid[], boolean) TO consentvault_worker;
+REVOKE ALL ON FUNCTION consentvault.stop_notice_mail_done(uuid[], boolean, integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION consentvault.stop_notice_mail_done(uuid[], boolean, integer) TO consentvault_worker;
 
 -- The delivery status of every connected system for the stops named, read from the sync outbox as it stands now: delivered
 -- (acknowledged), waiting (queued, in flight or retrying), refused (dead). No rows for a stop when no system is connected.

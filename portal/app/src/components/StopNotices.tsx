@@ -29,12 +29,12 @@ export function StopNotices() {
   const ack = async () => {
     dispatch({ type: 'acknowledging' });
     const ids = st.notices.map((n) => n.notice_id);
-    try {
-      const done = await s.api.stopNotices.acknowledge(ids);
-      if (done.remaining > 0) { const next = await s.api.stopNotices.list(); dispatch({ type: 'loaded', notices: next.notices, remaining: next.remaining }); }
-      else dispatch({ type: 'acknowledged', ids });
-    }
-    catch (e) { dispatch({ type: 'acknowledge_failed', error: e instanceof ApiError ? e.detail || e.code : 'The acknowledgement was not saved.' }); }
+    let done;
+    try { done = await s.api.stopNotices.acknowledge(ids); }
+    catch (e) { dispatch({ type: 'acknowledge_failed', error: e instanceof ApiError ? e.detail || e.code : 'The acknowledgement was not saved.' }); return; }
+    if (done.remaining <= 0) { dispatch({ type: 'acknowledged', ids }); return; }
+    try { const next = await s.api.stopNotices.list(); dispatch({ type: 'loaded', notices: next.notices, remaining: next.remaining }); }
+    catch (e) { dispatch({ type: 'load_failed', error: `Your acknowledgement was saved, but the next stops could not be loaded (${e instanceof ApiError ? e.detail || e.code : 'try again'}).` }); }
   };
   const many = st.notices.length > 1;
   return (

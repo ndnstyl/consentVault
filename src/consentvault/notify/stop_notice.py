@@ -22,6 +22,7 @@ Nothing in an email, a log line or an error carries a full phone number or email
 
 from __future__ import annotations
 
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -53,6 +54,10 @@ ALARM_NO_RECIPIENTS = "stop_notice.no_recipients"
 ALARM_STOP_NOTICE_REFUSED = "notify.stop_notice_refused"
 ALARM_STOP_NOTICE_GAVE_UP = "notify.stop_notice_gave_up"
 ALARM_STOP_NOTICE_UNKNOWN = "notify.stop_notice_unknown"
+ALARM_STOP_NOTICE_ORPHANED = "notify.stop_notice_orphaned"
+ALARM_STOP_NOTICE_LEASE_LOST = "notify.stop_notice_lease_lost"
+ALARM_MASK_NOT_SEALED = "stop_notice.mask_not_sealed"
+RUN_SECONDS = 240
 
 
 class StopNoticeError(NotifyError):
@@ -116,6 +121,7 @@ def record_stop_notice(conn: psycopg.Connection, crypto, *, org, event_id, conta
         mask_ct = tc.encrypt_field(crypto.display_key(org), org, str(notice_id), MASK_COLUMN, mask_text)
     except (KeyProviderError, StopNoticeError) as exc:
         log.error("a stop notice is recorded without its mask", error=type(exc).__name__, event_id=str(event_id))
+        _raise_alarm(conn, ALARM_MASK_NOT_SEALED, type(exc).__name__, event_id)
     payload = [{"channel": c.channel, "purpose": c.purpose, "version": c.version} for c in denied]
     try:
         with conn.transaction():  # a savepoint: a failure here undoes the notice only
@@ -201,29 +207,63 @@ class StopNoticeSender:
 
     def _run_org(self, conn, org_id, token: str, report: StopNoticeReport, org_transaction: Callable) -> None:
         with org_transaction(conn, token):
-            raw = conn.execute("SELECT * FROM consentvault.stop_notice_claim(%s, %s, %s, %s)",
-                               (FETCH_LIMIT, self._max_attempts, int(self._window.total_seconds()), self._lease)).fetchall()
-            unknown = conn.execute("SELECT consentvault.stop_notice_unknown() AS n").fetchone()["n"]  # after the claim, which marks them
-            rows = [DueMail(contact=r["mask_text"] or UNSHOWN, **{k: v for k, v in r.items() if k != "mask_text"}) for r in raw]
-            ids = sorted({r.notice_id for r in rows}, key=str)
-            delivery: dict[uuid.UUID, list[tuple[str, str]]] = {}
-            if ids:
-                for d in conn.execute("SELECT * FROM consentvault.stop_notice_delivery(%s)", (ids,)).fetchall():
-                    delivery.setdefault(d["notice_id"], []).append((d["system_name"], d["status"]))
-        if unknown:
-            self._notifier.alarm.raise_alarm(ALARM_STOP_NOTICE_UNKNOWN, f"{unknown} stop notice email(s) were claimed and never answered")
+            swept = conn.execute("SELECT * FROM consentvault.stop_notice_sweep(%s)", (self._max_attempts,)).fetchone()
+        if swept["lost"]:
+            self._notifier.alarm.raise_alarm(ALARM_STOP_NOTICE_UNKNOWN, f"{swept['lost']} stop notice email(s) were claimed and never answered")
             report.failed += 1
-            report.errors.append(f"organisation {org_id}: {unknown} email(s) with an unknown outcome")
-        for group in group_by_recipient(rows):
-            ok, bad = self._send_group(group, delivery, report)
+            report.errors.append(f"organisation {org_id}: {swept['lost']} email(s) with an unknown outcome")
+        if swept["orphaned"]:
+            self._notifier.alarm.raise_alarm(ALARM_STOP_NOTICE_ORPHANED, f"{swept['orphaned']} stop notice email(s) have no address to go to")
+            report.failed += 1
+            report.errors.append(f"organisation {org_id}: {swept['orphaned']} email(s) with no address")
+        handled: list[uuid.UUID] = []
+        deadline = time.monotonic() + RUN_SECONDS
+        while time.monotonic() < deadline:  # one recipient per claim: one send, always inside its lease
             with org_transaction(conn, token):
-                if ok:
-                    conn.execute("SELECT consentvault.stop_notice_mail_done(%s, true)", ([r.mail_id for r in ok],))
-                if bad:
-                    conn.execute("SELECT consentvault.stop_notice_mail_done(%s, false)", ([r.mail_id for r in bad],))
-            for r in bad:
-                if r.attempts >= self._max_attempts:
-                    self._notifier.record_failure("stop_notice", r.address, "attempts_exhausted", ALARM_STOP_NOTICE_GAVE_UP)
+                raw = conn.execute("SELECT * FROM consentvault.stop_notice_claim(%s, %s, %s, %s, %s)",
+                                   (FETCH_LIMIT, self._max_attempts, int(self._window.total_seconds()), self._lease, handled)).fetchall()
+                if not raw:
+                    return
+                rows = [DueMail(contact=r["mask_text"] or UNSHOWN, **{k: v for k, v in r.items() if k != "mask_text"}) for r in raw]
+                delivery: dict[uuid.UUID, list[tuple[str, str]]] = {}
+                for d in conn.execute("SELECT * FROM consentvault.stop_notice_delivery(%s)",
+                                      (sorted({r.notice_id for r in rows}, key=str),)).fetchall():
+                    delivery.setdefault(d["notice_id"], []).append((d["system_name"], d["status"]))
+            handled += [r.mail_id for r in rows]
+            self._deliver(conn, token, rows, delivery, report, org_transaction)
+        log.warning("the stop-notice pass reached its time limit; the rest waits for the next pass", org_id=str(org_id))
+
+    def _deliver(self, conn, token: str, rows: list[DueMail], delivery: dict, report: StopNoticeReport, org_transaction: Callable) -> None:
+        groups = group_by_recipient(rows)
+        in_flight: list[DueMail] | None = None
+        finished = 0
+        try:
+            for group in groups:
+                in_flight = group
+                ok, bad = self._send_group(group, delivery, report)
+                with org_transaction(conn, token):
+                    moved = 0
+                    if ok:
+                        moved += conn.execute("SELECT consentvault.stop_notice_mail_done(%s, true, %s) AS n",
+                                              ([r.mail_id for r in ok], self._max_attempts)).fetchone()["n"]
+                    if bad:
+                        moved += conn.execute("SELECT consentvault.stop_notice_mail_done(%s, false, %s) AS n",
+                                              ([r.mail_id for r in bad], self._max_attempts)).fetchone()["n"]
+                in_flight = None
+                finished += 1
+                if moved != len(group):  # a lease ran out under this send: its outcome was not recorded
+                    self._notifier.alarm.raise_alarm(ALARM_STOP_NOTICE_LEASE_LOST, f"{len(group) - moved} stop notice row(s) lost their claim")
+                    report.failed += 1
+                    report.errors.append(f"{len(group) - moved} row(s) lost their claim")
+                for r in bad:
+                    if r.attempts >= self._max_attempts:
+                        self._notifier.record_failure("stop_notice", r.address, "attempts_exhausted", ALARM_STOP_NOTICE_GAVE_UP)
+        finally:
+            # rows never attempted go back to the queue; only the row actually in flight may turn unknown
+            never = [r.mail_id for g in groups[finished:] if g is not in_flight for r in g]
+            if never:
+                with org_transaction(conn, token):
+                    conn.execute("SELECT consentvault.stop_notice_mail_release(%s)", (never,))
 
     def _send_group(self, group: list[DueMail], delivery: dict, report: StopNoticeReport) -> tuple[list[DueMail], list[DueMail]]:
         first = group[0]

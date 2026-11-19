@@ -20,6 +20,16 @@ PORTAL = "https://app.example.test"
 _PROVIDER = FakeKeyProvider()
 
 
+from consentvault.tenancy.errors import KeyProviderError  # noqa: E402
+
+
+class NoDisplayKey(TenantCrypto):
+    """A key service that cannot open the display key: the mask of a notice cannot be sealed."""
+
+    def display_key(self, org_id):
+        raise KeyProviderError("the display key is not available")
+
+
 SHARED = TenantCrypto(_PROVIDER)  # one key service for every organisation a test makes: writer, sender and portal read the same keys
 
 
@@ -30,12 +40,14 @@ def _crypto(org_id) -> TenantCrypto:
     return SHARED
 
 
-def record_stop(vault, org_id, contact: str, *, event_type="revoke", channels=("sms",), purposes=("marketing",), then=None):
+def record_stop(vault, org_id, contact: str, *, event_type="revoke", channels=("sms",), purposes=("marketing",), then=None,
+                crypto=None):
     """A stop recorded the way the capture code records one: the ledger writer, inside the entered tenant. ``then`` runs inside
     the same transaction after the write (a test uses it to abort the transaction)."""
     token = mint_org_token(vault.key, org_id, ["capture"], credential_id=None)
     with vault.appconn() as c, org_transaction(c, token):
-        ev = record_tenant_event(c, _crypto(org_id), contact=contact, event_type=event_type, channels=list(channels),
+        _crypto(org_id)
+        ev = record_tenant_event(c, crypto or SHARED, contact=contact, event_type=event_type, channels=list(channels),
                                  purposes=list(purposes), method="keyword", origin="consumer")
         if then is not None:
             then()
@@ -53,10 +65,13 @@ class FakeSender:
     def __init__(self) -> None:
         self.sent: list = []
         self.fail = False
+        self.on_send = None  # a test's hook, run inside send() before the message is recorded
 
     def send(self, message) -> str:
         if self.fail:
             raise SendFailed(self.provider, "ConnectionError", 503)
+        if self.on_send is not None:
+            self.on_send(message)
         self.sent.append(message)
         return f"msg-{len(self.sent)}"
 

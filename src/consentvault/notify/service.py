@@ -8,6 +8,7 @@ from .templates import refuse_control, render
 
 ALARM_SEND_FAILED = "notify.send_failed"
 ALARM_BOUNCE = "notify.bounce"
+REFUSED_DOMAIN = "refused-address.invalid"
 
 
 def recipient_domain(address: str) -> str:
@@ -51,6 +52,9 @@ class Notifier:
     def record_failure(self, template: str, to: str, detail: str, alarm: str) -> None:
         """A message that was refused before any send, or given up on after its last attempt: one ``failed`` send-log row and one
         alarm, so it never ends quietly. Domain only, never the address."""
-        domain = recipient_domain(to)
+        try:
+            domain = recipient_domain(to)
+        except NotifyRefused:
+            domain = REFUSED_DOMAIN  # the address itself is what was refused; the log still gets its row and the alarm still rises
         self._log.append(SendRecord(template, domain, "failed", self._sender.provider, None, detail[:200]))
         self._alarm.raise_alarm(alarm, f"{template} to {domain}: {detail}")

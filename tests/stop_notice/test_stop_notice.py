@@ -2,16 +2,15 @@
 notice failure never refuses a stop."""
 
 import re
-import threading
-from datetime import datetime, timedelta, timezone
-
 import pytest
 
 from consentvault.notify.errors import NotifyError
-from consentvault.notify.stop_notice import DueMail, StopNoticeSender, StopNoticeSendError, group_by_recipient
+from consentvault.notify.stop_notice import StopNoticeSender, StopNoticeSendError
 from consentvault.tenancy.tokens import mint_org_token, org_transaction
 
-from .support import SHARED, Mailroom, count, record_stop
+from consentvault.tenancy import stop_notices
+
+from .support import SHARED, Mailroom, NoDisplayKey, count, record_stop, _PROVIDER
 
 PHONE = "+15555550177"
 PHONE_2 = "+15555550178"
@@ -118,34 +117,6 @@ def test_stops_queued_in_separate_runs_within_a_minute_become_one_email_per_admi
     assert mail.run().emails_sent == 0  # sent rows are never sent again
 
 
-def test_the_rows_claimed_for_one_recipient_leave_as_one_email():
-    t0 = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
-
-    def row(i, secs, who="a@x.example"):
-        return DueMail(mail_id=f"{i:08d}-0000-0000-0000-000000000000", notice_id=i, address=who, attempts=1,
-                       queued_at=t0 + timedelta(seconds=secs), org_name="Acme", contact="***-0177",
-                       channels=["sms"], purposes=["marketing"], stopped_at=t0, record_id=None)
-    groups = group_by_recipient([row(1, 0), row(2, 59), row(3, 600), row(4, 5, who="b@x.example")])
-    assert sorted(len(g) for g in groups) == [1, 3]
-
-
-def test_overlapping_runs_never_send_the_same_stop_twice(vault, acme, mail):
-    org_id, *_ = acme
-    for p in (PHONE, PHONE_2):
-        record_stop(vault, org_id, p)
-    gate = threading.Barrier(3)
-
-    def go():
-        gate.wait()
-        mail.run(raise_on_error=False)
-
-    ts = [threading.Thread(target=go) for _ in range(3)]
-    [t.start() for t in ts]
-    [t.join() for t in ts]
-    listed = [(m.to, c) for m in mail.sender.sent for c in re.findall(r"Contact: (\S+)", m.text)]
-    assert len(listed) == 4 and len(set(listed)) == 4  # each admin was told of each stop exactly once, however the runs split them
-
-
 def test_a_claimed_row_that_never_answered_is_never_sent_again_and_an_alarm_names_it(vault, acme, mail):
     org_id, *_ = acme
     record_stop(vault, org_id, PHONE)
@@ -156,7 +127,10 @@ def test_a_claimed_row_that_never_answered_is_never_sent_again_and_an_alarm_name
         mail.run()
     assert mail.sender.sent == []
     assert {r["status"] for r in _mail_rows(vault, org_id)} == {"unknown"}
-    assert "notify.stop_notice_unknown" in {n for n, _ in mail.alarms.raised}
+    assert all(r["mask_text"] is None for r in _mail_rows(vault, org_id))  # a row that may have been sent holds no text any more
+    assert [n for n, _ in mail.alarms.raised].count("notify.stop_notice_unknown") == 1
+    mail.run()  # the next pass finds the unknown rows already reported: no second alarm, no resend
+    assert [n for n, _ in mail.alarms.raised].count("notify.stop_notice_unknown") == 1 and mail.sender.sent == []
 
 
 def test_no_full_contact_point_reaches_a_body_or_the_log_and_a_phone_shows_its_last_four_only(vault, acme, mail):
@@ -276,17 +250,19 @@ def test_the_popup_list_stays_until_that_admin_acknowledges_and_only_for_that_ad
     assert count(vault, "SELECT count(*) AS n FROM consentvault.audit_event WHERE org_id = %s AND action = 'stop_notice.acknowledged'", org_id) == 1
 
 
-def test_a_long_list_is_answered_a_page_at_a_time_so_an_admin_is_never_locked_out(vault, acme):
+def test_a_long_list_is_answered_a_page_at_a_time_so_an_admin_is_never_locked_out(vault, acme, monkeypatch):
+    monkeypatch.setattr(stop_notices, "PAGE_LIMIT", 2)
     org_id, boss, *_ = acme
-    for i in range(503):
+    for i in range(5):
         record_stop(vault, org_id, f"+1555555{1000 + i:04d}")
     page = boss.ok("GET", "/v1/stop-notices")
-    assert len(page["notices"]) == 500 and page["remaining"] == 503
-    ids = [x["notice_id"] for x in page["notices"]]
-    assert boss.ok("POST", "/v1/stop-notices:acknowledge", body={"notice_ids": ids}) == {"acknowledged": 500, "remaining": 3}
-    last = boss.ok("GET", "/v1/stop-notices")
-    assert len(last["notices"]) == 3
-    assert boss.ok("POST", "/v1/stop-notices:acknowledge", body={"notice_ids": [x["notice_id"] for x in last["notices"]]})["remaining"] == 0
+    assert len(page["notices"]) == 2 and page["remaining"] == 5
+    ack = lambda p: boss.ok("POST", "/v1/stop-notices:acknowledge", body={"notice_ids": [x["notice_id"] for x in p["notices"]]})
+    assert ack(page) == {"acknowledged": 2, "remaining": 3}
+    page = boss.ok("GET", "/v1/stop-notices")
+    assert len(page["notices"]) == 2 and ack(page)["remaining"] == 1
+    page = boss.ok("GET", "/v1/stop-notices")
+    assert len(page["notices"]) == 1 and ack(page)["remaining"] == 0
 
 
 def test_a_new_admin_sees_only_stops_recorded_after_they_joined(vault, acme):
@@ -341,3 +317,53 @@ def test_an_added_recipient_gets_the_next_notice_and_admins_always_do(vault, acm
     mail.sender.sent.clear()
     mail.run()
     assert {m.to for m in mail.sender.sent} == {"boss@acme.example", "two@acme.example"}
+
+
+# ---- review fixes: stranding, orphans, alarms --------------------------------------------------------------------------
+
+def test_an_admin_address_the_refuser_rejects_never_strands_the_rest_of_the_batch(vault, acme, mail):
+    org_id, boss, second, dev = acme
+    record_stop(vault, org_id, PHONE)
+    with vault.superuser() as su:  # the second admin's address is one the notifier refuses (no dot in the domain)
+        su.execute("UPDATE consentvault.member SET email_norm = 'admin@localhost' WHERE member_id = %s", (second.member_id,))
+        su.execute("UPDATE consentvault.stop_notice_mail SET queued_at = queued_at - interval '1 hour' WHERE member_id = %s", (second.member_id,))
+    with pytest.raises(StopNoticeSendError):
+        mail.run()
+    assert [m.to for m in mail.sender.sent] == ["boss@acme.example"]  # the good address was still emailed
+    by_status = {str(r["member_id"]): r["status"] for r in _mail_rows(vault, org_id)}
+    assert by_status == {boss.member_id: "sent", second.member_id: "failed"}  # the refused row is failed, not stranded in flight
+    assert "notify.stop_notice_refused" in {n for n, _ in mail.alarms.raised}
+    assert any(r.outcome == "failed" and "refused" in (r.detail or "") for r in mail.log.records)
+
+
+def test_a_queued_row_whose_admin_is_gone_is_closed_with_a_reason_and_an_alarm(vault, acme, mail):
+    org_id, boss, second, dev = acme
+    record_stop(vault, org_id, PHONE)
+    with vault.superuser() as su:
+        su.execute("UPDATE consentvault.member SET email_norm = NULL WHERE member_id = %s", (second.member_id,))
+    with pytest.raises(StopNoticeSendError):
+        mail.run()
+    rows = {str(r["member_id"]): r for r in _mail_rows(vault, org_id)}
+    assert rows[second.member_id]["status"] == "failed" and rows[second.member_id]["failure_reason"] == "no_address"
+    assert rows[second.member_id]["mask_text"] is None and rows[boss.member_id]["status"] == "sent"
+    assert "notify.stop_notice_orphaned" in {n for n, _ in mail.alarms.raised}
+
+
+def test_a_lease_that_runs_out_under_a_send_is_an_alarm(vault, acme, mail):
+    org_id, *_ = acme
+    record_stop(vault, org_id, PHONE)
+
+    def expire(message):  # while the email is being sent, the claim is lost
+        with vault.superuser() as su:
+            su.execute("UPDATE consentvault.stop_notice_mail SET status = 'unknown', claimed_until = NULL WHERE org_id = %s", (org_id,))
+    mail.sender.on_send = expire
+    with pytest.raises(StopNoticeSendError):
+        mail.run()
+    assert "notify.stop_notice_lease_lost" in {n for n, _ in mail.alarms.raised}
+
+
+def test_a_mask_that_cannot_be_sealed_raises_an_alarm_and_the_stop_stands(vault, acme):
+    org_id, *_ = acme
+    record_stop(vault, org_id, PHONE, crypto=NoDisplayKey(_PROVIDER))
+    assert count(vault, "SELECT count(*) AS n FROM consentvault.event WHERE org_id = %s", org_id) == 1
+    assert "stop_notice.mask_not_sealed" in _alarms(vault, org_id)

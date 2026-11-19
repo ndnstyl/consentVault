@@ -51,6 +51,7 @@ def test_an_ed25519_signed_body_is_accepted_and_a_changed_one_refused():
     key = Ed25519PrivateKey.generate()
     pem = key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
     raw = key.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
+    assert pem.count("\n") >= 2  # a real multi-line key, pasted as is
     b = body_of()
     h = {HEADER_SIGNATURE.lower(): sign_body("ed25519", raw, b.encode())}
     assert run(ed25519Pem=pem, body=b, headers=h)["out"][0]["valid"] is True
@@ -84,6 +85,16 @@ def test_a_delivery_already_applied_is_ignored():
 
 
 def test_a_delivery_is_remembered_only_by_the_step_after_the_crm_work():
+    wf = json.loads(TEMPLATE.read_text())
+    before = {}
+    for src, v in wf["connections"].items():
+        for outs in v["main"]:
+            for o in outs:
+                before.setdefault(o["node"], set()).add(src)
+    assert before["Remember delivery"] == {"Update every matching contact", "ALERT: stop for someone not in your CRM", "Log: no change made"}
+    assert before["Answer 200"] == {"Remember delivery"}
+    verify = next(n for n in wf["nodes"] if n["name"] == "Verify signature")
+    assert "seenKeys =" not in verify["parameters"]["jsCode"]  # only the step after the CRM work writes the key
     r = run("Remember delivery", upstream={"Verify signature": {"idemKey": "k9"}}, items=[{}], staticData={"seenKeys": ["k1"]})
     assert r["staticData"]["seenKeys"] == ["k1", "k9"]
 
@@ -96,16 +107,41 @@ def decide(contacts, **msg):
     return run("Decide", upstream={"Verify signature": {**MSG, **msg}}, items=contacts)["out"]
 
 
+def hubspot_contact(cid, version=None, state=None):
+    """The shape n8n's HubSpot search returns: properties are plain strings."""
+    props = {}
+    if version is not None:
+        props["consentvault_texts_version"] = str(version)
+    if state is not None:
+        props["consentvault_texts"] = state
+    return {"id": cid, "properties": props}
+
+
 def test_every_matching_contact_is_updated_not_just_the_first():
-    out = decide([{"id": "1"}, {"id": "2"}, {"id": "3"}])
+    out = decide([hubspot_contact("1"), hubspot_contact("2"), hubspot_contact("3")])
     assert [o["id"] for o in out] == ["1", "2", "3"] and {o["action"] for o in out} == {"update"}
 
 
-def test_a_push_that_is_not_newer_never_overwrites_a_newer_state():
-    stored = lambda v: {"id": "1", "properties": {"consentvault_texts_version": {"value": str(v)}}}
-    assert decide([stored(5)])[0]["action"] == "stale"
-    assert decide([stored(6)])[0]["action"] == "stale"
-    assert [o["id"] for o in decide([stored(4), stored(9)])] == ["1"]
+def test_a_late_grant_never_overwrites_a_newer_stop():
+    stopped = hubspot_contact("1", version=9, state="denied")
+    assert decide([stopped], state="permitted", version=2)[0]["action"] == "stale"
+    assert decide([stopped], state="permitted", version=9)[0]["action"] == "stale"
+    assert decide([stopped], state="permitted", version=10)[0]["action"] == "update"
+
+
+def test_a_stop_is_always_applied_whatever_version_is_stored_and_keeps_the_highest_version():
+    newer = hubspot_contact("1", version=9, state="permitted")
+    out = decide([newer], state="denied", version=2)[0]
+    assert out["action"] == "update"
+    assert out["properties"]["consentvault_texts"] == "denied" and out["properties"]["consentvault_texts_version"] == "9"
+
+
+def test_a_stop_for_one_purpose_after_a_grant_for_another_leaves_the_channel_denied():
+    contact = hubspot_contact("1")
+    grant = decide([contact], state="permitted", version=3, purpose="service")[0]
+    contact = {"id": "1", "properties": grant["properties"]}
+    stop = decide([contact], state="denied", version=2, purpose="marketing")[0]
+    assert stop["properties"]["consentvault_texts"] == "denied"
 
 
 def test_nobody_matched_creates_nothing_and_a_stop_is_the_one_that_alerts():
@@ -119,10 +155,22 @@ def test_nobody_matched_creates_nothing_and_a_stop_is_the_one_that_alerts():
 
 
 def test_a_grant_never_lifts_the_blanket_field():
-    assert decide([{"id": "1"}], useBlanket=True, state="permitted")[0]["action"] == "logged"
+    assert decide([hubspot_contact("1")], useBlanket=True, state="permitted")[0]["action"] == "logged"
+
+
+def test_a_phone_is_searched_on_both_the_phone_and_the_mobile_field():
+    wf = json.loads(TEMPLATE.read_text())
+    search = next(n for n in wf["nodes"] if n["name"] == "Find matching contacts")
+    groups = search["parameters"]["filterGroupsUi"]["filterGroupsValues"]
+    assert len(groups) == 2  # filter groups are OR'd by HubSpot
+    assert "mobilephone" in json.dumps(groups[1])
 
 
 def test_the_template_has_no_step_that_creates_a_contact():
     wf = json.loads(TEMPLATE.read_text())
-    ops = [n["parameters"].get("operation") for n in wf["nodes"] if n["type"] == "n8n-nodes-base.hubspot"]
-    assert set(ops) == {"search", "update"}
+    for n in wf["nodes"]:
+        t, prm = n["type"], n["parameters"]
+        assert not (t == "n8n-nodes-base.hubspot" and prm.get("operation") not in ("search",)), n["name"]
+        if t == "n8n-nodes-base.httpRequest":
+            assert prm["method"] == "PATCH" and "/contacts/{{ $json.id }}" in prm["url"], n["name"]
+    assert any(n["type"] == "n8n-nodes-base.httpRequest" for n in wf["nodes"])

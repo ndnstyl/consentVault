@@ -255,8 +255,8 @@ export function SuccessLine({ step }: { step: SetupStep }) {
 }
 
 export const SYSTEM_STEP_COPY = {
-  lede: 'A connected system hears about every permission change: each new sign-up and each stop. Connect your dialer, CRM or texting platform, or your own automation tool (n8n, Zapier or Make) that updates it.',
-  contact: 'Contact sent as: "Fingerprint only" sends a scrambled reference, so the system cannot tell who the person is. "Plain contact point" sends the number or email, which a CRM needs to find the right contact. The choice is yours and is recorded in the audit log.',
+  lede: 'A connected system hears about every permission change: each new sign-up and each stop. Connect your dialer, CRM or texting platform, or your own automation tool (n8n or Make) that updates it.',
+  contact: 'Choose Contact sent as. "Fingerprint only" sends a scrambled reference, so the system cannot tell who the person is. "Plain contact point" sends the number or email, which a CRM needs to find the right contact. The choice is yours and is recorded in the audit log.',
 } as const;
 
 function StepBody({ step, a, refresh, setAnswer, go, suspended, onNotice, embedded }: { embedded: Embedded; step: SetupStepName; a: SetupAnswer; refresh: () => void; setAnswer: (v: SetupAnswer) => void; go: (s: SetupStepName) => void; suspended: boolean; onNotice: (t: string) => void }) {

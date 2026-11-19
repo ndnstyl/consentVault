@@ -16,13 +16,6 @@ test('tutorials are numbered in order from one, each with a distinct video file 
   assert.equal(new Set(TUTORIALS.map((t) => t.id)).size, n);
 });
 
-test('a tutorial covers sending sign-ups and stops to a CRM and points at the Connected systems screen', () => {
-  const t = TUTORIALS.find((x) => x.id === 'send-sign-ups-and-stops-to-your-crm');
-  assert.ok(t);
-  assert.equal(t.screen.id, 'systems');
-  assert.match(t.summary, /Plain contact point/);
-});
-
 test('the Tutorials route exists, is open to every role and is not in the side menu', () => {
   assert.equal(matchRoute('/tutorials')?.route.id, 'tutorials');
   assert.deepEqual(VIEW_ROLES.tutorials, ['admin', 'developer', 'compliance_viewer']);

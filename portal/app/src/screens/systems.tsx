@@ -11,7 +11,7 @@ import { isEd25519, isHmac } from '../lib/signature.ts';
 import type { SignatureKind } from '../lib/signature.ts';
 import { ConfirmDialog } from '../components/Dialog.tsx';
 import type { Embedded } from '../components/ui.tsx';
-import { Banner, Btn, Check, Chip, CopyButton, DataTable, DeliveryChip, ErrorBlock, ErrorSummary, KV, LinkBtn, NotAvailable, PageHead, Radio, SelectField, Skeleton, StateBlock, SuccessBanner, TextField, Time } from '../components/ui.tsx';
+import { Banner, Btn, Check, Chip, CopyButton, DataTable, DeliveryChip, ErrorBlock, ErrorSummary, Icon, KV, LinkBtn, NotAvailable, PageHead, Radio, SelectField, Skeleton, StateBlock, SuccessBanner, TextField, Time } from '../components/ui.tsx';
 
 function stateChip(s: System) {
   if (s.status === 'paused') return <Chip tone="st-neutral" icon="i-pause">Paused</Chip>;
@@ -29,7 +29,7 @@ export function Systems() {
   const connect = write ? <LinkBtn href="/systems/new" variant="primary">Connect a system</LinkBtn> : null;
   return (
     <>
-      <PageHead title="Connected systems" lede="Every sign-up and every stop is pushed to each system below, retried for 24 hours, then marked undelivered and alerted." actions={rows.length > 0 ? connect : null} />
+      <PageHead title="Connected systems" lede="Every sign-up and every stop is pushed to each system below, retried for 24 hours, then marked undelivered and alerted. ConsentVault delivers each signed message and alerts you if your system does not accept it. Your system, its data and any change made inside it are yours." actions={rows.length > 0 ? connect : null} />
       {res.status === 'loading' && <Skeleton what="connected systems" variant="table" />}
       {res.status === 'error' && <ErrorBlock title="Connected systems did not load" err={res.error} onRetry={res.reload} next="Try again. Pushes keep running while this page is down." actions={<Btn onClick={res.reload}>Try again</Btn>} />}
       {res.status === 'ok' && rows.length === 0 && <StateBlock kind="empty" title="No systems connected" actions={connect}>Sign-ups and stops are recorded and contact checks show them, but nothing is pushed to your CRM, dialer or texting platform until you connect them.</StateBlock>}
@@ -76,11 +76,21 @@ function TestResult({ name, t, publicKey, onAgain, busy }: { name: string; t: Te
     );
 }
 
+export function systemFormErrors(v: { name: string; endpoint: string; contact_form: string; hours: string }): string[] {
+  const errs: string[] = [];
+  if (!v.name.trim()) errs.push('Enter a name.');
+  if (!/^https:\/\/[^\s/]+/.test(v.endpoint.trim())) errs.push('The endpoint address must start with https://.');
+  if (v.contact_form !== 'plaintext' && v.contact_form !== 'fingerprint') errs.push('Choose how the contact is sent.');
+  const hours = Number(v.hours);
+  if (!Number.isFinite(hours) || hours < 1 || hours > 168) errs.push('Enter a retry window between 1 and 168 hours.');
+  return errs;
+}
+
 export function SystemNew({ embedded }: { embedded?: Embedded } = {}) {
   const { api, role, orgName, status } = useSession();
   const { navigate } = useRouter();
   const toast = useToast();
-  const [v, setV] = useState({ name: '', kind: 'crm', endpoint: '', signature: 'ed25519', contact_form: 'fingerprint', hours: '24' });
+  const [v, setV] = useState({ name: '', kind: 'crm', endpoint: '', signature: 'ed25519', contact_form: '', hours: '24' });
   const [touched, setTouched] = useState(false);
   const [made, setMade] = useState<SystemCreated | null>(null);
   const [test, setTest] = useState<TestPush | null>(null);
@@ -88,11 +98,8 @@ export function SystemNew({ embedded }: { embedded?: Embedded } = {}) {
   const create = useAction((b: Parameters<typeof api.systems.create>[0]) => api.systems.create(b));
   const tester = useAction((id: string) => api.systems.test(id));
   const summary = useRef<HTMLDivElement>(null);
-  const errs: string[] = [];
-  if (!v.name.trim()) errs.push('Enter a name.');
-  if (!/^https:\/\/[^\s/]+/.test(v.endpoint.trim())) errs.push('The endpoint address must start with https://.');
+  const errs = systemFormErrors(v);
   const hours = Number(v.hours);
-  if (!Number.isFinite(hours) || hours < 1 || hours > 168) errs.push('Enter a retry window between 1 and 168 hours.');
   const suspended = status === 'suspended';
   if (!canDo(role, 'system.write')) return null;
   const submit = async (e: React.FormEvent) => {
@@ -138,8 +145,9 @@ export function SystemNew({ embedded }: { embedded?: Embedded } = {}) {
           <Radio name="sig" label="HMAC shared secret" hint="A secret is shown once after you connect." checked={isHmac(v.signature as SignatureKind)} onChange={() => setV({ ...v, signature: 'hmac' })} />
         </fieldset>
         <fieldset><legend>Contact sent as</legend>
-          <Radio name="form" label="Plain contact point" hint="Sends the person's number or email to this system. The choice is recorded in the audit log." checked={v.contact_form === 'plaintext'} onChange={() => setV({ ...v, contact_form: 'plaintext' })} />
-          <Radio name="form" label="Fingerprint only" hint="Sends a scrambled reference, not the number or email. This is the default." checked={v.contact_form === 'fingerprint'} onChange={() => setV({ ...v, contact_form: 'fingerprint' })} />
+          {touched && !v.contact_form && <p className="field-error" role="alert"><Icon name="i-err" /><span>Choose how the contact is sent.</span></p>}
+          <Radio name="form" label="Plain contact point" hint="Sends the person's number or email to a system you run. You are responsible for how that system stores and uses it." checked={v.contact_form === 'plaintext'} onChange={() => setV({ ...v, contact_form: 'plaintext' })} />
+          <Radio name="form" label="Fingerprint only" hint="Sends a scrambled reference, not the number or email." checked={v.contact_form === 'fingerprint'} onChange={() => setV({ ...v, contact_form: 'fingerprint' })} />
         </fieldset>
         <TextField label="Keep retrying for (hours)" name="hours" type="number" min={1} max={168} value={v.hours} onChange={(e) => setV({ ...v, hours: e.target.value })} hint="24 hours is the default." />
         <div className="actions">{!embedded && <LinkBtn href="/systems" variant="secondary">Cancel</LinkBtn>}<Btn type="submit" variant="primary" disabled={suspended} busy={create.busy || tester.busy} busyLabel="Connecting">Connect and send a test push</Btn></div>

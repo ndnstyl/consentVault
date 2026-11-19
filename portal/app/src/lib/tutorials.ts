@@ -43,7 +43,7 @@ export const TUTORIALS: Tutorial[] = [
     summary: 'Four jobs check the record on a schedule, and each can be run by hand. Seal adds an outside timestamp, Anchor records the chain position outside ConsentVault, Verify chain checks each event links to the one before, and Verify seals checks each seal still matches its event.' },
   { id: 'send-sign-ups-and-stops-to-your-crm', number: 9, title: 'Send sign-ups and stops to your CRM', tagline: 'Connect a system, then let your automation tool update the CRM.', voiced: false, seconds: 91,
     file: 'T9-send-sign-ups-and-stops-to-your-crm-captions-only.mp4', screen: { id: 'systems', href: '/systems', label: 'Connected systems' },
-    summary: 'Connect a system and paste the web address your automation tool gave you, whether n8n, Zapier or Make. Choose Plain contact point so a CRM can find the person, a choice recorded in the audit log. The template checks each signature and updates an existing contact only. A stop for someone not in your CRM raises an alert.' },
+    summary: 'Connect a system and paste the web address your automation tool gave you, whether n8n or Make. Choose Plain contact point so a CRM can find the person, a choice recorded in the audit log. The template checks each signature and updates an existing contact only. An optional alert in your own tool covers a stop for someone not in your CRM.' },
 ];
 
 export const TUTORIALS_COPY = {

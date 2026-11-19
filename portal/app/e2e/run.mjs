@@ -875,12 +875,14 @@ async function setupScreen() {
   await go('/setup?step=system', { setup: 'almost' });
   ok('24 system step: the form is on the setup page', (await page.getByLabel(/^Endpoint address/).count()) === 1 && (await page.getByRole('link', { name: 'Connect a system' }).count()) === 0 && inSetup());
   await page.getByLabel('Name').fill('Setup CRM'); await page.getByLabel(/^Endpoint address/).fill('https://crm.example.com/hook');
+  await page.getByLabel('Fingerprint only').check();
   await page.getByRole('button', { name: 'Connect and send a test push' }).click(); await settle(page);
   ok('24 system step success: the test push result shows in place with a Done button', (await log()).filter((r) => r.method === 'POST' && r.url === '/v1/systems').length === 1 && inSetup() && (await page.getByRole('button', { name: 'Done' }).count()) === 1);
   await page.getByRole('button', { name: 'Done' }).click(); await settle(page);
   ok('24 system step: Done returns to the walkthrough with the connection named and the step done', inSetup() && /Setup CRM connected\./.test(await text()) && /Done/.test(await railOf(5)));
   await go('/setup?step=system', { setup: 'almost', fail: { 'POST /v1/systems': { status: 503, error: 'service_unavailable' } } });
   await page.getByLabel('Name').fill('Setup CRM'); await page.getByLabel(/^Endpoint address/).fill('https://crm.example.com/hook');
+  await page.getByLabel('Fingerprint only').check();
   await page.getByRole('button', { name: 'Connect and send a test push' }).click(); await settle(page);
   ok('24 system step error: names the cause on the setup page', /The system was not connected/.test(await text()) && /503 service_unavailable/.test(await text()) && inSetup() && /To do/.test(await railOf(6)));
 

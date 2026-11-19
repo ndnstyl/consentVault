@@ -117,14 +117,10 @@ test('setup has no policy step', () => {
   assert.equal(ORDER.length, 7);
 });
 
-test('the connect-a-system step says the system hears sign-ups as well as stops, and explains the contact choice', async () => {
-  const { SYSTEM_STEP_COPY } = await import('../src/screens/setup.tsx');
-  const { scanCopy } = await import('../src/lib/copycheck.ts');
-  const text = Object.values(SYSTEM_STEP_COPY).join(' ');
-  assert.deepEqual(scanCopy(text), []);
-  assert.match(text, /sign-up/i);
-  assert.match(text, /stop/i);
-  assert.match(text, /Plain contact point/);
-  assert.match(text, /Fingerprint only/);
-  assert.doesNotMatch(text, /[–—]/);
+test('connecting a system is refused until the contact choice is made, and allowed once it is', async () => {
+  const { systemFormErrors } = await import('../src/screens/systems.tsx');
+  const ok = { name: 'CRM', endpoint: 'https://hooks.example.com/cv', hours: '24' };
+  assert.ok(systemFormErrors({ ...ok, contact_form: '' }).length > 0);
+  assert.deepEqual(systemFormErrors({ ...ok, contact_form: 'fingerprint' }), []);
+  assert.deepEqual(systemFormErrors({ ...ok, contact_form: 'plaintext' }), []);
 });

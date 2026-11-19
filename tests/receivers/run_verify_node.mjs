@@ -10,7 +10,7 @@ const node = wf.nodes.find((n) => n.name === (input.node || 'Verify signature'))
 if (!node) { console.error('no such node'); process.exit(2); }
 let code = node.parameters.jsCode;
 if (input.hmacSecretHex) code = code.replace('PASTE_HMAC_SECRET_HERE', input.hmacSecretHex);
-if (input.ed25519Pem) code = code.replace('PASTE_ED25519_PUBLIC_KEY_HERE', input.ed25519Pem.replace(/\n/g, '\\n'));
+if (input.ed25519Pem) code = code.replace('PASTE_ED25519_PUBLIC_KEY_HERE', input.ed25519Pem);
 if (input.blanket) code = code.replace("const BLANKET_FIELD = '';", `const BLANKET_FIELD = '${input.blanket}';`);
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const fn = new AsyncFunction('require', '$input', '$', '$getWorkflowStaticData', code);

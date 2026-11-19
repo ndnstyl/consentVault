@@ -17,7 +17,7 @@ import { Banner, Btn, Chip, ErrorBlock, LinkBtn, PageHead, Skeleton, StateBlock,
 export const ORDER: SetupStepName[] = ['brand', 'source', 'wording', 'credential', 'first_event', 'system', 'confirmations'];
 const LABEL: Record<SetupStepName, string> = {
   brand: 'Add a brand', source: 'Add a capture source', wording: 'Register your consent wording', credential: 'Issue a capture credential',
-  first_event: 'Send a test event', system: 'Connect a system that receives stops', confirmations: 'Turn on confirmation messages',
+  first_event: 'Send a test event', system: 'Connect a system that receives sign-ups and stops', confirmations: 'Turn on confirmation messages',
 };
 export const RAIL_LABEL = (s: SetupStepName) => (s === 'system' || s === 'confirmations' ? `${LABEL[s]} (optional)` : LABEL[s]);
 const PARTIAL_CAUSE: Record<SetupStepName, string> = {
@@ -254,6 +254,11 @@ export function SuccessLine({ step }: { step: SetupStep }) {
   return <p><Chip tone="st-success" icon="i-ok">Done</Chip> {word[step.step]}{e ? ` ${fmtDateTime(e.at)}.` : ''}</p>;
 }
 
+export const SYSTEM_STEP_COPY = {
+  lede: 'A connected system hears about every permission change: each new sign-up and each stop. Connect your dialer, CRM or texting platform, or your own automation tool (n8n, Zapier or Make) that updates it.',
+  contact: 'Contact sent as: "Fingerprint only" sends a scrambled reference, so the system cannot tell who the person is. "Plain contact point" sends the number or email, which a CRM needs to find the right contact. The choice is yours and is recorded in the audit log.',
+} as const;
+
 function StepBody({ step, a, refresh, setAnswer, go, suspended, onNotice, embedded }: { embedded: Embedded; step: SetupStepName; a: SetupAnswer; refresh: () => void; setAnswer: (v: SetupAnswer) => void; go: (s: SetupStepName) => void; suspended: boolean; onNotice: (t: string) => void }) {
   void go; void a;
   switch (step) {
@@ -262,7 +267,7 @@ function StepBody({ step, a, refresh, setAnswer, go, suspended, onNotice, embedd
     case 'wording': return <><p>Paste the exact words shown beside your consent checkbox. Register every version your forms have shown, oldest first, so older records point at the words those people saw. Wording is stored byte for byte; a change is a new version.</p><WordingNew embedded={embedded} /></>;
     case 'credential': return suspended ? null : <><p>A credential lets one source send events. A site key goes in your web form; a public key is for a server.</p><CredentialNew embedded={embedded} /></>;
     case 'first_event': return <FirstEvent setAnswer={setAnswer} refresh={refresh} />;
-    case 'system': return suspended ? null : <><p>A connected system hears about stops so it stops contacting the person. Connect your dialer, CRM or texting platform.</p><SystemNew embedded={embedded} /></>;
+    case 'system': return suspended ? null : <><p>{SYSTEM_STEP_COPY.lede}</p><p>{SYSTEM_STEP_COPY.contact}</p><SystemNew embedded={embedded} /></>;
     case 'confirmations': return <><p>When a new consent arrives, send the person one message from your own email domain or texting number that repeats what they agreed to, when, and how to stop.</p><LinkBtn href="/confirmations" variant="primary">Turn on confirmation messages</LinkBtn></>;
   }
 }

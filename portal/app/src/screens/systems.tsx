@@ -123,7 +123,7 @@ export function SystemNew({ embedded }: { embedded?: Embedded } = {}) {
   }
   return (
     <>
-      {!embedded && <PageHead title="Connect a system" lede="Stops are pushed to this system as signed webhooks." />}
+      {!embedded && <PageHead title="Connect a system" lede="Every sign-up and every stop is pushed to this system as a signed webhook." />}
       {suspended && <Banner kind="warning" title="New connections are paused">{`Connecting a system is paused while ${orgName} is suspended. Resolve billing to continue.`}</Banner>}
       <form className="card" onSubmit={submit} noValidate>
         <div ref={summary} tabIndex={-1}>
@@ -139,7 +139,7 @@ export function SystemNew({ embedded }: { embedded?: Embedded } = {}) {
         </fieldset>
         <fieldset><legend>Contact sent as</legend>
           <Radio name="form" label="Plain contact point" hint="Sends the person's number or email to this system. The choice is recorded in the audit log." checked={v.contact_form === 'plaintext'} onChange={() => setV({ ...v, contact_form: 'plaintext' })} />
-          <Radio name="form" label="Fingerprint only" checked={v.contact_form === 'fingerprint'} onChange={() => setV({ ...v, contact_form: 'fingerprint' })} />
+          <Radio name="form" label="Fingerprint only" hint="Sends a scrambled reference, not the number or email. This is the default." checked={v.contact_form === 'fingerprint'} onChange={() => setV({ ...v, contact_form: 'fingerprint' })} />
         </fieldset>
         <TextField label="Keep retrying for (hours)" name="hours" type="number" min={1} max={168} value={v.hours} onChange={(e) => setV({ ...v, hours: e.target.value })} hint="24 hours is the default." />
         <div className="actions">{!embedded && <LinkBtn href="/systems" variant="secondary">Cancel</LinkBtn>}<Btn type="submit" variant="primary" disabled={suspended} busy={create.busy || tester.busy} busyLabel="Connecting">Connect and send a test push</Btn></div>

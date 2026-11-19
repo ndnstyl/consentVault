@@ -197,3 +197,13 @@ def test_a_grant_matched_on_one_phone_cannot_lift_a_stop_when_the_contact_holds_
     assert stop[0]["action"] == "update" and stop[0]["properties"]["consentvault_texts"] == "denied"
     one_number = {"id": "2", "properties": {"mobilephone": "+14075550123"}}
     assert decide([one_number], contactKind="phone", **grant(version=5, channelVersion=5))[0]["action"] == "update"
+
+
+def test_every_held_contact_is_returned_with_its_reason_alongside_the_applied_ones():
+    held = {"id": "1", "properties": {"mobilephone": "+14075550123", "phone": "+14075559999"}}
+    ok = {"id": "2", "properties": {"mobilephone": "+14075550123"}}
+    held2 = {"id": "3", "properties": {"phone": "+14075550123", "mobilephone": "+14075558888"}}
+    out = decide([held, ok, held2], contactKind="phone", **grant(version=5, channelVersion=5))
+    by = {o["id"]: o for o in out}
+    assert by["2"]["action"] == "update"
+    assert by["1"]["action"] == "held" and by["3"]["action"] == "held" and by["1"]["note"]

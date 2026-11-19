@@ -1,0 +1,681 @@
+{
+  "name": "ConsentVault to CRM: update existing contacts only",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "consentvault-receiver",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "a1",
+      "name": "ConsentVault message",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "3f0f7c1e-6f55-4a51-9a64-0c0c5c1d0a01"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ConsentVault receiver step 1: check the signature over the exact body bytes, then read the message.\n// FILL IN: ONE key (shown in the portal when you connect the system), and your CRM field names.\nconst HMAC_SECRET_HEX = 'PASTE_HMAC_SECRET_HERE';            // 64 hex characters, shown once\nconst ED25519_PUBLIC_KEY_PEM = 'PASTE_ED25519_PUBLIC_KEY_HERE';\n// One CRM field per channel (calls, texts, email). Each field also gets a \"_version\" companion field that holds the last version applied.\nconst CHANNEL_FIELDS = { voice: 'consentvault_calls', artificial_voice: 'consentvault_prerecorded_calls', sms: 'consentvault_texts', email: 'consentvault_email' };\n// Only if your CRM has nothing finer: ONE blanket do-not-contact field. Leave empty to refuse a channel with no field of its own. Stops only; a grant never lifts it.\nconst BLANKET_FIELD = '';\n\nconst crypto = require('crypto');\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst body = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst header = String(headers['x-consentvault-signature'] || '');\nconst fail = (reason) => [{ json: { valid: false, reason } }];\nconst unset = (v) => !v || v.startsWith('PASTE_');\n\nlet ok = false;\nif (header.startsWith('hmac-sha256=')) {\n  if (unset(HMAC_SECRET_HEX)) return fail('the message is signed with a shared secret but no secret is filled in');\n  const expected = crypto.createHmac('sha256', Buffer.from(HMAC_SECRET_HEX, 'hex')).update(body).digest();\n  const given = Buffer.from(header.slice('hmac-sha256='.length), 'hex');\n  ok = given.length === expected.length && crypto.timingSafeEqual(given, expected);\n} else if (header.startsWith('ed25519=')) {\n  if (unset(ED25519_PUBLIC_KEY_PEM)) return fail('the message is signed with a key pair but no public key is filled in');\n  try {\n    ok = crypto.verify(null, body, crypto.createPublicKey(ED25519_PUBLIC_KEY_PEM), Buffer.from(header.slice('ed25519='.length), 'hex'));\n  } catch (e) { ok = false; }\n} else {\n  return fail('no signature header on the message');\n}\nif (!ok) return fail('the signature does not match the body');\n\nlet msg;\ntry { msg = JSON.parse(body.toString('utf8')); } catch (e) { return fail('the body is not JSON'); }\nif (msg.test === true) return [{ json: { valid: true, isTest: true } }];\n\n// Duplicate delivery: the same Idempotency-Key was already applied (it is remembered only after a successful run).\nconst idemKey = String(headers['idempotency-key'] || '');\nconst seen = ($getWorkflowStaticData('global').seenKeys) || [];\nconst duplicate = idemKey !== '' && seen.includes(idemKey);\n\n// Matching: email lowercased, phone as E.164 (a 10 digit number is taken as US).\nconst raw = String(msg.contact || '').trim();\nlet contactKind = 'fingerprint', value = raw;\nif (raw.includes('@')) { contactKind = 'email'; value = raw.toLowerCase(); }\nelse if (/^[+(]?[0-9][0-9 ()\\-.]{6,}$/.test(raw)) {\n  const digits = raw.replace(/[^0-9]/g, '');\n  contactKind = 'phone';\n  value = raw.startsWith('+') ? '+' + digits : digits.length === 10 ? '+1' + digits : digits.length === 11 && digits.startsWith('1') ? '+' + digits : '+' + digits;\n}\n\nconst own = CHANNEL_FIELDS[msg.channel];\nconst stateField = own || BLANKET_FIELD;\nconst useBlanket = !own && !!BLANKET_FIELD;\nlet refuse = '';\nif (contactKind === 'fingerprint') refuse = 'This system is set to Fingerprint only, so a CRM contact cannot be matched. In ConsentVault, connect it with Contact sent as: Plain contact point.';\nelse if (!stateField) refuse = 'No CRM field is mapped for the channel ' + msg.channel + '. Add it to CHANNEL_FIELDS or set BLANKET_FIELD.';\n\nreturn [{ json: {\n  valid: true, isTest: false, duplicate, refuse, idemKey, contactKind, contact: value,\n  searchProperty: contactKind === 'email' ? 'email|string' : 'phone|string',\n  channel: msg.channel, purpose: msg.purpose, state: msg.state, version: Number(msg.version),\n  basisEventId: msg.basis_event_id, at: msg.at, reason: msg.reason,\n  stateField, versionField: stateField + '_version', useBlanket,\n} }];\n"
+      },
+      "id": "a2",
+      "name": "Verify signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a3",
+      "name": "Signature good?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.reason }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "a4",
+      "name": "Reject 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c2",
+              "leftValue": "={{ $json.isTest }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a5",
+      "name": "Test message?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "test received",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a6",
+      "name": "Answer test 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c3",
+              "leftValue": "={{ $json.duplicate }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a7",
+      "name": "Already applied?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "duplicate ignored",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a8",
+      "name": "Answer 200 duplicate",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c4",
+              "leftValue": "={{ $json.refuse }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a9",
+      "name": "Can process?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.refuse }}",
+        "options": {
+          "responseCode": 422
+        }
+      },
+      "id": "b1",
+      "name": "Refuse 422",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1440,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "search",
+        "authentication": "appToken",
+        "returnAll": true,
+        "filterGroupsUi": {
+          "filterGroupsValues": [
+            {
+              "filtersUi": {
+                "filterValues": [
+                  {
+                    "propertyName": "={{ $json.searchProperty }}",
+                    "operator": "EQ",
+                    "value": "={{ $json.contact }}"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "properties": [
+            "={{ $json.versionField }}"
+          ]
+        }
+      },
+      "id": "b2",
+      "name": "Find matching contacts",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        300
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE",
+          "name": "HubSpot (private app token)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ConsentVault receiver step 2: decide what to do with the contacts the CRM search returned. Never creates a contact.\nconst p = $('Verify signature').first().json;\nconst found = $input.all().map((i) => i.json).filter((j) => j && j.id);\nif (found.length === 0) return [{ json: { action: 'nomatch', state: p.state, channel: p.channel, contact: p.contact } }];\nif (p.useBlanket && p.state !== 'denied') return [{ json: { action: 'logged', note: 'a grant never lifts the blanket field' } }];\nconst newer = found.filter((c) => Number((((c.properties || {})[p.versionField]) || {}).value || 0) < p.version);\nif (newer.length === 0) return [{ json: { action: 'stale', note: 'every matching contact already holds this version or a newer one' } }];\nreturn newer.map((c) => ({ json: { action: 'update', id: c.id, stateField: p.stateField, versionField: p.versionField, state: p.state, version: p.version, at: p.at } }));\n"
+      },
+      "id": "b3",
+      "name": "Decide",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c5",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "update",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b4",
+      "name": "Any contact to update?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "update",
+        "authentication": "appToken",
+        "contactId": "={{ $json.id }}",
+        "updateFields": {
+          "customPropertiesUi": {
+            "customPropertiesValues": [
+              {
+                "property": "={{ $json.stateField }}",
+                "value": "={{ $json.state }}"
+              },
+              {
+                "property": "={{ $json.versionField }}",
+                "value": "={{ $json.version }}"
+              },
+              {
+                "property": "consentvault_changed_at",
+                "value": "={{ $json.at }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "b5",
+      "name": "Update every matching contact",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        200
+      ],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE",
+          "name": "HubSpot (private app token)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "s1",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "nomatch",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "s2",
+              "leftValue": "={{ $json.state }}",
+              "rightValue": "denied",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b6",
+      "name": "Stop for nobody in the CRM?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "FILL IN sender address",
+        "toEmail": "FILL IN who watches this",
+        "subject": "Stop for someone not in your CRM; check your dialer and texting tool",
+        "emailFormat": "text",
+        "text": "=ConsentVault sent a stop for {{ $json.contact }} on {{ $json.channel }}, but no contact with that email or phone is in your CRM, so nothing could be updated. Stop for someone not in your CRM; check your dialer and texting tool, and add the person by hand if needed.",
+        "options": {}
+      },
+      "id": "b7",
+      "name": "ALERT: stop for someone not in your CRM",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2400,
+        360
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "REPLACE",
+          "name": "Your mail account (or swap this node for a Slack node)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $('Decide').first().json;\nconsole.log('ConsentVault: ' + (d.action === 'nomatch' ? 'not in CRM, add by hand. ' : d.action + '. ') + JSON.stringify({ channel: d.channel, state: d.state, note: d.note }));\nreturn [{ json: { result: d.action } }];\n"
+      },
+      "id": "b8",
+      "name": "Log: no change made",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Remember the delivery only after the CRM work finished, so a failed run is retried and a finished one is not repeated.\nconst key = $('Verify signature').first().json.idemKey;\nif (key) {\n  const data = $getWorkflowStaticData('global');\n  data.seenKeys = [...(data.seenKeys || []), key].slice(-500);\n}\nreturn [{ json: { remembered: !!key } }];\n"
+      },
+      "id": "b9",
+      "name": "Remember delivery",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "ok",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "c1",
+      "name": "Answer 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2880,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "ConsentVault message": {
+      "main": [
+        [
+          {
+            "node": "Verify signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify signature": {
+      "main": [
+        [
+          {
+            "node": "Signature good?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature good?": {
+      "main": [
+        [
+          {
+            "node": "Test message?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test message?": {
+      "main": [
+        [
+          {
+            "node": "Answer test 200",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Already applied?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already applied?": {
+      "main": [
+        [
+          {
+            "node": "Answer 200 duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Can process?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Can process?": {
+      "main": [
+        [
+          {
+            "node": "Find matching contacts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Refuse 422",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find matching contacts": {
+      "main": [
+        [
+          {
+            "node": "Decide",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide": {
+      "main": [
+        [
+          {
+            "node": "Any contact to update?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any contact to update?": {
+      "main": [
+        [
+          {
+            "node": "Update every matching contact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Stop for nobody in the CRM?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stop for nobody in the CRM?": {
+      "main": [
+        [
+          {
+            "node": "ALERT: stop for someone not in your CRM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log: no change made",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update every matching contact": {
+      "main": [
+        [
+          {
+            "node": "Remember delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ALERT: stop for someone not in your CRM": {
+      "main": [
+        [
+          {
+            "node": "Remember delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log: no change made": {
+      "main": [
+        [
+          {
+            "node": "Remember delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remember delivery": {
+      "main": [
+        [
+          {
+            "node": "Answer 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
